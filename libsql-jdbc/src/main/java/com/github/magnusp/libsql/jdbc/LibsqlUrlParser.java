@@ -12,9 +12,12 @@ import java.util.Properties;
 public class LibsqlUrlParser {
 
     public static final String PREFIX = "jdbc:libsql:";
+    public static final String SQLITE_PREFIX = "jdbc:sqlite:";
 
     public static boolean acceptsUrl(String url) {
-        return url != null && url.startsWith(PREFIX);
+        if (url == null) return false;
+        if (url.startsWith(PREFIX)) return true;
+        return url.startsWith("jdbc:sqlite:http://") || url.startsWith("jdbc:sqlite:https://");
     }
 
     public static LibsqlClientConfig parse(String url, Properties info) throws SQLException {
@@ -22,7 +25,13 @@ public class LibsqlUrlParser {
             throw new SQLException("Invalid JDBC URL: " + url);
         }
 
-        String rawUriStr = url.substring(PREFIX.length());
+        String rawUriStr;
+        if (url.startsWith(PREFIX)) {
+            rawUriStr = url.substring(PREFIX.length());
+        } else {
+            rawUriStr = url.substring(SQLITE_PREFIX.length());
+        }
+
         boolean hasHttpScheme = rawUriStr.startsWith("http://") || rawUriStr.startsWith("https://");
         if (!hasHttpScheme) {
             if (rawUriStr.startsWith("//")) {

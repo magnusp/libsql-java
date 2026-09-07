@@ -19,7 +19,9 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     @Override
     public boolean allTablesAreSelectable() throws SQLException { return true; }
     @Override
-    public String getURL() throws SQLException { return null; }
+    public String getURL() throws SQLException {
+        return connection.getConfig() != null ? connection.getConfig().url() : null;
+    }
     @Override
     public String getUserName() throws SQLException { return null; }
     @Override
@@ -33,7 +35,7 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     @Override
     public boolean nullsAreSortedAtEnd() throws SQLException { return false; }
     @Override
-    public String getDatabaseProductName() throws SQLException { return "SQLite / libSQL"; }
+    public String getDatabaseProductName() throws SQLException { return "SQLite (libSQL)"; }
     @Override
     public String getDatabaseProductVersion() throws SQLException { return "3.0"; }
     @Override
@@ -319,11 +321,44 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     @Override public ResultSet getTablePrivileges(String catalog, String schemaPattern, String tableNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public ResultSet getBestRowIdentifier(String catalog, String schema, String table, int scope, boolean nullable) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public ResultSet getVersionColumns(String catalog, String schema, String table) throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public ResultSet getImportedKeys(String catalog, String schema, String table) throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public ResultSet getExportedKeys(String catalog, String schema, String table) throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public ResultSet getCrossReference(String parentCatalog, String parentSchema, String parentTable, String foreignCatalog, String foreignSchema, String foreignTable) throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public ResultSet getTypeInfo() throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public ResultSet getIndexInfo(String catalog, String schema, String table, boolean unique, boolean approximate) throws SQLException { throw new UnsupportedOperationException(); }
+    @Override public ResultSet getImportedKeys(String catalog, String schema, String table) throws SQLException {
+        String sql = "SELECT NULL AS PKTABLE_CAT, NULL AS PKTABLE_SCHEM, NULL AS PKTABLE_NAME, NULL AS PKCOLUMN_NAME, " +
+                "NULL AS FKTABLE_CAT, NULL AS FKTABLE_SCHEM, NULL AS FKTABLE_NAME, NULL AS FKCOLUMN_NAME, " +
+                "0 AS KEY_SEQ, 0 AS UPDATE_RULE, 0 AS DELETE_RULE, NULL AS FK_NAME, NULL AS PK_NAME, 0 AS DEFERRABILITY WHERE 0";
+        return connection.createStatement().executeQuery(sql);
+    }
+    @Override public ResultSet getExportedKeys(String catalog, String schema, String table) throws SQLException {
+        String sql = "SELECT NULL AS PKTABLE_CAT, NULL AS PKTABLE_SCHEM, NULL AS PKTABLE_NAME, NULL AS PKCOLUMN_NAME, " +
+                "NULL AS FKTABLE_CAT, NULL AS FKTABLE_SCHEM, NULL AS FKTABLE_NAME, NULL AS FKCOLUMN_NAME, " +
+                "0 AS KEY_SEQ, 0 AS UPDATE_RULE, 0 AS DELETE_RULE, NULL AS FK_NAME, NULL AS PK_NAME, 0 AS DEFERRABILITY WHERE 0";
+        return connection.createStatement().executeQuery(sql);
+    }
+    @Override public ResultSet getCrossReference(String parentCatalog, String parentSchema, String parentTable, String foreignCatalog, String foreignSchema, String foreignTable) throws SQLException {
+        String sql = "SELECT NULL AS PKTABLE_CAT, NULL AS PKTABLE_SCHEM, NULL AS PKTABLE_NAME, NULL AS PKCOLUMN_NAME, " +
+                "NULL AS FKTABLE_CAT, NULL AS FKTABLE_SCHEM, NULL AS FKTABLE_NAME, NULL AS FKCOLUMN_NAME, " +
+                "0 AS KEY_SEQ, 0 AS UPDATE_RULE, 0 AS DELETE_RULE, NULL AS FK_NAME, NULL AS PK_NAME, 0 AS DEFERRABILITY WHERE 0";
+        return connection.createStatement().executeQuery(sql);
+    }
+    @Override public ResultSet getTypeInfo() throws SQLException {
+        String sql = "SELECT 'VARCHAR' AS TYPE_NAME, " + java.sql.Types.VARCHAR + " AS DATA_TYPE, 0 AS PRECISION, " +
+                "NULL AS LITERAL_PREFIX, NULL AS LITERAL_SUFFIX, NULL AS CREATE_PARAMS, 1 AS NULLABLE, 1 AS CASE_SENSITIVE, " +
+                "3 AS SEARCHABLE, 0 AS UNSIGNED_ATTRIBUTE, 0 AS FIXED_PREC_SCALE, 0 AS AUTO_INCREMENT, " +
+                "NULL AS LOCAL_TYPE_NAME, 0 AS MINIMUM_SCALE, 0 AS MAXIMUM_SCALE, 0 AS SQL_DATA_TYPE, 0 AS SQL_DATETIME_SUB, 10 AS NUM_PREC_RADIX WHERE 0";
+        return connection.createStatement().executeQuery(sql);
+    }
+    @Override public ResultSet getIndexInfo(String catalog, String schema, String table, boolean unique, boolean approximate) throws SQLException {
+        String sql = "SELECT NULL AS TABLE_CAT, NULL AS TABLE_SCHEM, '" + table + "' AS TABLE_NAME, " +
+                "CASE il.\"unique\" WHEN 1 THEN 0 ELSE 1 END AS NON_UNIQUE, " +
+                "NULL AS INDEX_QUALIFIER, il.name AS INDEX_NAME, 3 AS TYPE, " +
+                "ii.seqno + 1 AS ORDINAL_POSITION, ii.name AS COLUMN_NAME, " +
+                "'A' AS ASC_OR_DESC, 0 AS CARDINALITY, 0 AS PAGES, NULL AS FILTER_CONDITION " +
+                "FROM pragma_index_list('" + table + "') il, pragma_index_info(il.name) ii";
+        if (unique) {
+            sql += " WHERE il.\"unique\" = 1";
+        }
+        sql += " ORDER BY NON_UNIQUE, TYPE, INDEX_NAME, ORDINAL_POSITION";
+        return connection.createStatement().executeQuery(sql);
+    }
     @Override public boolean supportsResultSetType(int type) throws SQLException { return type == ResultSet.TYPE_FORWARD_ONLY; }
     @Override public boolean supportsResultSetConcurrency(int type, int concurrency) throws SQLException { return type == ResultSet.TYPE_FORWARD_ONLY && concurrency == ResultSet.CONCUR_READ_ONLY; }
     @Override public boolean ownUpdatesAreVisible(int type) throws SQLException { return false; }

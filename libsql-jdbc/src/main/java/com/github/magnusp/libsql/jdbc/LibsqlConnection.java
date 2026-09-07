@@ -25,6 +25,7 @@ import java.sql.NClob;
 import java.sql.PreparedStatement;
 import java.sql.SQLClientInfoException;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLWarning;
 import java.sql.SQLXML;
 import java.sql.Savepoint;
@@ -53,6 +54,10 @@ public class LibsqlConnection implements Connection {
     public LibsqlConnection(LibsqlClientConfig config, LibsqlHttpClient client) {
         this.config = config;
         this.client = client;
+    }
+
+    public LibsqlClientConfig getConfig() {
+        return config;
     }
 
     public void checkClosed() throws SQLException {
@@ -404,13 +409,13 @@ public class LibsqlConnection implements Connection {
     }
 
     @Override
-    public Clob createClob() throws SQLException { throw new UnsupportedOperationException(); }
+    public Clob createClob() throws SQLException { throw new SQLFeatureNotSupportedException("createClob is not supported"); }
     @Override
-    public Blob createBlob() throws SQLException { throw new UnsupportedOperationException(); }
+    public Blob createBlob() throws SQLException { throw new SQLFeatureNotSupportedException("createBlob is not supported"); }
     @Override
-    public NClob createNClob() throws SQLException { throw new UnsupportedOperationException(); }
+    public NClob createNClob() throws SQLException { throw new SQLFeatureNotSupportedException("createNClob is not supported"); }
     @Override
-    public SQLXML createSQLXML() throws SQLException { throw new UnsupportedOperationException(); }
+    public SQLXML createSQLXML() throws SQLException { throw new SQLFeatureNotSupportedException("createSQLXML is not supported"); }
 
     @Override
     public boolean isValid(int timeout) throws SQLException {

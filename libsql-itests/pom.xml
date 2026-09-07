@@ -56,28 +56,10 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <configuration>
-                    <environmentVariables>
-                        <DOCKER_API_VERSION>1.44</DOCKER_API_VERSION>
-                    </environmentVariables>
-                    <systemPropertyVariables>
-                        <api.version>1.44</api.version>
-                        <docker.client.strategy>org.testcontainers.dockerclient.UnixSocketClientProviderStrategy</docker.client.strategy>
-                    </systemPropertyVariables>
-                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
-                <configuration>
-                    <environmentVariables>
-                        <DOCKER_API_VERSION>1.44</DOCKER_API_VERSION>
-                    </environmentVariables>
-                    <systemPropertyVariables>
-                        <api.version>1.44</api.version>
-                        <docker.client.strategy>org.testcontainers.dockerclient.UnixSocketClientProviderStrategy</docker.client.strategy>
-                    </systemPropertyVariables>
-                </configuration>
             </plugin>
         </plugins>
     </build>
