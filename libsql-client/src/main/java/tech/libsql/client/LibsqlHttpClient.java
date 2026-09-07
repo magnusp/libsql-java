@@ -1,8 +1,8 @@
 package tech.libsql.client;
 
+import tech.libsql.hrana.codec.DirectHranaJsonCodec;
 import tech.libsql.hrana.codec.HranaError;
 import tech.libsql.hrana.codec.HranaJsonCodec;
-import tech.libsql.hrana.codec.JacksonHranaJsonCodec;
 import tech.libsql.hrana.codec.PipelineReqBody;
 import tech.libsql.hrana.codec.PipelineRespBody;
 import tech.libsql.hrana.codec.Stmt;
@@ -34,7 +34,7 @@ public class LibsqlHttpClient {
     private final URI pipelineUri;
 
     public LibsqlHttpClient(LibsqlClientConfig config) {
-        this(config, new JacksonHranaJsonCodec());
+        this(config, new DirectHranaJsonCodec());
     }
 
     public LibsqlHttpClient(LibsqlClientConfig config, HranaJsonCodec codec) {
