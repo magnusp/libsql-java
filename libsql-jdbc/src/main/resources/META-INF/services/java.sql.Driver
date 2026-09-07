@@ -1,1 +1,1 @@
-tech.libsql.jdbc.LibsqlDriver
+com.github.magnusp.libsql.jdbc.LibsqlDriver

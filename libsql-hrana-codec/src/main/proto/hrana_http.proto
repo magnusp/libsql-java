@@ -3,7 +3,7 @@ package hrana.http;
 
 import "hrana.proto";
 
-option java_package = "tech.libsql.hrana.proto";
+option java_package = "com.github.magnusp.libsql.hrana.proto";
 option java_outer_classname = "HranaHttpProto";
 
 message PipelineReqBody {
