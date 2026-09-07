@@ -102,7 +102,8 @@ public class LibsqlHttpClient {
                 HttpRequest.Builder builder = HttpRequest.newBuilder(uri)
                         .POST(HttpRequest.BodyPublishers.ofByteArray(bodyBytes))
                         .header("Content-Type", "application/json")
-                        .header("Accept", "application/json");
+                        .header("Accept", "application/json")
+                        .timeout(config.connectTimeout() != null ? config.connectTimeout() : LibsqlClientConfig.DEFAULT_CONNECT_TIMEOUT);
 
                 if (config.authToken() != null && !config.authToken().isBlank()) {
                     builder.header("Authorization", "Bearer " + config.authToken());
