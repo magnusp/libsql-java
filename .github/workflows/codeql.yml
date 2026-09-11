@@ -1,0 +1,41 @@
+name: "CodeQL Advanced Security Analysis"
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    - cron: '0 6 * * 1' # Every Monday at 06:00 UTC
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze Code with CodeQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Java LTS (Corretto 25)
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'corretto'
+          java-version: '25'
+          cache: 'maven'
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: 'java-kotlin'
+          build-mode: 'autobuild'
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:java-kotlin"

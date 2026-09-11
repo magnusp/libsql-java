@@ -1,0 +1,49 @@
+name: Bug Report
+description: File a bug report to help us improve libsql-java
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Steps or minimal code snippet to reproduce the behavior.
+      placeholder: |
+        1. Connect with url 'jdbc:libsql:...'
+        2. Execute query '...'
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: A clear and concise description of what you expected to happen.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: JDK version, OS, sqld version, etc.
+      placeholder: "e.g. Amazon Corretto 26, Linux x86_64, sqld 0.24"
+    validations:
+      required: false
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Add any other context, stack traces, or logs here.
+    validations:
+      required: false
