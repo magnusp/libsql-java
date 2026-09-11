@@ -22,7 +22,7 @@
     <properties>
         <maven.compiler.release>26</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <jackson.version>2.18.2</jackson.version>
+        <jackson.version>2.18.8</jackson.version>
         <junit.version>5.11.4</junit.version>
         <assertj.version>3.27.3</assertj.version>
         <testcontainers.version>1.21.4</testcontainers.version>
