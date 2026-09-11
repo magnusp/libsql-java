@@ -43,7 +43,7 @@
         <junit.version>5.11.4</junit.version>
         <assertj.version>3.27.7</assertj.version>
         <testcontainers.version>1.21.4</testcontainers.version>
-        <hikaricp.version>6.2.1</hikaricp.version>
+        <hikaricp.version>7.1.0</hikaricp.version>
         <protobuf.version>4.36.1</protobuf.version>
     </properties>
 
