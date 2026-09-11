@@ -18,7 +18,7 @@ jobs:
         java-version: ['25', '26']
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Amazon Corretto ${{ matrix.java-version }}
         uses: actions/setup-java@v4
