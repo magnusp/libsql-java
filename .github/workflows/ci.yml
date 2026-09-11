@@ -1,0 +1,35 @@
+name: CI & Integration Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build & Test (Java ${{ matrix.java-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java-version: ['25', '26']
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Amazon Corretto ${{ matrix.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'corretto'
+          java-version: ${{ matrix.java-version }}
+          cache: 'maven'
+
+      - name: Check Code Formatting (Spotless)
+        run: mvn --batch-mode spotless:check
+
+      - name: Run Tests and Verifications
+        run: mvn --batch-mode clean verify
