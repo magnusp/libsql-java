@@ -1,5 +1,7 @@
 package com.github.magnusp.libsql.itest;
 
+import eu.rekawek.toxiproxy.Proxy;
+import eu.rekawek.toxiproxy.ToxiproxyClient;
 import eu.rekawek.toxiproxy.model.ToxicDirection;
 import eu.rekawek.toxiproxy.model.toxic.Latency;
 import org.junit.jupiter.api.AfterEach;
@@ -11,6 +13,7 @@ import org.testcontainers.containers.ToxiproxyContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.utility.DockerImageName;
 
 import java.io.IOException;
 import java.sql.Connection;
@@ -41,28 +44,33 @@ public class NetworkToxicityIT {
                     .withStartupTimeout(Duration.ofSeconds(60)));
 
     @Container
-    private static final ToxiproxyContainer TOXIPROXY = new ToxiproxyContainer("ghcr.io/shopify/toxiproxy:latest")
+    private static final ToxiproxyContainer TOXIPROXY = new ToxiproxyContainer(
+            DockerImageName.parse("ghcr.io/shopify/toxiproxy:latest"))
             .withNetwork(NETWORK);
 
-    private static ToxiproxyContainer.ContainerProxy proxy;
+    private static ToxiproxyClient toxiproxyClient;
+    private static Proxy proxy;
+    private static int mappedProxyPort;
 
     @BeforeAll
-    static void setUpAll() {
+    static void setUpAll() throws IOException {
         LIBSQL.start();
         TOXIPROXY.start();
-        proxy = TOXIPROXY.getProxy(LIBSQL, 8080);
+        toxiproxyClient = new ToxiproxyClient(TOXIPROXY.getHost(), TOXIPROXY.getControlPort());
+        proxy = toxiproxyClient.createProxy("libsql-proxy", "0.0.0.0:8666", "libsql-srv:8080");
+        mappedProxyPort = TOXIPROXY.getMappedPort(8666);
     }
 
     @AfterEach
     void resetToxiproxy() throws IOException {
-        proxy.setConnectionCut(false);
+        proxy.enable();
         for (var t : proxy.toxics().getAll()) {
             t.remove();
         }
     }
 
     private String getProxiedJdbcUrl(int timeoutMs) {
-        return "jdbc:libsql:http://" + proxy.getContainerIpAddress() + ":" + proxy.getProxyPort() + "?connectTimeout=" + timeoutMs;
+        return "jdbc:libsql:http://" + TOXIPROXY.getHost() + ":" + mappedProxyPort + "?connectTimeout=" + timeoutMs;
     }
 
     @Test
@@ -81,7 +89,7 @@ public class NetworkToxicityIT {
 
     @Test
     void testDisconnectConnectionCut() throws IOException {
-        proxy.setConnectionCut(true);
+        proxy.disable();
 
         assertThatThrownBy(() -> {
             try (Connection conn = DriverManager.getConnection(getProxiedJdbcUrl(1000));

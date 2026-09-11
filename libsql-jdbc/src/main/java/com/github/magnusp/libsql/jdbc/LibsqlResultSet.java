@@ -167,6 +167,8 @@ public class LibsqlResultSet implements ResultSet {
     }
 
     @Override
+    @Deprecated
+    @SuppressWarnings("deprecation")
     public BigDecimal getBigDecimal(int columnIndex, int scale) throws SQLException {
         return getBigDecimal(columnIndex);
     }
@@ -302,6 +304,8 @@ public class LibsqlResultSet implements ResultSet {
     }
 
     @Override
+    @Deprecated
+    @SuppressWarnings("deprecation")
     public BigDecimal getBigDecimal(String columnLabel, int scale) throws SQLException {
         return getBigDecimal(findColumn(columnLabel), scale);
     }
@@ -388,10 +392,10 @@ public class LibsqlResultSet implements ResultSet {
     }
 
     @Override public InputStream getAsciiStream(int columnIndex) throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public InputStream getUnicodeStream(int columnIndex) throws SQLException { throw new UnsupportedOperationException(); }
+    @Override @Deprecated @SuppressWarnings("deprecation") public InputStream getUnicodeStream(int columnIndex) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public InputStream getBinaryStream(int columnIndex) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public InputStream getAsciiStream(String columnLabel) throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public InputStream getUnicodeStream(String columnLabel) throws SQLException { throw new UnsupportedOperationException(); }
+    @Override @Deprecated @SuppressWarnings("deprecation") public InputStream getUnicodeStream(String columnLabel) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public InputStream getBinaryStream(String columnLabel) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public SQLWarning getWarnings() throws SQLException { return null; }
     @Override public void clearWarnings() throws SQLException {}

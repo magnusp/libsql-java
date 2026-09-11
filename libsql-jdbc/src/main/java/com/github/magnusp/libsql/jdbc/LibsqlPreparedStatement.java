@@ -199,7 +199,7 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
     }
 
     @Override public void setAsciiStream(int parameterIndex, InputStream x, int length) throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public void setUnicodeStream(int parameterIndex, InputStream x, int length) throws SQLException { throw new UnsupportedOperationException(); }
+    @Override @Deprecated @SuppressWarnings("deprecation") public void setUnicodeStream(int parameterIndex, InputStream x, int length) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public void setBinaryStream(int parameterIndex, InputStream x, int length) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public void setCharacterStream(int parameterIndex, Reader reader, int length) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public void setRef(int parameterIndex, Ref x) throws SQLException { throw new UnsupportedOperationException(); }
