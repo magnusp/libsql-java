@@ -1,14 +1,15 @@
-name: CI
+name: PR Verification
 
 on:
-  push:
+  pull_request:
     branches: [ "main" ]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
 
 jobs:
-  build-and-test:
+  verify:
     name: Build & Test (Java ${{ matrix.java-version }})
     runs-on: ubuntu-latest
     strategy:
