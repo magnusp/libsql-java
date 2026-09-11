@@ -43,8 +43,8 @@ Pipelines for one-shot / autocommit queries were updated to append an explicit `
 // HranaHttpClient.java
 public StmtResult executeOneShot(Stmt stmt, Duration customTimeout) throws SQLException {
     PipelineRespBody resp = sendPipeline(
-        null, 
-        List.of(new ExecuteReq(stmt), new CloseStreamReq()), 
+        null,
+        List.of(new ExecuteReq(stmt), new CloseStreamReq()),
         customTimeout
     );
     // ... parse StmtResult ...
@@ -117,7 +117,7 @@ Implemented automated retry with exponential backoff and jitter in `HranaHttpCli
 - High CPU usage in socket creation and TLS/TCP handshakes.
 
 ### Root Cause
-In `LibsqlDriver.connect(...)`, each JDBC `Connection` constructed its own `HranaHttpClient`, which in turn invoked `HttpClient.newHttpClient()`. 
+In `LibsqlDriver.connect(...)`, each JDBC `Connection` constructed its own `HranaHttpClient`, which in turn invoked `HttpClient.newHttpClient()`.
 - `java.net.http.HttpClient` maintains its own internal TCP connection pool and HTTP/1.1 keep-alive cache.
 - Creating a new client per JDBC connection meant TCP connections were never reused across connections, forcing every query or connection open to perform full TCP SYN/ACK handshakes and teardowns.
 
