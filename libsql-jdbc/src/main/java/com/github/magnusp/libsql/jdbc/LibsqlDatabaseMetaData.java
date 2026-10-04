@@ -9,9 +9,21 @@ import java.sql.SQLException;
 public class LibsqlDatabaseMetaData implements DatabaseMetaData {
 
     private final LibsqlConnection connection;
+    private String cachedDatabaseProductVersion;
 
     public LibsqlDatabaseMetaData(LibsqlConnection connection) {
         this.connection = connection;
+    }
+
+    private String resolveDatabaseProductVersion() throws SQLException {
+        if (cachedDatabaseProductVersion == null) {
+            try (var rs = connection.createStatement().executeQuery("SELECT sqlite_version()")) {
+                cachedDatabaseProductVersion = rs.next() ? rs.getString(1) : "3.0";
+            } catch (SQLException e) {
+                cachedDatabaseProductVersion = "3.0";
+            }
+        }
+        return cachedDatabaseProductVersion;
     }
 
     @Override
@@ -37,7 +49,7 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     @Override
     public String getDatabaseProductName() throws SQLException { return "SQLite (libSQL)"; }
     @Override
-    public String getDatabaseProductVersion() throws SQLException { return "3.0"; }
+    public String getDatabaseProductVersion() throws SQLException { return resolveDatabaseProductVersion(); }
     @Override
     public String getDriverName() throws SQLException { return "libSQL JDBC Driver"; }
     @Override
@@ -381,8 +393,14 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     @Override public ResultSet getAttributes(String catalog, String schemaPattern, String typeNamePattern, String attributeNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public boolean supportsResultSetHoldability(int holdability) throws SQLException { return holdability == ResultSet.HOLD_CURSORS_OVER_COMMIT; }
     @Override public int getResultSetHoldability() throws SQLException { return ResultSet.HOLD_CURSORS_OVER_COMMIT; }
-    @Override public int getDatabaseMajorVersion() throws SQLException { return 3; }
-    @Override public int getDatabaseMinorVersion() throws SQLException { return 0; }
+    @Override public int getDatabaseMajorVersion() throws SQLException {
+        String[] parts = resolveDatabaseProductVersion().split("\\.");
+        try { return Integer.parseInt(parts[0]); } catch (NumberFormatException e) { return 3; }
+    }
+    @Override public int getDatabaseMinorVersion() throws SQLException {
+        String[] parts = resolveDatabaseProductVersion().split("\\.");
+        try { return parts.length > 1 ? Integer.parseInt(parts[1]) : 0; } catch (NumberFormatException e) { return 0; }
+    }
     @Override public int getJDBCMajorVersion() throws SQLException { return 4; }
     @Override public int getJDBCMinorVersion() throws SQLException { return 3; }
     @Override public int getSQLStateType() throws SQLException { return sqlStateSQL; }
