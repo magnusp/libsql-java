@@ -19,8 +19,9 @@ import java.util.regex.Pattern;
 
 public class LibsqlResultSetMetaData implements ResultSetMetaData {
 
+    private static final Pattern COLUMN_TYPENAME = Pattern.compile("([^\\(]*)");
     private static final Pattern COLUMN_TYPECAST =
-            Pattern.compile("(?i)cast\\(.*?\\s+as\\s+(.*?)\\s*\\)");
+            Pattern.compile("cast\\(.*?\\s+as\\s+(.*?)\\s*\\)");
     private static final Pattern COLUMN_PRECISION = Pattern.compile(".*?\\((.*?)\\)");
 
     private final List<Col> cols;
@@ -119,18 +120,8 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public boolean isSigned(int column) throws SQLException {
-        return switch (getColumnType(column)) {
-            case Types.TINYINT,
-                    Types.SMALLINT,
-                    Types.INTEGER,
-                    Types.BIGINT,
-                    Types.NUMERIC,
-                    Types.DECIMAL,
-                    Types.REAL,
-                    Types.FLOAT,
-                    Types.DOUBLE -> true;
-            default -> false;
-        };
+        String typeName = getColumnTypeName(column);
+        return "NUMERIC".equals(typeName) || "INTEGER".equals(typeName) || "REAL".equals(typeName);
     }
 
     @Override
@@ -163,14 +154,7 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
             return 0;
         }
         Matcher matcher = COLUMN_PRECISION.matcher(declType);
-        if (!matcher.find()) {
-            return 0;
-        }
-        try {
-            return Integer.parseInt(matcher.group(1).split(",")[0].trim());
-        } catch (NumberFormatException e) {
-            return 0;
-        }
+        return matcher.find() ? Integer.parseInt(matcher.group(1).split(",")[0].trim()) : 0;
     }
 
     @Override
@@ -183,11 +167,7 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         if (matcher.find()) {
             String[] parts = matcher.group(1).split(",");
             if (parts.length == 2) {
-                try {
-                    return Integer.parseInt(parts[1].trim());
-                } catch (NumberFormatException e) {
-                    return 0;
-                }
+                return Integer.parseInt(parts[1].trim());
             }
         }
         return 0;
@@ -302,13 +282,9 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         getCol(column);
         String declType = declType(column);
         if (declType != null) {
-            int paren = declType.indexOf('(');
-            String name = (paren >= 0 ? declType.substring(0, paren) : declType)
-                    .trim()
-                    .toUpperCase(Locale.ENGLISH);
-            if (!name.isEmpty()) {
-                return name;
-            }
+            Matcher matcher = COLUMN_TYPENAME.matcher(declType);
+            matcher.find();
+            return matcher.group(1).toUpperCase(Locale.ENGLISH);
         }
         return switch (sampleType(column)) {
             case INTEGER -> "INTEGER";
@@ -362,17 +338,14 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
     private String declType(int column) throws SQLException {
         Col col = getCol(column);
         String declType = col.decltype();
-        if (declType != null && !declType.isBlank()) {
-            return declType;
-        }
-        String name = col.name();
-        if (name != null) {
-            Matcher matcher = COLUMN_TYPECAST.matcher(name);
-            if (matcher.find()) {
-                return matcher.group(1);
+        if (declType == null) {
+            String name = col.name();
+            if (name != null) {
+                Matcher matcher = COLUMN_TYPECAST.matcher(name);
+                declType = matcher.find() ? matcher.group(1) : null;
             }
         }
-        return null;
+        return declType;
     }
 
     private String columnName(int column) throws SQLException {
