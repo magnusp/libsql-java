@@ -284,9 +284,29 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public ResultSet getTables(String catalog, String schemaPattern, String tableNamePattern, String[] types) throws SQLException {
-        StringBuilder sql = new StringBuilder("SELECT NULL AS TABLE_CAT, NULL AS TABLE_SCHEM, name AS TABLE_NAME, UPPER(type) AS TABLE_TYPE, NULL AS REMARKS, NULL AS TYPE_CAT, NULL AS TYPE_SCHEM, NULL AS TYPE_NAME, NULL AS SELF_REFERENCING_COL_NAME, NULL AS REF_GENERATION FROM sqlite_master WHERE 1=1");
-        if (tableNamePattern != null && !tableNamePattern.equals("%")) {
-            sql.append(" AND name LIKE '").append(escapeLiteral(tableNamePattern)).append("'");
+        String pattern = tableNamePattern == null || tableNamePattern.isEmpty()
+                ? "%"
+                : escapeLiteral(tableNamePattern);
+        StringBuilder sql = new StringBuilder();
+        sql.append("SELECT NULL AS TABLE_CAT, NULL AS TABLE_SCHEM, NAME AS TABLE_NAME, TYPE AS TABLE_TYPE, ")
+                .append("NULL AS REMARKS, NULL AS TYPE_CAT, NULL AS TYPE_SCHEM, NULL AS TYPE_NAME, ")
+                .append("NULL AS SELF_REFERENCING_COL_NAME, NULL AS REF_GENERATION FROM (")
+                .append("SELECT 'sqlite_schema' AS NAME, 'SYSTEM TABLE' AS TYPE")
+                .append(" UNION ALL SELECT NAME, UPPER(TYPE) AS TYPE FROM sqlite_schema")
+                .append(" WHERE NAME NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND UPPER(TYPE) IN ('TABLE', 'VIEW')")
+                .append(" UNION ALL SELECT NAME, 'GLOBAL TEMPORARY' AS TYPE FROM sqlite_temp_master")
+                .append(" UNION ALL SELECT NAME, 'SYSTEM TABLE' AS TYPE FROM sqlite_schema")
+                .append(" WHERE NAME LIKE 'sqlite\\_%' ESCAPE '\\'")
+                .append(") WHERE TABLE_NAME LIKE '").append(pattern).append("' ESCAPE '\\'");
+        if (types != null && types.length != 0) {
+            sql.append(" AND TABLE_TYPE IN (");
+            for (int i = 0; i < types.length; i++) {
+                if (i > 0) {
+                    sql.append(",");
+                }
+                sql.append("'").append(escapeLiteral(types[i].toUpperCase())).append("'");
+            }
+            sql.append(")");
         }
         sql.append(" ORDER BY TABLE_TYPE, TABLE_NAME");
         return executeMetadataQuery(sql.toString());

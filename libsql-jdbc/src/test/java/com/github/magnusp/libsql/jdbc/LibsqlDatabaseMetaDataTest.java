@@ -43,8 +43,77 @@ class LibsqlDatabaseMetaDataTest {
         ResultSet resultSet = metadata.getTables(null, null, "O'Brien", null);
         resultSet.close();
 
-        assertThat(connection.lastSql).contains("name LIKE 'O''Brien'");
-        assertThat(connection.lastSql).doesNotContain("name LIKE 'O'Brien'");
+        assertThat(connection.lastSql).contains("TABLE_NAME LIKE 'O''Brien'");
+        assertThat(connection.lastSql).doesNotContain("TABLE_NAME LIKE 'O'Brien'");
+    }
+
+    @Test
+    void getTablesWithNullTypesReturnsOnlyTablesViewsAndSystemAndTemporaryRows() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(emptyResult());
+
+        new LibsqlDatabaseMetaData(connection).getTables(null, null, null, null).close();
+
+        assertThat(connection.lastSql)
+                .contains("'sqlite_schema' AS NAME")
+                .contains("'SYSTEM TABLE' AS TYPE")
+                .contains("'GLOBAL TEMPORARY' AS TYPE")
+                .contains("FROM sqlite_temp_master")
+                .contains("UPPER(TYPE) IN ('TABLE', 'VIEW')")
+                .contains("TABLE_NAME LIKE '%'")
+                .doesNotContain("TABLE_TYPE IN")
+                .doesNotContain("INDEX")
+                .doesNotContain("TRIGGER");
+    }
+
+    @Test
+    void getTablesWithEmptyTypesBehavesLikeNullTypes() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(emptyResult());
+
+        new LibsqlDatabaseMetaData(connection).getTables(null, null, null, new String[0]).close();
+
+        assertThat(connection.lastSql)
+                .contains("'SYSTEM TABLE' AS TYPE")
+                .contains("'GLOBAL TEMPORARY' AS TYPE")
+                .contains("UPPER(TYPE) IN ('TABLE', 'VIEW')")
+                .doesNotContain("TABLE_TYPE IN");
+    }
+
+    @Test
+    void getTablesWithTableTypeFiltersToTableRows() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(emptyResult());
+
+        new LibsqlDatabaseMetaData(connection).getTables(null, null, null, new String[] {"TABLE"}).close();
+
+        assertThat(connection.lastSql)
+                .contains("UPPER(TYPE) IN ('TABLE', 'VIEW')")
+                .contains("AND TABLE_TYPE IN ('TABLE')");
+    }
+
+    @Test
+    void getTablesWithViewTypeFiltersToViewRows() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(emptyResult());
+
+        new LibsqlDatabaseMetaData(connection).getTables(null, null, null, new String[] {"VIEW"}).close();
+
+        assertThat(connection.lastSql).contains("AND TABLE_TYPE IN ('VIEW')");
+    }
+
+    @Test
+    void getTablesWithMultipleTypesUppercasesThem() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(emptyResult());
+
+        new LibsqlDatabaseMetaData(connection).getTables(null, null, null, new String[] {"table", "View"}).close();
+
+        assertThat(connection.lastSql).contains("AND TABLE_TYPE IN ('TABLE','VIEW')");
+    }
+
+    @Test
+    void getTablesWithEmptyTableNamePatternMatchesEverything() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(emptyResult());
+
+        new LibsqlDatabaseMetaData(connection).getTables(null, null, "", null).close();
+
+        assertThat(connection.lastSql).contains("TABLE_NAME LIKE '%'");
     }
 
     private static StmtResult emptyResult() {
