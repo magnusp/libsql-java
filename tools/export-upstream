@@ -4,31 +4,47 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage: export-upstream <tag> [options]
+       export-upstream --verify [--manifest FILE]
+       export-upstream --self-test
 
 Export xerial/sqlite-jdbc at the given tag into upstream-xerial_sqlite-jdbc/
 and update upstream-xerial_sqlite-jdbc/UPSTREAM.md. The tag is resolved to its
 commit SHA with the GitHub API, and both the tag and the SHA are recorded.
+
+The selected files come from upstream-xerial_sqlite-jdbc.manifest by default.
+The manifest is the single source of truth for both the export and the
+libsql-conformance build.
 
 Requires the GitHub CLI, authenticated with `gh auth login`.
 
 Examples:
   export-upstream 3.53.4.0
   export-upstream 3.53.4.0 --manifest upstream.manifest
+  export-upstream --verify
 
 Options:
-  --manifest FILE     Repo-relative paths to export, one per line.
+  --manifest FILE     Repo-relative paths, one per line.
                       Blank lines and lines starting with # are ignored.
-  --all               Export the whole repository instead of the default slice.
+  --all               Export the whole repository instead of the manifest.
   --force             Replace a non-empty destination not created by this script.
+  --verify            Check the vendored tree against the manifest and
+                      CHECKSUMS.sha256 without contacting GitHub.
+  --self-test         Exercise the verification rules on a temporary copy of
+                      the vendored tree.
   -h, --help          Show this help.
 
-Default export slice when no manifest is given and --all is not used:
-  src/test/java
-  src/test/resources
-  LICENSE
-  LICENSE.zentus
-  NOTICE
-  VERSION
+Default manifest: upstream-xerial_sqlite-jdbc.manifest
+
+Vendored divergences
+  CHECKSUMS.sha256 records the upstream hash of every exported file on a
+  "# upstream <hash> ./path" line and the current hash on the following line.
+  A deliberate edit keeps the upstream line, updates the current hash, and
+  records a rationale in the manifest:
+
+    # divergence: <path> -- <non-empty reason>
+
+  --verify rejects an edit whose current hash differs from upstream without a
+  rationale, and rejects a rationale whose file still matches upstream.
 
 The destination must be empty, missing, or marked with .export-upstream.
 The script never edits UPSTREAM.md content outside its managed markers.
@@ -44,35 +60,304 @@ md_cell() {
     printf '%s' "$1" | sed 's/|/\\|/g'
 }
 
+sha256_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    else
+        die "sha256sum or shasum is required"
+    fi
+}
+
+sha256_check() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum -c "$1"
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 -c "$1"
+    else
+        die "sha256sum or shasum is required"
+    fi
+}
+
+check_manifest_path() {
+    case "$1" in
+        /*|..|../*|*/../*|*/..)
+            die "manifest path must be relative and stay inside the repository: $1"
+            ;;
+    esac
+}
+
+load_manifest_files() {
+    local manifest=$1
+    local out=$2
+    local line
+
+    [ -f "$manifest" ] || die "manifest not found: $manifest"
+    : > "$out"
+    while IFS= read -r line || [ -n "$line" ]; do
+        line=${line%$'\r'}
+        case "$line" in
+            ""|"#"*)
+                continue
+                ;;
+        esac
+        check_manifest_path "$line"
+        printf '%s\n' "$line" >> "$out"
+    done < "$manifest"
+}
+
+load_divergences() {
+    local manifest=$1
+    local out=$2
+    local line rest path reason
+
+    : > "$out"
+    while IFS= read -r line || [ -n "$line" ]; do
+        line=${line%$'\r'}
+        case "$line" in
+            "# divergence:"*)
+                rest=$(printf '%s' "$line" | sed -E 's/^# divergence:[[:space:]]*//')
+                path=${rest%% *}
+                reason=$(printf '%s' "$rest" | sed -E 's/^[^ ]+[[:space:]]*(--)?[[:space:]]*//')
+                if [ -z "$path" ] || [ -z "$reason" ]; then
+                    die "malformed divergence rationale: $line"
+                fi
+                check_manifest_path "$path"
+                printf '%s\t%s\n' "$path" "$reason" >> "$out"
+                ;;
+        esac
+    done < "$manifest"
+}
+
+verify_tree() {
+    local manifest=$1
+    local entry path current upstream saved
+    local bad=0
+
+    [ -f "$dest/.export-upstream" ] || die "not an export-upstream tree: $dest"
+
+    load_manifest_files "$manifest" "$tmp/manifest.raw"
+    [ -s "$tmp/manifest.raw" ] || die "manifest is empty: $manifest"
+
+    : > "$tmp/manifest.paths"
+    while IFS= read -r entry; do
+        if [ -f "$dest/$entry" ]; then
+            printf '%s\n' "$entry" >> "$tmp/manifest.paths"
+        elif [ -d "$dest/$entry" ]; then
+            (cd "$dest" && find "$entry" -type f -print)
+        else
+            die "manifest path not found in $dest: $entry"
+        fi
+    done < "$tmp/manifest.raw"
+
+    LC_ALL=C sort "$tmp/manifest.paths" -o "$tmp/manifest.paths.sorted"
+    if uniq -d "$tmp/manifest.paths.sorted" | grep -q .; then
+        die "manifest contains duplicate paths: $manifest"
+    fi
+    mv "$tmp/manifest.paths.sorted" "$tmp/manifest.paths"
+
+    (
+        cd "$dest"
+        find . -type f \
+            ! -name CHECKSUMS.sha256 \
+            ! -name .export-upstream \
+            ! -name UPSTREAM.md \
+            -print \
+            | sed 's|^\./||'
+    ) | LC_ALL=C sort > "$tmp/actual.paths"
+
+    if ! diff -u "$tmp/manifest.paths" "$tmp/actual.paths" > "$tmp/tree.diff"; then
+        cat "$tmp/tree.diff" >&2
+        die "vendored tree does not match $manifest"
+    fi
+
+    [ -f "$dest/CHECKSUMS.sha256" ] || die "missing $dest/CHECKSUMS.sha256"
+    if ! (cd "$dest" && sha256_check CHECKSUMS.sha256 >/dev/null); then
+        die "CHECKSUMS.sha256 does not match the vendored tree"
+    fi
+
+    awk '
+        /^# upstream / {
+            p = $4
+            sub(/^\.\//, "", p)
+            if (p in upstream) {
+                print "DUPLICATE_UPSTREAM\t" p
+                bad = 1
+            }
+            upstream[p] = $3
+            next
+        }
+        /^#/ {
+            next
+        }
+        NF >= 2 {
+            p = $2
+            sub(/^\.\//, "", p)
+            if (p in current) {
+                print "DUPLICATE_CURRENT\t" p
+                bad = 1
+            }
+            current[p] = $1
+            next
+        }
+        END {
+            for (p in current) {
+                if (!(p in upstream)) {
+                    print "MISSING_UPSTREAM\t" p
+                    bad = 1
+                } else {
+                    print "ENTRY\t" p "\t" current[p] "\t" upstream[p]
+                }
+            }
+            for (p in upstream) {
+                if (!(p in current)) {
+                    print "MISSING_CURRENT\t" p
+                    bad = 1
+                }
+            }
+            exit bad
+        }
+    ' "$dest/CHECKSUMS.sha256" > "$tmp/checksums.tsv" || die "malformed CHECKSUMS.sha256"
+
+    load_divergences "$manifest" "$tmp/divergences"
+
+    while IFS=$'\t' read -r entry path current upstream; do
+        case "$entry" in
+            ENTRY)
+                if ! grep -Fqx "$path" "$tmp/manifest.paths"; then
+                    echo "checksum entry not in manifest: $path" >&2
+                    bad=1
+                fi
+                if [ "$current" != "$upstream" ] \
+                    && ! awk -F '\t' -v path="$path" '$1 == path { found = 1 } END { exit !found }' "$tmp/divergences"; then
+                    echo "divergence without rationale in $manifest: $path" >&2
+                    bad=1
+                fi
+                ;;
+            *)
+                echo "$entry: $path" >&2
+                bad=1
+                ;;
+        esac
+    done < "$tmp/checksums.tsv"
+
+    while IFS=$'\t' read -r path saved; do
+        [ -n "$saved" ] || {
+            echo "empty divergence rationale in $manifest: $path" >&2
+            bad=1
+        }
+        if ! grep -Fqx "$path" "$tmp/manifest.paths"; then
+            echo "divergence path not in manifest: $path" >&2
+            bad=1
+            continue
+        fi
+        entry=$(awk -F '\t' -v path="$path" '$1 == "ENTRY" && $2 == path { print $3 "\t" $4 }' "$tmp/checksums.tsv")
+        if [ -z "$entry" ]; then
+            echo "divergence path has no checksums: $path" >&2
+            bad=1
+            continue
+        fi
+        current=${entry%%$'\t'*}
+        upstream=${entry#*$'\t'}
+        if [ "$current" = "$upstream" ]; then
+            echo "divergence rationale but file matches upstream: $path" >&2
+            bad=1
+        fi
+    done < "$tmp/divergences"
+
+    [ "$bad" -eq 0 ] || die "vendored upstream verification failed"
+    echo "Verified $dest against $manifest"
+}
+
+self_test_reset() {
+    rm -rf "$self_root/$dest"
+    cp -a "$dest" "$self_root/$dest"
+    cp "$manifest" "$self_root/$manifest"
+}
+
+self_test_expect_pass() {
+    local label=$1
+
+    if ! "$self_root/tools/export-upstream" --verify > "$tmp/self-test.out" 2>&1; then
+        cat "$tmp/self-test.out" >&2
+        die "self-test: $label was rejected"
+    fi
+}
+
+self_test_expect_fail() {
+    local label=$1
+
+    if "$self_root/tools/export-upstream" --verify > "$tmp/self-test.out" 2>&1; then
+        die "self-test: $label was accepted"
+    fi
+}
+
+self_test() {
+    local path="src/test/java/org/sqlite/Utils.java"
+    local file hash
+
+    self_root="$tmp/self-test"
+    mkdir -p "$self_root/tools"
+    cp -a "$dest" "$self_root/$dest"
+    cp "$manifest" "$self_root/$manifest"
+    cp "$repo_root/tools/export-upstream" "$self_root/tools/export-upstream"
+    chmod +x "$self_root/tools/export-upstream"
+
+    self_test_expect_pass "pristine tree"
+
+    file="$self_root/$dest/$path"
+    printf ' ' >> "$file"
+    self_test_expect_fail "one-byte change"
+
+    self_test_reset
+    printf 'class ExtraTest {}\n' > "$self_root/$dest/src/test/java/org/sqlite/ExtraTest.java"
+    self_test_expect_fail "unlisted vendored file"
+
+    self_test_reset
+    rm "$self_root/$dest/$path"
+    self_test_expect_fail "deleted vendored file"
+
+    self_test_reset
+    file="$self_root/$dest/$path"
+    printf ' ' >> "$file"
+    hash=$(sha256_file "$file")
+    awk -v path="./$path" -v hash="$hash" '
+        /^#/ { print; next }
+        $2 == path { print hash "  " $2; next }
+        { print }
+    ' "$self_root/$dest/CHECKSUMS.sha256" > "$self_root/$dest/CHECKSUMS.sha256.new"
+    mv "$self_root/$dest/CHECKSUMS.sha256.new" "$self_root/$dest/CHECKSUMS.sha256"
+    self_test_expect_fail "divergence without rationale"
+
+    printf '\n# divergence: %s -- self-test rationale\n' "$path" >> "$self_root/$manifest"
+    self_test_expect_pass "recorded divergence"
+
+    self_test_reset
+    mv "$self_root/$manifest" "$self_root/manifest.hidden"
+    self_test_expect_fail "missing default manifest"
+
+    echo "Self-test passed"
+}
+
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
 repo="xerial/sqlite-jdbc"
 dest="upstream-xerial_sqlite-jdbc"
 upstream_md="$dest/UPSTREAM.md"
-manifest=""
+manifest="upstream-xerial_sqlite-jdbc.manifest"
 manifest_set=0
 export_all=0
 force=0
+verify=0
+self_test_enabled=0
+tag=""
 
 if [ "$#" -lt 1 ]; then
     usage
     exit 2
 fi
-
-case "$1" in
-    -h|--help)
-        usage
-        exit 0
-        ;;
-    -*)
-        usage
-        exit 2
-        ;;
-esac
-
-tag="$1"
-shift
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -90,15 +375,56 @@ while [ "$#" -gt 0 ]; do
             force=1
             shift
             ;;
+        --verify)
+            verify=1
+            shift
+            ;;
+        --self-test)
+            self_test_enabled=1
+            shift
+            ;;
         -h|--help)
             usage
             exit 0
             ;;
-        *)
+        -*)
             die "unknown option: $1"
+            ;;
+        *)
+            [ -z "$tag" ] || die "unexpected argument: $1"
+            tag="$1"
+            shift
             ;;
     esac
 done
+
+if [ "$self_test_enabled" -eq 1 ]; then
+    [ -z "$tag" ] || die "--self-test does not take a tag"
+    [ "$export_all" -eq 0 ] || die "--self-test cannot be used with --all"
+    [ "$force" -eq 0 ] || die "--self-test cannot be used with --force"
+    [ "$verify" -eq 0 ] || die "--self-test cannot be used with --verify"
+
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    self_test
+    exit 0
+fi
+
+if [ "$verify" -eq 1 ]; then
+    [ -z "$tag" ] || die "--verify does not take a tag"
+    [ "$export_all" -eq 0 ] || die "--verify cannot be used with --all"
+    [ "$force" -eq 0 ] || die "--verify cannot be used with --force"
+
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    verify_tree "$manifest"
+    exit 0
+fi
+
+[ -n "$tag" ] || {
+    usage
+    exit 2
+}
 
 if [ "$export_all" -eq 1 ] && [ "$manifest_set" -eq 1 ]; then
     die "--all and --manifest cannot be used together"
@@ -139,23 +465,10 @@ if [ "$export_all" -eq 1 ]; then
     paths_label="whole repository"
 else
     paths=()
-    if [ -n "$manifest" ]; then
-        [ -f "$manifest" ] || die "manifest not found: $manifest"
-        while IFS= read -r line || [ -n "$line" ]; do
-            line=${line%$'\r'}
-            case "$line" in
-                ""|"#"*)
-                    continue
-                    ;;
-                /*|..|../*|*/../*|*/..)
-                    die "manifest path must be relative and stay inside the repository: $line"
-                    ;;
-            esac
-            paths+=("$line")
-        done < "$manifest"
-    else
-        paths=(src/test/java src/test/resources LICENSE LICENSE.zentus NOTICE VERSION)
-    fi
+    load_manifest_files "$manifest" "$tmp/manifest.paths"
+    while IFS= read -r line; do
+        paths+=("$line")
+    done < "$tmp/manifest.paths"
 
     [ "${#paths[@]}" -gt 0 ] || die "manifest is empty: $manifest"
 
@@ -237,18 +550,27 @@ else
 fi
 mv "$upstream_md.tmp" "$upstream_md"
 
-if command -v sha256sum >/dev/null 2>&1; then
-    (
-        cd "$dest"
-        find . -type f \
-            ! -name CHECKSUMS.sha256 \
-            ! -name .export-upstream \
-            ! -name UPSTREAM.md \
-            -print0 \
-            | sort -z \
-            | xargs -0 -r sha256sum > CHECKSUMS.sha256
-    )
-fi
+(
+    cd "$dest"
+    find . -type f \
+        ! -name CHECKSUMS.sha256 \
+        ! -name .export-upstream \
+        ! -name UPSTREAM.md \
+        -print \
+        | sed 's|^\./||'
+) | LC_ALL=C sort > "$tmp/checksum.paths"
+
+{
+    echo '# Generated by tools/export-upstream. Do not edit by hand except for a deliberate divergence.'
+    echo '# The uncommented line is the current hash; "# upstream" is the hash at the pinned tag.'
+    echo '# A deliberate divergence keeps the upstream line, updates the current line, and records'
+    echo '# "# divergence: <path> -- <reason>" in upstream-xerial_sqlite-jdbc.manifest.'
+} > "$dest/CHECKSUMS.sha256"
+while IFS= read -r path; do
+    hash=$(sha256_file "$dest/$path")
+    printf '# upstream %s ./%s\n' "$hash" "$path" >> "$dest/CHECKSUMS.sha256"
+    printf '%s  ./%s\n' "$hash" "$path" >> "$dest/CHECKSUMS.sha256"
+done < "$tmp/checksum.paths"
 
 echo "Exported tag $tag ($sha) to $dest"
 echo "Updated $upstream_md"

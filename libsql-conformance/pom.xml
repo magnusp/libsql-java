@@ -59,22 +59,6 @@
                 <version>3.3.1</version>
                 <executions>
                     <execution>
-                        <id>copy-xerial-test-sources</id>
-                        <phase>generate-test-sources</phase>
-                        <goals>
-                            <goal>copy-resources</goal>
-                        </goals>
-                        <configuration>
-                            <outputDirectory>${project.build.directory}/generated-test-sources/xerial</outputDirectory>
-                            <resources>
-                                <resource>
-                                    <directory>${project.basedir}/../upstream-xerial_sqlite-jdbc/src/test/java</directory>
-                                    <filtering>false</filtering>
-                                </resource>
-                            </resources>
-                        </configuration>
-                    </execution>
-                    <execution>
                         <id>copy-docker-config</id>
                         <phase>pre-integration-test</phase>
                         <goals>
@@ -88,6 +72,45 @@
                                     <filtering>false</filtering>
                                 </resource>
                             </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.2.0</version>
+                <executions>
+                    <execution>
+                        <id>verify-vendored-upstream</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <exec executable="bash" failonerror="true">
+                                    <arg value="${project.basedir}/../tools/export-upstream" />
+                                    <arg value="--verify" />
+                                </exec>
+                            </target>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>copy-xerial-test-sources</id>
+                        <phase>generate-test-sources</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <delete dir="${project.build.directory}/generated-test-sources/xerial" />
+                                <copy todir="${project.build.directory}/generated-test-sources/xerial">
+                                    <fileset
+                                        dir="${project.basedir}/../upstream-xerial_sqlite-jdbc"
+                                        includesfile="${project.basedir}/../upstream-xerial_sqlite-jdbc.manifest" />
+                                </copy>
+                            </target>
                         </configuration>
                     </execution>
                 </executions>

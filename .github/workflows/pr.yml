@@ -27,6 +27,12 @@ jobs:
           java-version: ${{ matrix.java-version }}
           cache: 'maven'
 
+      - name: Verify vendored upstream integrity
+        run: ./tools/export-upstream --verify
+
+      - name: Self-check vendoring enforcement
+        run: ./tools/export-upstream --self-test
+
       - name: Check Code Formatting (Spotless)
         run: mvn --batch-mode spotless:check
 
