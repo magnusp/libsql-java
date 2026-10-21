@@ -134,6 +134,28 @@ class LibsqlGeneratedKeysTest {
     }
 
     @Test
+    void executeQueryDoesNotClearPreviousGeneratedKey() throws SQLException {
+        StmtResult rows = new StmtResult(
+                List.of(new Col("id", "INTEGER")),
+                List.of(new Row(List.of(Value.of(3L)))),
+                0,
+                null);
+        RecordingConnection connection = new RecordingConnection(insertResult(3L), rows);
+
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("insert into k (v) values ('a')");
+            try (ResultSet resultSet = statement.executeQuery("select id from k")) {
+                assertThat(resultSet.next()).isTrue();
+            }
+
+            try (ResultSet keys = statement.getGeneratedKeys()) {
+                assertThat(keys.next()).isTrue();
+                assertThat(keys.getLong(1)).isEqualTo(3L);
+            }
+        }
+    }
+
+    @Test
     void supportsGetGeneratedKeysMatchesImplementedBehavior() throws SQLException {
         LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new RecordingConnection(insertResult(1L)));
 

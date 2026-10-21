@@ -43,10 +43,12 @@ public class LibsqlStatement implements Statement {
 
     @Override
     public ResultSet executeQuery(String sql) throws SQLException {
-        execute(sql);
-        if (currentResultSet == null) {
+        StmtResult result = executeSql(sql);
+        if (result.cols() == null || result.cols().isEmpty()) {
             throw new SQLException("Query did not produce a ResultSet: " + sql);
         }
+        this.currentResultSet = new LibsqlResultSet(this, result, sql, false);
+        this.updateCount = -1;
         return currentResultSet;
     }
 
@@ -58,10 +60,7 @@ public class LibsqlStatement implements Statement {
 
     @Override
     public boolean execute(String sql) throws SQLException {
-        checkClosed();
-        closeCurrentResultSet();
-        checkClosed();
-        StmtResult result = connection.executeStatement(new Stmt(sql));
+        StmtResult result = executeSql(sql);
         updateGeneratedKeys(sql, result);
         if (result.cols() != null && !result.cols().isEmpty()) {
             this.currentResultSet = new LibsqlResultSet(this, result, sql, false);
@@ -72,6 +71,13 @@ public class LibsqlStatement implements Statement {
             this.updateCount = result.affectedRowCount();
             return false;
         }
+    }
+
+    private StmtResult executeSql(String sql) throws SQLException {
+        checkClosed();
+        closeCurrentResultSet();
+        checkClosed();
+        return connection.executeStatement(new Stmt(sql));
     }
 
     protected void closeCurrentResultSet() throws SQLException {
