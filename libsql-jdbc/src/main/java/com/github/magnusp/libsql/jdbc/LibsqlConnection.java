@@ -46,6 +46,35 @@ public class LibsqlConnection implements Connection {
     private boolean readOnly = false;
     private int transactionIsolation = TRANSACTION_SERIALIZABLE;
     private boolean closed = false;
+    private TransactionMode transactionMode = TransactionMode.DEFERRED;
+
+    /**
+     * Transaction begin mode, matching xerial sqlite-jdbc's
+     * {@code SQLiteConfig.TransactionMode}.
+     */
+    public enum TransactionMode {
+        DEFERRED("BEGIN"),
+        IMMEDIATE("BEGIN IMMEDIATE"),
+        EXCLUSIVE("BEGIN EXCLUSIVE");
+
+        private final String beginSql;
+
+        TransactionMode(String beginSql) {
+            this.beginSql = beginSql;
+        }
+
+        String beginSql() {
+            return beginSql;
+        }
+
+        public static TransactionMode from(String mode) {
+            try {
+                return valueOf(mode.toUpperCase());
+            } catch (RuntimeException e) {
+                throw new IllegalArgumentException("Unknown transaction mode: " + mode, e);
+            }
+        }
+    }
 
     // Interactive stream state
     private String baton = null;
@@ -159,15 +188,33 @@ public class LibsqlConnection implements Connection {
 
     private void ensureTransactionStarted() throws SQLException {
         if (baton == null) {
-            // Mitigation for Bug 2: Read-write transactions start with BEGIN IMMEDIATE
-            String beginSql = readOnly ? "BEGIN DEFERRED" : "BEGIN IMMEDIATE";
-            PipelineReqBody req = new PipelineReqBody(null, List.of(new StreamRequest.Execute(new Stmt(beginSql))));
-            PipelineRespBody resp = client.sendPipeline(req, baseUrl);
-            updateStreamState(resp);
-            if (resp.results().isEmpty() || resp.results().get(0) instanceof StreamResult.Error) {
-                closeStreamSilently();
-                throw new SQLException("Failed to begin transaction");
-            }
+            beginTransaction();
+        }
+    }
+
+    private void beginTransaction() throws SQLException {
+        PipelineRespBody resp;
+        try {
+            PipelineReqBody req = new PipelineReqBody(null,
+                    List.of(new StreamRequest.Execute(new Stmt(transactionMode.beginSql()))));
+            resp = client.sendPipeline(req, baseUrl);
+        } catch (LibsqlException e) {
+            throw LibsqlErrorMapper.toSQLException(e);
+        }
+        updateStreamState(resp);
+        if (resp.results().isEmpty()) {
+            closeStreamSilently();
+            throw new SQLException("Empty result received from server");
+        }
+        StreamResult result = resp.results().get(0);
+        if (result instanceof StreamResult.Error error) {
+            closeStreamSilently();
+            throw new SQLException(error.error().message());
+        }
+        if (!(result instanceof StreamResult.Ok ok)
+                || !(ok.response() instanceof StreamResponse.Execute)) {
+            closeStreamSilently();
+            throw new SQLException("Unexpected response: " + result);
         }
     }
 
@@ -214,15 +261,33 @@ public class LibsqlConnection implements Connection {
         return sql;
     }
 
+    /**
+     * Matches xerial sqlite-jdbc 3.53.4.0:
+     *
+     * <ul>
+     *   <li>Disabling auto-commit immediately begins a transaction in the configured
+     *       {@link TransactionMode}. The default is {@link TransactionMode#DEFERRED}, so an idle
+     *       non-auto-commit connection holds no lock until its first statement.
+     *   <li>{@link #commit()} and {@link #rollback()} end the current transaction and immediately
+     *       begin the next one, so a non-auto-commit connection always has a transaction open.
+     *   <li>Re-enabling auto-commit commits the open transaction and ends the Hrana transaction
+     *       stream.
+     * </ul>
+     *
+     * <p>Use {@link #setTransactionMode(TransactionMode)} to select {@code IMMEDIATE} or {@code
+     * EXCLUSIVE}, which acquire the write lock when the transaction begins.
+     */
     @Override
     public void setAutoCommit(boolean autoCommit) throws SQLException {
         checkClosed();
         if (this.autoCommit == autoCommit) return;
-        if (!this.autoCommit && autoCommit) {
-            // Committing active transaction
-            commit();
+        if (autoCommit) {
+            endTransaction("COMMIT", false);
+            this.autoCommit = true;
+        } else {
+            this.autoCommit = false;
+            beginTransaction();
         }
-        this.autoCommit = autoCommit;
     }
 
     @Override
@@ -237,7 +302,7 @@ public class LibsqlConnection implements Connection {
         if (autoCommit) {
             throw new SQLException("Cannot commit when in autoCommit mode");
         }
-        endTransaction("COMMIT");
+        endTransaction("COMMIT", true);
     }
 
     @Override
@@ -246,18 +311,26 @@ public class LibsqlConnection implements Connection {
         if (autoCommit) {
             throw new SQLException("Cannot rollback when in autoCommit mode");
         }
-        endTransaction("ROLLBACK");
+        endTransaction("ROLLBACK", true);
     }
 
-    private void endTransaction(String sql) throws SQLException {
+    private void endTransaction(String sql, boolean rebegin) throws SQLException {
         if (baton == null) {
+            if (rebegin) {
+                throw new SQLException("No transaction is active");
+            }
             return;
+        }
+
+        List<StreamRequest> requests = new ArrayList<>(2);
+        requests.add(new StreamRequest.Execute(new Stmt(sql)));
+        if (rebegin) {
+            requests.add(new StreamRequest.Execute(new Stmt(transactionMode.beginSql())));
         }
 
         PipelineRespBody resp;
         try {
-            PipelineReqBody req = new PipelineReqBody(baton, List.of(new StreamRequest.Execute(new Stmt(sql))));
-            resp = client.sendPipeline(req, baseUrl);
+            resp = client.sendPipeline(new PipelineReqBody(baton, requests), baseUrl);
         } catch (LibsqlException e) {
             throw LibsqlErrorMapper.toSQLException(e);
         }
@@ -274,10 +347,33 @@ public class LibsqlConnection implements Connection {
             throw new SQLException("Unexpected response: " + result);
         }
 
-        if (resp.baton() != null) {
-            this.baton = resp.baton();
+        if (!rebegin) {
+            updateStreamState(resp);
+            closeStreamSilently();
+            return;
         }
-        closeStreamSilently();
+
+        if (resp.results().size() < 2) {
+            closeStreamSilently();
+            throw new SQLException("Missing response for transaction begin");
+        }
+        StreamResult begin = resp.results().get(1);
+        if (begin instanceof StreamResult.Error error) {
+            if (resp.baton() != null) {
+                this.baton = resp.baton();
+            }
+            closeStreamSilently();
+            throw new SQLException(error.error().message());
+        }
+        if (!(begin instanceof StreamResult.Ok beginOk)
+                || !(beginOk.response() instanceof StreamResponse.Execute)) {
+            if (resp.baton() != null) {
+                this.baton = resp.baton();
+            }
+            closeStreamSilently();
+            throw new SQLException("Unexpected response: " + begin);
+        }
+        updateStreamState(resp);
     }
 
     @Override
@@ -317,6 +413,27 @@ public class LibsqlConnection implements Connection {
     @Override
     public String getCatalog() throws SQLException {
         return null;
+    }
+
+    /**
+     * Selects the mode used by the next transaction begin. Matches xerial sqlite-jdbc's {@code
+     * SQLiteConfig.setTransactionMode}; the default is {@link TransactionMode#DEFERRED}.
+     */
+    public void setTransactionMode(TransactionMode mode) throws SQLException {
+        checkClosed();
+        if (mode == null) {
+            throw new IllegalArgumentException("Transaction mode cannot be null");
+        }
+        this.transactionMode = mode;
+    }
+
+    public void setTransactionMode(String mode) throws SQLException {
+        setTransactionMode(TransactionMode.from(mode));
+    }
+
+    public TransactionMode getTransactionMode() throws SQLException {
+        checkClosed();
+        return transactionMode;
     }
 
     @Override

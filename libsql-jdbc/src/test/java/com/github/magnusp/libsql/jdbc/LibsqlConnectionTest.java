@@ -11,7 +11,9 @@ import com.github.magnusp.libsql.hrana.codec.StmtResult;
 import com.github.magnusp.libsql.hrana.codec.StreamRequest;
 import com.github.magnusp.libsql.hrana.codec.StreamResponse;
 import com.github.magnusp.libsql.hrana.codec.StreamResult;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.net.URI;
@@ -29,6 +31,88 @@ class LibsqlConnectionTest {
     private static final String BATON = "baton-1";
     private static final String SERVER_ERROR = "transaction end failed on server";
     private static final String TRANSPORT_ERROR = "Connection reset by peer";
+
+    @Test
+    void disablingAutoCommitBeginsTransactionImmediately() throws SQLException {
+        ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+
+        connection.setAutoCommit(false);
+
+        assertThat(client.executedStatements()).containsExactly("BEGIN");
+        assertThat(client.requests.get(0).baton()).isNull();
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = LibsqlConnection.TransactionMode.class, names = {"IMMEDIATE", "EXCLUSIVE"})
+    void disablingAutoCommitUsesConfiguredTransactionMode(LibsqlConnection.TransactionMode mode)
+            throws SQLException {
+        ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.setTransactionMode(mode);
+
+        connection.setAutoCommit(false);
+
+        String expected = switch (mode) {
+            case IMMEDIATE -> "BEGIN IMMEDIATE";
+            case EXCLUSIVE -> "BEGIN EXCLUSIVE";
+            case DEFERRED -> "BEGIN";
+        };
+        assertThat(client.executedStatements()).containsExactly(expected);
+    }
+
+    @Test
+    void commitReBeginsInConfiguredTransactionMode() throws SQLException {
+        ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.setTransactionMode("immediate");
+        connection.setAutoCommit(false);
+
+        connection.commit();
+
+        assertThat(client.executedStatements())
+                .containsExactly("BEGIN IMMEDIATE", "COMMIT", "BEGIN IMMEDIATE");
+        assertThat(connection.getTransactionMode())
+                .isEqualTo(LibsqlConnection.TransactionMode.IMMEDIATE);
+    }
+
+    @Test
+    void commitBeginsNextTransactionOnTheSameStream() throws SQLException {
+        ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.setAutoCommit(false);
+
+        connection.commit();
+
+        assertThat(client.executedStatements()).containsExactly("BEGIN", "COMMIT", "BEGIN");
+        assertThat(client.requests).hasSize(2);
+        assertThat(client.requests.get(1).baton()).isEqualTo(BATON);
+    }
+
+    @Test
+    void rollbackBeginsNextTransactionOnTheSameStream() throws SQLException {
+        ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.setAutoCommit(false);
+
+        connection.rollback();
+
+        assertThat(client.executedStatements()).containsExactly("BEGIN", "ROLLBACK", "BEGIN");
+        assertThat(client.requests).hasSize(2);
+        assertThat(client.requests.get(1).baton()).isEqualTo(BATON);
+    }
+
+    @Test
+    void enablingAutoCommitCommitsAndClosesTheOpenTransaction() throws SQLException {
+        ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.setAutoCommit(false);
+
+        connection.setAutoCommit(true);
+
+        assertThat(client.executedStatements()).containsExactly("BEGIN", "COMMIT");
+        assertThat(client.requests.get(1).baton()).isEqualTo(BATON);
+    }
 
     @ParameterizedTest
     @ValueSource(strings = {"COMMIT", "ROLLBACK"})
@@ -97,19 +181,25 @@ class LibsqlConnectionTest {
         }
     }
 
+    private static PipelineRespBody successResponse(PipelineReqBody request) {
+        List<StreamResult> results = new ArrayList<>();
+        for (StreamRequest streamRequest : request.requests()) {
+            if (streamRequest instanceof StreamRequest.Close) {
+                results.add(new StreamResult.Ok(StreamResponse.Close.INSTANCE));
+            } else {
+                results.add(new StreamResult.Ok(
+                        new StreamResponse.Execute(new StmtResult(List.of(), List.of(), 0, null))));
+            }
+        }
+        return new PipelineRespBody(BATON, null, results);
+    }
+
     private static String executedSql(PipelineReqBody request) {
         if (request.requests().isEmpty()
                 || !(request.requests().get(0) instanceof StreamRequest.Execute execute)) {
             return null;
         }
         return execute.stmt().sql();
-    }
-
-    private static PipelineRespBody successResponse(PipelineReqBody request) {
-        StreamResponse response = request.requests().get(0) instanceof StreamRequest.Close
-                ? StreamResponse.Close.INSTANCE
-                : new StreamResponse.Execute(new StmtResult(List.of(), List.of(), 0, null));
-        return new PipelineRespBody(BATON, null, List.of(new StreamResult.Ok(response)));
     }
 
     private static final class ScriptedClient extends LibsqlHttpClient {
@@ -131,6 +221,15 @@ class LibsqlConnectionTest {
         public PipelineRespBody sendPipeline(PipelineReqBody request, URI targetUri) {
             requests.add(request);
             return handler.handle(request, requests.size() - 1);
+        }
+
+        private List<String> executedStatements() {
+            return requests.stream()
+                    .flatMap(request -> request.requests().stream())
+                    .filter(StreamRequest.Execute.class::isInstance)
+                    .map(StreamRequest.Execute.class::cast)
+                    .map(execute -> execute.stmt().sql())
+                    .toList();
         }
     }
 }
