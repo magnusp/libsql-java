@@ -207,6 +207,85 @@ class LibsqlResultSetMetaDataTest {
     }
 
     @Test
+    void reportsObjectClassNameForEmptyResultSet() throws SQLException {
+        StmtResult result = new StmtResult(
+                List.of(
+                        new Col("i", "INTEGER"),
+                        new Col("big", "BIGINT"),
+                        new Col("txt", "TEXT"),
+                        new Col("b", "BLOB"),
+                        new Col("flag", "BOOLEAN"),
+                        new Col("real", "REAL"),
+                        new Col("untyped", null)),
+                List.of(),
+                0,
+                null);
+        LibsqlResultSet resultSet = new LibsqlResultSet(null, result);
+        ResultSetMetaData metadata = resultSet.getMetaData();
+
+        for (int column = 1; column <= metadata.getColumnCount(); column++) {
+            assertThat(metadata.getColumnClassName(column))
+                    .as("column %d before the first row", column)
+                    .isEqualTo(Object.class.getName());
+        }
+
+        assertThat(resultSet.next()).isFalse();
+
+        for (int column = 1; column <= metadata.getColumnCount(); column++) {
+            assertThat(metadata.getColumnClassName(column))
+                    .as("column %d after the last row", column)
+                    .isEqualTo(Object.class.getName());
+        }
+    }
+
+    @Test
+    void reportsCurrentRowClassNameForMixedTypeColumn() throws SQLException {
+        StmtResult result = new StmtResult(
+                List.of(new Col("x", null)),
+                List.of(new Row(List.of(Value.of(1L))), new Row(List.of(Value.of("a")))),
+                0,
+                null);
+        LibsqlResultSet resultSet = new LibsqlResultSet(null, result);
+        ResultSetMetaData metadata = resultSet.getMetaData();
+
+        assertThat(metadata.getColumnClassName(1))
+                .as("before the first row")
+                .isEqualTo(Integer.class.getName());
+
+        assertThat(resultSet.next()).isTrue();
+        assertThat(metadata.getColumnClassName(1))
+                .as("on the integer row")
+                .isEqualTo(Integer.class.getName());
+
+        assertThat(resultSet.next()).isTrue();
+        assertThat(metadata.getColumnClassName(1))
+                .as("on the text row")
+                .isEqualTo(String.class.getName());
+
+        assertThat(resultSet.next()).isFalse();
+        assertThat(metadata.getColumnClassName(1))
+                .as("after the last row")
+                .isEqualTo(Object.class.getName());
+    }
+
+    @Test
+    void reportsClassNameForCurrentRowOutsideIntRange() throws SQLException {
+        StmtResult result = new StmtResult(
+                List.of(new Col("x", null)),
+                List.of(new Row(List.of(Value.of(1L))), new Row(List.of(Value.of(5_000_000_000L)))),
+                0,
+                null);
+        LibsqlResultSet resultSet = new LibsqlResultSet(null, result);
+        ResultSetMetaData metadata = resultSet.getMetaData();
+
+        assertThat(resultSet.next()).isTrue();
+        assertThat(metadata.getColumnClassName(1)).isEqualTo(Integer.class.getName());
+
+        assertThat(resultSet.next()).isTrue();
+        assertThat(metadata.getColumnClassName(1)).isEqualTo(Long.class.getName());
+    }
+
+    @Test
     void reflectsStorageClassChangesBetweenRows() throws SQLException {
         StmtResult result = new StmtResult(
                 List.of(new Col("bi", "BIGINT")),

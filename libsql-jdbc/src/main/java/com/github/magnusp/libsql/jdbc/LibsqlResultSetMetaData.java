@@ -342,58 +342,23 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
     @Override
     public String getColumnClassName(int column) throws SQLException {
         getCol(column);
-        Value sample = sampleValue(column);
-        if (sample != null) {
-            return switch (sample) {
-                case Value.Integer i -> integerClassName(column);
-                case Value.Float f -> Double.class.getName();
-                case Value.Text t -> String.class.getName();
-                case Value.Blob b -> Object.class.getName();
-                case Value.Null n -> Object.class.getName();
-            };
-        }
-        if (!rows.isEmpty()) {
-            return Object.class.getName();
-        }
-        return switch (getColumnType(column)) {
-            case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> Integer.class.getName();
-            case Types.BIGINT -> Long.class.getName();
-            case Types.FLOAT, Types.REAL, Types.DOUBLE, Types.NUMERIC, Types.DECIMAL -> Double.class.getName();
-            case Types.CHAR, Types.VARCHAR, Types.CLOB -> String.class.getName();
-            case Types.BOOLEAN -> Boolean.class.getName();
-            default -> Object.class.getName();
-        };
+        return className(runtimeValue(column));
     }
 
-    private String integerClassName(int column) {
-        Value firstNonInteger = null;
-        boolean outsideIntRange = false;
-        for (Row row : rows) {
-            List<Value> values = row.values();
-            if (values == null || column < 1 || column > values.size()) {
-                continue;
-            }
-            Value value = values.get(column - 1);
-            if (value instanceof Value.Integer) {
-                if (!isIntInRange(value)) {
-                    outsideIntRange = true;
-                }
-            } else if (value != null
-                    && !(value instanceof Value.Null)
-                    && firstNonInteger == null) {
-                firstNonInteger = value;
-            }
+    private static String className(Value value) {
+        if (value instanceof Value.Integer i) {
+            long val = i.value();
+            return val > Integer.MAX_VALUE || val < Integer.MIN_VALUE
+                    ? Long.class.getName()
+                    : Integer.class.getName();
         }
-        if (firstNonInteger instanceof Value.Float) {
+        if (value instanceof Value.Float) {
             return Double.class.getName();
         }
-        if (firstNonInteger instanceof Value.Text) {
+        if (value instanceof Value.Text) {
             return String.class.getName();
         }
-        if (firstNonInteger != null) {
-            return Object.class.getName();
-        }
-        return outsideIntRange ? Long.class.getName() : Integer.class.getName();
+        return Object.class.getName();
     }
 
     private String declType(int column) throws SQLException {
@@ -456,12 +421,6 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
             return SampleType.TEXT;
         }
         return SampleType.NULL;
-    }
-
-    private static boolean isIntInRange(Value value) {
-        return value instanceof Value.Integer i
-                && i.value() >= Integer.MIN_VALUE
-                && i.value() <= Integer.MAX_VALUE;
     }
 
     private TableInfo resolveTableContext() throws SQLException {
