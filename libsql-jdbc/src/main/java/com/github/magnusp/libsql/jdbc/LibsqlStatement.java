@@ -37,12 +37,17 @@ import java.util.List;
  *   <li>Matching xerial's execute-after-close behavior, {@link #execute(String)}, {@link
  *       #executeQuery(String)}, {@link #executeUpdate(String)}, and {@link #getConnection()} keep
  *       working after {@link #close()}. This deliberately copies a likely xerial bug for drop-in
- *       compatibility; see the issue #47 contract decision.
+ *       compatibility; see the issue #47 contract decision. A result set produced after close is
+ *       returned closed, so a closed statement never holds an open result set.
+ *   <li>{@link #close()} and the execute methods are safe when called concurrently. State
+ *       transitions share one lock; when close wins a race, the execute closes and discards its
+ *       result set instead of attaching it to the closed statement.
  * </ul>
  */
 public class LibsqlStatement implements Statement {
 
     protected final LibsqlConnection connection;
+    private final Object stateLock = new Object();
     protected LibsqlResultSet currentResultSet = null;
     protected long updateCount = -1;
     protected boolean closed = false;
@@ -56,9 +61,17 @@ public class LibsqlStatement implements Statement {
         this.connection = connection;
     }
 
+    /**
+     * Test seam. Called after the closed check and before a result set is attached to the
+     * statement, so a test can force a close to interleave with execute.
+     */
+    protected void beforeResultSetAssignment() throws SQLException {}
+
     protected void checkClosed() throws SQLException {
-        if (closed) {
-            throw new SQLException("Statement is closed");
+        synchronized (stateLock) {
+            if (closed) {
+                throw new SQLException("Statement is closed");
+            }
         }
         if (connection != null) {
             connection.checkClosed();
@@ -71,10 +84,28 @@ public class LibsqlStatement implements Statement {
         if (result.cols() == null || result.cols().isEmpty()) {
             throw new SQLException("Query did not produce a ResultSet: " + sql);
         }
-        this.currentResultSet = new LibsqlResultSet(this, result, sql, false);
-        this.updateCount = -1;
-        this.resultSetRequested = true;
-        return currentResultSet;
+        LibsqlResultSet resultSet = new LibsqlResultSet(this, result, sql, false);
+        assignResultSet(resultSet, true);
+        return resultSet;
+    }
+
+    protected void assignResultSet(LibsqlResultSet resultSet, boolean requested)
+            throws SQLException {
+        if (!isClosed()) {
+            beforeResultSetAssignment();
+        }
+        synchronized (stateLock) {
+            if (closed) {
+                closeResultSet(resultSet);
+                currentResultSet = null;
+                resultSetRequested = false;
+                updateCount = -1;
+                return;
+            }
+            currentResultSet = resultSet;
+            updateCount = -1;
+            resultSetRequested = requested;
+        }
     }
 
     @Override
@@ -85,18 +116,34 @@ public class LibsqlStatement implements Statement {
 
     @Override
     public boolean execute(String sql) throws SQLException {
-        StmtResult result = executeSql(sql);
-        updateGeneratedKeys(sql, result);
-        if (result.cols() != null && !result.cols().isEmpty()) {
-            this.currentResultSet = new LibsqlResultSet(this, result, sql, false);
-            this.updateCount = -1;
-            this.resultSetRequested = false;
-            return true;
-        } else {
-            this.currentResultSet = null;
-            this.updateCount = result.affectedRowCount();
-            this.resultSetRequested = false;
-            return false;
+        return executeResult(sql, executeSql(sql));
+    }
+
+    protected boolean executeResult(String sql, StmtResult result) throws SQLException {
+        boolean hasResultSet = result.cols() != null && !result.cols().isEmpty();
+        LibsqlResultSet resultSet =
+                hasResultSet ? new LibsqlResultSet(this, result, sql, false) : null;
+
+        if (hasResultSet && !isClosed()) {
+            beforeResultSetAssignment();
+        }
+
+        synchronized (stateLock) {
+            if (closed) {
+                clearGeneratedKeys();
+                if (resultSet != null) {
+                    closeResultSet(resultSet);
+                }
+                currentResultSet = null;
+                resultSetRequested = false;
+                updateCount = hasResultSet ? -1 : result.affectedRowCount();
+                return hasResultSet;
+            }
+            updateGeneratedKeys(sql, result);
+            currentResultSet = resultSet;
+            updateCount = hasResultSet ? -1 : result.affectedRowCount();
+            resultSetRequested = false;
+            return hasResultSet;
         }
     }
 
@@ -106,44 +153,58 @@ public class LibsqlStatement implements Statement {
     }
 
     protected void closeCurrentResultSet() throws SQLException {
-        LibsqlResultSet resultSet = currentResultSet;
-        currentResultSet = null;
-        resultSetRequested = false;
-        if (resultSet != null) {
-            closeResultSet(resultSet);
+        synchronized (stateLock) {
+            LibsqlResultSet resultSet = currentResultSet;
+            currentResultSet = null;
+            resultSetRequested = false;
+            if (resultSet != null) {
+                closeResultSet(resultSet);
+            }
         }
     }
 
     private void closeResultSet(LibsqlResultSet resultSet) throws SQLException {
-        boolean wasClosed = closed;
-        boolean wasClosing = closing;
-        closed = false;
-        closing = true;
-        try {
-            resultSet.close();
-        } finally {
-            closed = wasClosed;
-            closing = wasClosing;
+        synchronized (stateLock) {
+            boolean wasClosed = closed;
+            boolean wasClosing = closing;
+            closed = false;
+            closing = true;
+            try {
+                resultSet.close();
+            } finally {
+                closed = wasClosed;
+                closing = wasClosing;
+            }
         }
     }
 
     protected void updateGeneratedKeys(String sql, StmtResult result) throws SQLException {
-        clearGeneratedKeys();
-        if (sql != null && result != null && result.lastInsertRowid() != null && isInsertSql(sql)) {
-            long rowid = result.lastInsertRowid();
-            StmtResult keys = new StmtResult(
-                    List.of(new Col("last_insert_rowid()", null)),
-                    List.of(new Row(List.of(Value.of(rowid)))),
-                    0,
-                    rowid);
-            generatedKeys = new LibsqlResultSet(this, keys);
+        synchronized (stateLock) {
+            clearGeneratedKeys();
+            if (sql != null
+                    && result != null
+                    && result.lastInsertRowid() != null
+                    && isInsertSql(sql)) {
+                long rowid = result.lastInsertRowid();
+                StmtResult keys = new StmtResult(
+                        List.of(new Col("last_insert_rowid()", null)),
+                        List.of(new Row(List.of(Value.of(rowid)))),
+                        0,
+                        rowid);
+                generatedKeys = new LibsqlResultSet(this, keys);
+            }
         }
     }
 
     protected void clearGeneratedKeys() throws SQLException {
-        if (generatedKeys != null) {
-            generatedKeys.close();
+        synchronized (stateLock) {
+            ResultSet keys = generatedKeys;
             generatedKeys = null;
+            if (keys instanceof LibsqlResultSet libsqlKeys) {
+                closeResultSet(libsqlKeys);
+            } else if (keys != null) {
+                keys.close();
+            }
         }
     }
 
@@ -244,35 +305,43 @@ public class LibsqlStatement implements Statement {
 
     @Override
     public ResultSet getResultSet() throws SQLException {
-        checkClosed();
-        if (currentResultSet == null) {
-            return null;
+        synchronized (stateLock) {
+            checkClosed();
+            if (currentResultSet == null) {
+                return null;
+            }
+            if (resultSetRequested) {
+                throw new SQLException("ResultSet already requested");
+            }
+            resultSetRequested = true;
+            return currentResultSet;
         }
-        if (resultSetRequested) {
-            throw new SQLException("ResultSet already requested");
-        }
-        resultSetRequested = true;
-        return currentResultSet;
     }
 
     @Override
     public int getUpdateCount() throws SQLException {
-        checkClosed();
-        return (int) updateCount;
+        synchronized (stateLock) {
+            checkClosed();
+            return (int) updateCount;
+        }
     }
 
     @Override
     public long getLargeUpdateCount() throws SQLException {
-        checkClosed();
-        return updateCount;
+        synchronized (stateLock) {
+            checkClosed();
+            return updateCount;
+        }
     }
 
     @Override
     public boolean getMoreResults() throws SQLException {
-        checkClosed();
-        closeCurrentResultSet();
-        updateCount = -1;
-        return false;
+        synchronized (stateLock) {
+            checkClosed();
+            closeCurrentResultSet();
+            updateCount = -1;
+            return false;
+        }
     }
 
     @Override
@@ -304,28 +373,31 @@ public class LibsqlStatement implements Statement {
 
     @Override
     public void close() throws SQLException {
-        if (closing) {
-            return;
-        }
-        closing = true;
-        try {
-            closed = false;
-            clearGeneratedKeys();
-            LibsqlResultSet resultSet = currentResultSet;
-            currentResultSet = null;
-            resultSetRequested = false;
-            if (resultSet != null) {
-                resultSet.close();
+        synchronized (stateLock) {
+            if (closing) {
+                return;
             }
-        } finally {
-            closed = true;
-            closing = false;
+            closing = true;
+            try {
+                LibsqlResultSet resultSet = currentResultSet;
+                currentResultSet = null;
+                resultSetRequested = false;
+                clearGeneratedKeys();
+                if (resultSet != null) {
+                    closeResultSet(resultSet);
+                }
+            } finally {
+                closed = true;
+                closing = false;
+            }
         }
     }
 
     @Override
     public boolean isClosed() throws SQLException {
-        return closed;
+        synchronized (stateLock) {
+            return closed;
+        }
     }
 
     @Override public int getMaxFieldSize() throws SQLException { return 0; }
@@ -359,11 +431,13 @@ public class LibsqlStatement implements Statement {
     }
     @Override
     public ResultSet getGeneratedKeys() throws SQLException {
-        checkClosed();
-        if (generatedKeys == null) {
-            generatedKeys = emptyGeneratedKeys();
+        synchronized (stateLock) {
+            checkClosed();
+            if (generatedKeys == null) {
+                generatedKeys = emptyGeneratedKeys();
+            }
+            return generatedKeys;
         }
-        return generatedKeys;
     }
     @Override public int executeUpdate(String sql, int autoGeneratedKeys) throws SQLException { return executeUpdate(sql); }
     @Override public int executeUpdate(String sql, int[] columnIndexes) throws SQLException { return executeUpdate(sql); }
@@ -376,14 +450,18 @@ public class LibsqlStatement implements Statement {
     @Override public boolean isPoolable() throws SQLException { return false; }
     @Override
     public void closeOnCompletion() throws SQLException {
-        checkClosedForCompletion();
-        closeOnCompletion = true;
+        synchronized (stateLock) {
+            checkClosedForCompletion();
+            closeOnCompletion = true;
+        }
     }
 
     @Override
     public boolean isCloseOnCompletion() throws SQLException {
-        checkClosedForCompletion();
-        return closeOnCompletion;
+        synchronized (stateLock) {
+            checkClosedForCompletion();
+            return closeOnCompletion;
+        }
     }
 
     private void checkClosedForCompletion() throws SQLException {
