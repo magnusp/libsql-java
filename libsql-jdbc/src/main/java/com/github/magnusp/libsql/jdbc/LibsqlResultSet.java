@@ -36,6 +36,18 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+/**
+ * Result set over a materialized Hrana statement result.
+ *
+ * <p>Navigation matches sqlite-jdbc 3.53.4.0 rather than strict JDBC, because the driver is a
+ * drop-in replacement for that driver. Before the first {@link #next()} call the column getters
+ * read the first row and {@link #getRow()} returns 0. Column getters after the last row return
+ * SQL NULL (numeric getters return 0), while {@link #getRow()} keeps returning the number of the
+ * last row. {@link #isLast()} always throws {@link SQLFeatureNotSupportedException}, matching
+ * xerial. {@link #wasNull()} reports the last column read and throws while no column has been
+ * read in the current row, including immediately before the first row and immediately after the
+ * last row. When labels repeat, {@link #findColumn(String)} returns the first match.
+ */
 public class LibsqlResultSet implements ResultSet {
 
     private final Statement statement;
@@ -45,7 +57,7 @@ public class LibsqlResultSet implements ResultSet {
     private final LibsqlConnection connection;
     private final boolean closeStatementOnClose;
     private int currentRowIndex = -1;
-    private boolean wasNull = false;
+    private int lastColumnIndex = 0;
     private boolean closed = false;
     private LibsqlResultSetMetaData metadata;
 
@@ -73,18 +85,21 @@ public class LibsqlResultSet implements ResultSet {
         }
     }
 
+    private Value valueAtCursor(int columnIndex) {
+        int rowIndex = currentRowIndex < 0 ? 0 : currentRowIndex;
+        if (rowIndex >= rows.size()) {
+            return Value.ofNull();
+        }
+        return rows.get(rowIndex).values().get(columnIndex - 1);
+    }
+
     private Value getCurrentValue(int columnIndex) throws SQLException {
         checkClosed();
-        if (currentRowIndex < 0 || currentRowIndex >= rows.size()) {
-            throw new SQLException("Cursor is not pointing to a valid row");
-        }
         if (columnIndex < 1 || columnIndex > cols.size()) {
             throw new SQLException("Column index out of bounds: " + columnIndex);
         }
-        Row row = rows.get(currentRowIndex);
-        Value val = row.values().get(columnIndex - 1);
-        this.wasNull = (val instanceof Value.Null);
-        return val;
+        lastColumnIndex = columnIndex;
+        return valueAtCursor(columnIndex);
     }
 
     Value valueForMetadata(int columnIndex) {
@@ -103,6 +118,10 @@ public class LibsqlResultSet implements ResultSet {
     @Override
     public boolean next() throws SQLException {
         checkClosed();
+        if (rows.isEmpty() || currentRowIndex >= rows.size()) {
+            return false;
+        }
+        lastColumnIndex = -1;
         currentRowIndex++;
         return currentRowIndex < rows.size();
     }
@@ -123,7 +142,11 @@ public class LibsqlResultSet implements ResultSet {
     @Override
     public boolean wasNull() throws SQLException {
         checkClosed();
-        return wasNull;
+        if (lastColumnIndex < 1 || lastColumnIndex > cols.size()) {
+            throw new SQLException(
+                    "column " + lastColumnIndex + " out of bounds [1," + cols.size() + "]");
+        }
+        return valueAtCursor(lastColumnIndex) instanceof Value.Null;
     }
 
     /**
@@ -682,7 +705,7 @@ public class LibsqlResultSet implements ResultSet {
             for (int i = 0; i < cols.size(); i++) {
                 String name = cols.get(i).name();
                 if (name != null) {
-                    columnNameToIndex.put(name.toLowerCase(Locale.ROOT), i + 1);
+                    columnNameToIndex.putIfAbsent(name.toLowerCase(Locale.ROOT), i + 1);
                 }
             }
         }
@@ -690,7 +713,7 @@ public class LibsqlResultSet implements ResultSet {
         if (idx != null) {
             return idx;
         }
-        throw new SQLException("Column not found: " + columnLabel);
+        throw new SQLException("no such column: '" + columnLabel + "'");
     }
 
     @Override
@@ -801,7 +824,7 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public int getRow() throws SQLException {
-        return currentRowIndex >= 0 && currentRowIndex < rows.size() ? currentRowIndex + 1 : 0;
+        return Math.max(0, Math.min(currentRowIndex + 1, rows.size()));
     }
 
     @Override
@@ -821,7 +844,7 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public boolean isLast() throws SQLException {
-        return currentRowIndex == rows.size() - 1 && !rows.isEmpty();
+        throw new SQLFeatureNotSupportedException("not supported by sqlite");
     }
 
     @Override public InputStream getAsciiStream(int columnIndex) throws SQLException { throw new UnsupportedOperationException(); }
