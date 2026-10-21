@@ -20,6 +20,7 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.RowId;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLWarning;
 import java.sql.SQLXML;
 import java.sql.Statement;
@@ -478,70 +479,6 @@ public class LibsqlResultSet implements ResultSet {
             case Value.Float f -> f.value();
             case Value.Text t -> parseSqliteDouble(t.value());
             case Value.Blob b -> parseSqliteDouble(blobAsText(b));
-        };
-    }
-
-    private static int toStrictInt(Value val) throws SQLException {
-        return switch (val) {
-            case Value.Null n -> 0;
-            case Value.Integer i -> (int) i.value();
-            case Value.Float f -> (int) f.value();
-            case Value.Text t -> {
-                try {
-                    yield Integer.parseInt(t.value());
-                } catch (NumberFormatException e) {
-                    throw new SQLException("Bad value for type Integer: " + t.value(), e);
-                }
-            }
-            case Value.Blob b -> 0;
-        };
-    }
-
-    private static long toStrictLong(Value val) throws SQLException {
-        return switch (val) {
-            case Value.Null n -> 0L;
-            case Value.Integer i -> i.value();
-            case Value.Float f -> (long) f.value();
-            case Value.Text t -> {
-                try {
-                    yield Long.parseLong(t.value());
-                } catch (NumberFormatException e) {
-                    throw new SQLException("Bad value for type Long: " + t.value(), e);
-                }
-            }
-            case Value.Blob b -> 0L;
-        };
-    }
-
-    private static float toStrictFloat(Value val) throws SQLException {
-        return switch (val) {
-            case Value.Null n -> 0.0F;
-            case Value.Integer i -> (float) i.value();
-            case Value.Float f -> (float) f.value();
-            case Value.Text t -> {
-                try {
-                    yield Float.parseFloat(t.value());
-                } catch (NumberFormatException e) {
-                    throw new SQLException("Bad value for type Float: " + t.value(), e);
-                }
-            }
-            case Value.Blob b -> 0.0F;
-        };
-    }
-
-    private static double toStrictDouble(Value val) throws SQLException {
-        return switch (val) {
-            case Value.Null n -> 0.0;
-            case Value.Integer i -> (double) i.value();
-            case Value.Float f -> f.value();
-            case Value.Text t -> {
-                try {
-                    yield Double.parseDouble(t.value());
-                } catch (NumberFormatException e) {
-                    throw new SQLException("Bad value for type Double: " + t.value(), e);
-                }
-            }
-            case Value.Blob b -> 0.0;
         };
     }
 
@@ -1031,18 +968,65 @@ public class LibsqlResultSet implements ResultSet {
     @Override public void updateNClob(int columnIndex, Reader reader) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public void updateNClob(String columnLabel, Reader reader) throws SQLException { throw new UnsupportedOperationException(); }
 
+    /**
+     * Returns a column value converted to the requested Java type.
+     *
+     * <p>The conversion matrix matches sqlite-jdbc 3.53.4.0. Numeric wrapper targets are gated on
+     * the current value's SQLite storage class; any other storage class raises {@code Bad value
+     * for type Integer} (or the corresponding target type name):
+     *
+     * <table>
+     * <caption>Target type by source storage class</caption>
+     * <tr>
+     *   <th>Target type</th><th>INTEGER</th><th>FLOAT</th><th>TEXT</th><th>BLOB</th><th>NULL</th>
+     * </tr>
+     * <tr>
+     *   <td>{@code Integer}, {@code Long}, {@code Float}, {@code Double}</td>
+     *   <td>converts</td><td>converts</td><td>bad value</td><td>bad value</td><td>bad value</td>
+     * </tr>
+     * <tr>
+     *   <td>{@code String}</td>
+     *   <td>canonical text</td><td>canonical text</td><td>text</td><td>UTF-8 text</td>
+     *   <td>{@code null}</td>
+     * </tr>
+     * <tr>
+     *   <td>{@code Boolean}</td>
+     *   <td>nonzero</td><td>nonzero</td><td>integer coercion</td><td>integer coercion</td>
+     *   <td>{@code false}</td>
+     * </tr>
+     * <tr>
+     *   <td>{@code BigDecimal}</td>
+     *   <td>decimal text</td><td>decimal text</td><td>decimal text</td><td>decimal text</td>
+     *   <td>{@code null}</td>
+     * </tr>
+     * <tr>
+     *   <td>{@code byte[]}</td>
+     *   <td>UTF-8 text</td><td>UTF-8 text</td><td>UTF-8 text</td><td>bytes</td>
+     *   <td>{@code null}</td>
+     * </tr>
+     * <tr>
+     *   <td>{@code Date}, {@code Time}, {@code Timestamp}, {@code LocalDate}, {@code LocalTime},
+     *   {@code LocalDateTime}</td>
+     *   <td>text parse</td><td>text parse</td><td>text parse</td><td>text parse</td>
+     *   <td>{@code null}</td>
+     * </tr>
+     * <tr>
+     *   <td>{@code Short}, {@code Byte}, any other type</td>
+     *   <td colspan="5">unsupported</td>
+     * </tr>
+     * </table>
+     *
+     * <p>{@code Short} and {@code Byte} are rejected rather than narrowed from the numeric
+     * targets, preserving the sqlite-jdbc 3.53.4.0 contract.
+     *
+     * @throws SQLException if {@code type} is {@code null}, a numeric target reads a value from
+     *     any storage class other than INTEGER or FLOAT, or the value cannot be converted
+     * @throws SQLFeatureNotSupportedException if {@code type} is not a supported target type
+     */
     @Override
     public <T> T getObject(int columnIndex, Class<T> type) throws SQLException {
         if (type == null) {
-            throw new SQLException("Type must not be null");
-        }
-        Object val = getObject(columnIndex);
-        if (val == null) {
-            return null;
-        }
-        Value stored = getCurrentValue(columnIndex);
-        if (type.isInstance(val)) {
-            return type.cast(val);
+            throw new SQLException("requested type cannot be null");
         }
         if (type == String.class) {
             return type.cast(getString(columnIndex));
@@ -1055,24 +1039,6 @@ public class LibsqlResultSet implements ResultSet {
         }
         if (type == byte[].class) {
             return type.cast(getBytes(columnIndex));
-        }
-        if (type == Double.class) {
-            return type.cast(toStrictDouble(stored));
-        }
-        if (type == Long.class) {
-            return type.cast(toStrictLong(stored));
-        }
-        if (type == Float.class) {
-            return type.cast(toStrictFloat(stored));
-        }
-        if (type == Integer.class) {
-            return type.cast(toStrictInt(stored));
-        }
-        if (type == Short.class) {
-            return type.cast(Short.valueOf((short) toStrictLong(stored)));
-        }
-        if (type == Byte.class) {
-            return type.cast(Byte.valueOf((byte) toStrictLong(stored)));
         }
         if (type == Date.class) {
             return type.cast(getDate(columnIndex));
@@ -1092,8 +1058,35 @@ public class LibsqlResultSet implements ResultSet {
         if (type == LocalDateTime.class) {
             return type.cast(getLocalDateTime(columnIndex));
         }
-        throw new SQLException(
-                "Cannot convert value of type " + val.getClass() + " to " + type.getName());
+
+        Value stored = getCurrentValue(columnIndex);
+        boolean numeric = stored instanceof Value.Integer || stored instanceof Value.Float;
+        if (type == Double.class) {
+            if (numeric) {
+                return type.cast(getDouble(columnIndex));
+            }
+            throw new SQLException("Bad value for type Double");
+        }
+        if (type == Long.class) {
+            if (numeric) {
+                return type.cast(getLong(columnIndex));
+            }
+            throw new SQLException("Bad value for type Long");
+        }
+        if (type == Float.class) {
+            if (numeric) {
+                return type.cast(getFloat(columnIndex));
+            }
+            throw new SQLException("Bad value for type Float");
+        }
+        if (type == Integer.class) {
+            if (numeric) {
+                return type.cast(getInt(columnIndex));
+            }
+            throw new SQLException("Bad value for type Integer");
+        }
+
+        throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver");
     }
 
     private LocalDate getLocalDate(int columnIndex) throws SQLException {

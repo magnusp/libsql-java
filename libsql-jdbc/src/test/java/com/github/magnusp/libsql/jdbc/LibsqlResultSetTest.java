@@ -176,14 +176,22 @@ class LibsqlResultSetTest {
     }
 
     @Test
-    void getObjectNumericConversionsAcceptNumericText() throws SQLException {
+    void getObjectNumericConversionsRejectNumericTextLikeXerial() throws SQLException {
         LibsqlResultSet rs = resultSet(new Value.Text("123"));
         assertThat(rs.next()).isTrue();
 
-        assertThat(rs.getObject(1, Double.class)).isEqualTo(123.0);
-        assertThat(rs.getObject(1, Long.class)).isEqualTo(123L);
-        assertThat(rs.getObject(1, Float.class)).isEqualTo(123.0f);
-        assertThat(rs.getObject(1, Integer.class)).isEqualTo(123);
+        assertThatThrownBy(() -> rs.getObject(1, Double.class))
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Bad value for type Double");
+        assertThatThrownBy(() -> rs.getObject(1, Long.class))
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Bad value for type Long");
+        assertThatThrownBy(() -> rs.getObject(1, Float.class))
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Bad value for type Float");
+        assertThatThrownBy(() -> rs.getObject(1, Integer.class))
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Bad value for type Integer");
     }
 
     private static void assertNumeric(LibsqlResultSet rs, int column, int expectedInt, long expectedLong,
