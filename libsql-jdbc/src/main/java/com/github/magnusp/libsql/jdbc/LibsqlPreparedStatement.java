@@ -60,10 +60,12 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
         if (!returnsResultSet) {
             throw new SQLException("Query does not return results");
         }
-        execute();
-        if (currentResultSet == null) {
+        StmtResult result = executeCurrent();
+        if (result.cols() == null || result.cols().isEmpty()) {
             throw new SQLException("Query does not return results");
         }
+        this.currentResultSet = new LibsqlResultSet(this, result, sql, false);
+        this.updateCount = -1;
         return currentResultSet;
     }
 
@@ -215,10 +217,8 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
 
     @Override
     public boolean execute() throws SQLException {
-        checkClosed();
-        closeCurrentResultSet();
-        checkClosed();
-        StmtResult result = connection.executeStatement(buildCurrentStmt());
+        StmtResult result = executeCurrent();
+        updateGeneratedKeys(sql, result);
         if (result.cols() != null && !result.cols().isEmpty()) {
             this.currentResultSet = new LibsqlResultSet(this, result, sql, false);
             this.updateCount = -1;
@@ -228,6 +228,13 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
             this.updateCount = result.affectedRowCount();
             return false;
         }
+    }
+
+    private StmtResult executeCurrent() throws SQLException {
+        checkClosed();
+        closeCurrentResultSet();
+        checkClosed();
+        return connection.executeStatement(buildCurrentStmt());
     }
 
     @Override
