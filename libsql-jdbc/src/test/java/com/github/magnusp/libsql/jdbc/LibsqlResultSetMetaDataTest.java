@@ -359,6 +359,30 @@ class LibsqlResultSetMetaDataTest {
     }
 
     @Test
+    void resolvesReturningTableNameAndNullability() throws SQLException {
+        LibsqlResultSetMetaData metadata = metadataForSql(
+                "INSERT INTO w(a, b) VALUES (1, 'x') RETURNING a, b",
+                schemaConnection(),
+                List.of(new Col("a", "INTEGER"), new Col("b", "TEXT")));
+
+        assertThat(metadata.getTableName(1)).isEqualTo("w");
+        assertThat(metadata.getTableName(2)).isEqualTo("w");
+        assertThat(metadata.isNullable(1)).isEqualTo(ResultSetMetaData.columnNoNulls);
+        assertThat(metadata.isNullable(2)).isEqualTo(ResultSetMetaData.columnNullable);
+    }
+
+    @Test
+    void resolvesAliasedReturningTableNameAndNullability() throws SQLException {
+        LibsqlResultSetMetaData metadata = metadataForSql(
+                "INSERT INTO w(a, b) VALUES (1, 'x') RETURNING a AS aa",
+                schemaConnection(),
+                List.of(new Col("aa", "INTEGER")));
+
+        assertThat(metadata.getTableName(1)).isEqualTo("w");
+        assertThat(metadata.isNullable(1)).isEqualTo(ResultSetMetaData.columnNullable);
+    }
+
+    @Test
     void leavesUnsupportedShapesUnknown() throws SQLException {
         LibsqlResultSetMetaData expression = metadataForSql(
                 "SELECT a + 1 FROM w", schemaConnection(), List.of(new Col("a + 1", "INTEGER")));

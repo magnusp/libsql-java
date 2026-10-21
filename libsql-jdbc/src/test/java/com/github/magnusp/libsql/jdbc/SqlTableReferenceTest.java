@@ -131,6 +131,24 @@ class SqlTableReferenceTest {
     }
 
     @Test
+    void resolvesInsertReturning() throws SQLException {
+        SqlTableReference.Resolution resolution =
+                resolve("INSERT INTO w(a, b) VALUES (1, 'x') RETURNING a AS aa, b");
+
+        assertThat(resolution.labels()).containsExactly("aa", "b");
+        assertThat(resolution.tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "w"), new SqlTableReference.TableRef(null, "w"));
+    }
+
+    @Test
+    void resolvesUpdateAndDeleteReturning() throws SQLException {
+        assertThat(resolve("UPDATE w SET b = 'x' RETURNING a").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "w"));
+        assertThat(resolve("DELETE FROM w RETURNING a").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "w"));
+    }
+
+    @Test
     void leavesExpressionsAndLiteralsUnresolved() throws SQLException {
         SqlTableReference.Resolution expression = resolve("SELECT a + 1 FROM w");
         SqlTableReference.Resolution literal = resolve("SELECT 1 AS one");
