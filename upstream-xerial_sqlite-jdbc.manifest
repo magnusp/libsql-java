@@ -1,3 +1,13 @@
+# Source of truth for the vendored xerial/sqlite-jdbc tree: the conformance
+# build copies these paths, and tools/export-upstream exports these paths by
+# default. Run `tools/export-upstream --verify` after any change.
+#
+# A deliberate divergence from upstream keeps the "# upstream" hash in
+# upstream-xerial_sqlite-jdbc/CHECKSUMS.sha256, updates the current hash, and
+# adds a line in this file:
+#   # divergence: <path> -- <non-empty reason>
+# Use the reason to say which libSQL or Hrana behavior makes parity impossible.
+#
 # First conformance batch.
 src/test/java/org/sqlite/Utils.java
 src/test/java/org/sqlite/ResultSetTest.java
