@@ -10,7 +10,7 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -30,7 +30,8 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
     private final LibsqlResultSet resultSet;
 
     private boolean tableContextResolved;
-    private TableInfo tableContext;
+    private SqlTableReference.Resolution columnOrigins;
+    private final Map<String, TableInfo> tableInfoCache = new LinkedHashMap<>();
 
     public LibsqlResultSetMetaData(List<Col> cols) {
         this(cols, List.of(), null, null, null);
@@ -63,8 +64,7 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public boolean isAutoIncrement(int column) throws SQLException {
-        getCol(column);
-        TableInfo table = resolveTableContext();
+        TableInfo table = tableForColumn(column);
         ColumnInfo info = table != null ? table.columns().get(columnName(column)) : null;
         return info != null && info.primaryKey() && isAutoIncrementColumn(table.createSql(), columnName(column));
     }
@@ -106,11 +106,13 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public int isNullable(int column) throws SQLException {
-        getCol(column);
-        TableInfo table = resolveTableContext();
-        ColumnInfo info = table != null ? table.columns().get(columnName(column)) : null;
-        if (info == null) {
+        TableInfo table = tableForColumn(column);
+        if (table == null) {
             return columnNullableUnknown;
+        }
+        ColumnInfo info = table.columns().get(columnName(column));
+        if (info == null) {
+            return columnNullable;
         }
         return info.notNull() ? columnNoNulls : columnNullable;
     }
@@ -193,12 +195,8 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public String getTableName(int column) throws SQLException {
-        getCol(column);
-        TableInfo table = resolveTableContext();
-        if (table == null || !table.columns().containsKey(columnName(column))) {
-            return "";
-        }
-        return table.name();
+        TableInfo table = tableForColumn(column);
+        return table != null ? table.name() : "";
     }
 
     @Override
@@ -423,19 +421,46 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         return SampleType.NULL;
     }
 
-    private TableInfo resolveTableContext() throws SQLException {
+    private TableInfo tableForColumn(int column) throws SQLException {
+        getCol(column);
+        SqlTableReference.TableRef reference = originTable(column);
+        return reference != null ? tableInfo(reference) : null;
+    }
+
+    private SqlTableReference.TableRef originTable(int column) throws SQLException {
+        SqlTableReference.Resolution resolution = resolveColumnOrigins();
+        return resolution != null ? resolution.table(column - 1) : null;
+    }
+
+    private SqlTableReference.Resolution resolveColumnOrigins() throws SQLException {
         if (!tableContextResolved) {
-            TableInfo resolved = null;
+            SqlTableReference.Resolution resolved = null;
             if (connection != null && sql != null) {
-                SqlTableReference.TableRef reference = SqlTableReference.parse(sql);
-                if (reference != null) {
-                    resolved = loadTableInfo(reference);
-                }
+                resolved = SqlTableReference.resolve(sql, reference -> {
+                    TableInfo info = tableInfo(reference);
+                    if (info == null) {
+                        return null;
+                    }
+                    return new SqlTableReference.TableDefinition(
+                            info.createSql(), new ArrayList<>(info.columns().keySet()));
+                });
             }
-            tableContext = resolved;
+            columnOrigins = resolved;
             tableContextResolved = true;
         }
-        return tableContext;
+        return columnOrigins;
+    }
+
+    private TableInfo tableInfo(SqlTableReference.TableRef reference) throws SQLException {
+        String schema = reference.schema() != null ? reference.schema().toLowerCase(Locale.ROOT) : "";
+        String table = reference.table() != null ? reference.table().toLowerCase(Locale.ROOT) : "";
+        String key = schema + "." + table;
+        if (tableInfoCache.containsKey(key)) {
+            return tableInfoCache.get(key);
+        }
+        TableInfo info = loadTableInfo(reference);
+        tableInfoCache.put(key, info);
+        return info;
     }
 
     private TableInfo loadTableInfo(SqlTableReference.TableRef reference) throws SQLException {
@@ -459,7 +484,8 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         String master = schema.equals("temp") ? "sqlite_temp_master" : "sqlite_master";
         String query = "SELECT m.name, m.sql, p.name, p.\"notnull\", p.pk "
                 + "FROM " + master + " m JOIN pragma_table_info(?, ?) p "
-                + "WHERE m.type IN ('table', 'view') AND m.name COLLATE NOCASE = ?";
+                + "WHERE m.type IN ('table', 'view') AND m.name COLLATE NOCASE = ? "
+                + "ORDER BY p.cid";
         StmtResult result = connection.executeStatement(
                 new Stmt(query, List.of(Value.of(table), Value.of(schema), Value.of(table))));
         return toTableInfo(result, table);
@@ -473,7 +499,8 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         String quotedSchema = "\"" + actualSchema.replace("\"", "\"\"") + "\"";
         String query = "SELECT m.name, m.sql, p.name, p.\"notnull\", p.pk "
                 + "FROM " + quotedSchema + ".sqlite_master m JOIN pragma_table_info(?, ?) p "
-                + "WHERE m.type IN ('table', 'view') AND m.name COLLATE NOCASE = ?";
+                + "WHERE m.type IN ('table', 'view') AND m.name COLLATE NOCASE = ? "
+                + "ORDER BY p.cid";
         StmtResult result = connection.executeStatement(new Stmt(
                 query, List.of(Value.of(table), Value.of(actualSchema), Value.of(table))));
         return toTableInfo(result, table);
@@ -504,7 +531,7 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         }
         String tableName = null;
         String createSql = null;
-        Map<String, ColumnInfo> columns = new HashMap<>();
+        Map<String, ColumnInfo> columns = new LinkedHashMap<>();
         for (Row row : result.rows()) {
             List<Value> values = row.values();
             if (values == null || values.size() < 5) {

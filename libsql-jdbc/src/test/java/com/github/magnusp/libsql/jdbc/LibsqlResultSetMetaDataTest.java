@@ -10,7 +10,11 @@ import org.junit.jupiter.api.Test;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -322,17 +326,150 @@ class LibsqlResultSetMetaDataTest {
     }
 
     @Test
-    void leavesAmbiguousTableContextUnknown() throws SQLException {
-        LibsqlResultSetMetaData metadata = new LibsqlResultSetMetaData(
-                List.of(new Col("id", "INTEGER")),
-                List.of(),
-                "SELECT * FROM a JOIN b ON a.id = b.id",
-                connectionReturning(new StmtResult(List.of(), List.of(), 0, null)));
+    void resolvesAliasTableNameAndNullability() throws SQLException {
+        LibsqlResultSetMetaData metadata = metadataForSql(
+                "SELECT a AS z FROM w", schemaConnection(), List.of(new Col("z", "INTEGER")));
 
-        assertThat(metadata.getTableName(1)).isEmpty();
-        assertThat(metadata.isNullable(1)).isEqualTo(ResultSetMetaData.columnNullableUnknown);
-        assertThat(metadata.isAutoIncrement(1)).isFalse();
+        assertThat(metadata.getTableName(1)).isEqualTo("w");
+        assertThat(metadata.isNullable(1)).isEqualTo(ResultSetMetaData.columnNullable);
     }
+
+    @Test
+    void resolvesJoinTableNamesAndNullability() throws SQLException {
+        LibsqlResultSetMetaData metadata = metadataForSql(
+                "SELECT w.a, z.a FROM w JOIN z ON w.a = z.a",
+                schemaConnection(),
+                List.of(new Col("a", "INTEGER"), new Col("a", "INTEGER")));
+
+        assertThat(metadata.getTableName(1)).isEqualTo("w");
+        assertThat(metadata.getTableName(2)).isEqualTo("z");
+        assertThat(metadata.isNullable(1)).isEqualTo(ResultSetMetaData.columnNoNulls);
+        assertThat(metadata.isNullable(2)).isEqualTo(ResultSetMetaData.columnNullable);
+    }
+
+    @Test
+    void resolvesSubqueryTableNameAndNullability() throws SQLException {
+        LibsqlResultSetMetaData metadata = metadataForSql(
+                "SELECT q.a FROM (SELECT a FROM w) q",
+                schemaConnection(),
+                List.of(new Col("a", "INTEGER")));
+
+        assertThat(metadata.getTableName(1)).isEqualTo("w");
+        assertThat(metadata.isNullable(1)).isEqualTo(ResultSetMetaData.columnNoNulls);
+    }
+
+    @Test
+    void resolvesReturningTableNameAndNullability() throws SQLException {
+        LibsqlResultSetMetaData metadata = metadataForSql(
+                "INSERT INTO w(a, b) VALUES (1, 'x') RETURNING a, b",
+                schemaConnection(),
+                List.of(new Col("a", "INTEGER"), new Col("b", "TEXT")));
+
+        assertThat(metadata.getTableName(1)).isEqualTo("w");
+        assertThat(metadata.getTableName(2)).isEqualTo("w");
+        assertThat(metadata.isNullable(1)).isEqualTo(ResultSetMetaData.columnNoNulls);
+        assertThat(metadata.isNullable(2)).isEqualTo(ResultSetMetaData.columnNullable);
+    }
+
+    @Test
+    void resolvesAliasedReturningTableNameAndNullability() throws SQLException {
+        LibsqlResultSetMetaData metadata = metadataForSql(
+                "INSERT INTO w(a, b) VALUES (1, 'x') RETURNING a AS aa",
+                schemaConnection(),
+                List.of(new Col("aa", "INTEGER")));
+
+        assertThat(metadata.getTableName(1)).isEqualTo("w");
+        assertThat(metadata.isNullable(1)).isEqualTo(ResultSetMetaData.columnNullable);
+    }
+
+    @Test
+    void resolvesViewTableNameAndNullability() throws SQLException {
+        LibsqlResultSetMetaData metadata = metadataForSql(
+                "SELECT a, b FROM v",
+                schemaConnection(),
+                List.of(new Col("a", "INTEGER"), new Col("b", "TEXT")));
+
+        assertThat(metadata.getTableName(1)).isEqualTo("w");
+        assertThat(metadata.getTableName(2)).isEqualTo("w");
+        assertThat(metadata.isNullable(1)).isEqualTo(ResultSetMetaData.columnNoNulls);
+        assertThat(metadata.isNullable(2)).isEqualTo(ResultSetMetaData.columnNullable);
+    }
+
+    @Test
+    void leavesUnsupportedShapesUnknown() throws SQLException {
+        LibsqlResultSetMetaData expression = metadataForSql(
+                "SELECT a + 1 FROM w", schemaConnection(), List.of(new Col("a + 1", "INTEGER")));
+        LibsqlResultSetMetaData literal =
+                metadataForSql("SELECT 1 AS one", schemaConnection(), List.of(new Col("one", "INTEGER")));
+
+        assertThat(expression.getTableName(1)).isEmpty();
+        assertThat(expression.isNullable(1)).isEqualTo(ResultSetMetaData.columnNullableUnknown);
+        assertThat(expression.isAutoIncrement(1)).isFalse();
+        assertThat(literal.getTableName(1)).isEmpty();
+        assertThat(literal.isNullable(1)).isEqualTo(ResultSetMetaData.columnNullableUnknown);
+    }
+
+    private static LibsqlResultSetMetaData metadataForSql(String sql, LibsqlConnection connection, List<Col> cols)
+            throws SQLException {
+        return new LibsqlResultSetMetaData(cols, List.of(), sql, connection);
+    }
+
+    private static LibsqlConnection schemaConnection() {
+        Map<String, FakeTable> tables = new LinkedHashMap<>();
+        tables.put(
+                "w",
+                new FakeTable(
+                        "w",
+                        "CREATE TABLE w (a INTEGER NOT NULL, b TEXT)",
+                        List.of(new FakeColumn("a", true, false), new FakeColumn("b", false, false))));
+        tables.put(
+                "z",
+                new FakeTable(
+                        "z",
+                        "CREATE TABLE z (a INTEGER)",
+                        List.of(new FakeColumn("a", false, false))));
+        tables.put(
+                "v",
+                new FakeTable(
+                        "v",
+                        "CREATE VIEW v AS SELECT a, b FROM w",
+                        List.of(new FakeColumn("a", false, false), new FakeColumn("b", false, false))));
+        return new LibsqlConnection(null, null) {
+            @Override
+            public StmtResult executeStatement(Stmt stmt) throws SQLException {
+                if (!stmt.sql().contains("pragma_table_info")) {
+                    return new StmtResult(List.of(), List.of(), 0, null);
+                }
+                String table = argument(stmt, 0);
+                String schema = argument(stmt, 1);
+                FakeTable fake = tables.get(table != null ? table.toLowerCase(Locale.ROOT) : "");
+                if (fake == null || !"main".equalsIgnoreCase(schema)) {
+                    return new StmtResult(List.of(), List.of(), 0, null);
+                }
+                List<Row> rows = new ArrayList<>();
+                for (FakeColumn column : fake.columns()) {
+                    rows.add(new Row(List.of(
+                            Value.of(fake.name()),
+                            Value.of(fake.sql()),
+                            Value.of(column.name()),
+                            Value.of(column.notNull() ? 1L : 0L),
+                            Value.of(column.primaryKey() ? 1L : 0L))));
+                }
+                return new StmtResult(List.of(), rows, 0, null);
+            }
+        };
+    }
+
+    private static String argument(Stmt stmt, int index) {
+        if (stmt.args() == null || stmt.args().size() <= index) {
+            return null;
+        }
+        return stmt.args().get(index) instanceof Value.Text text ? text.value() : null;
+    }
+
+    private record FakeTable(String name, String sql, List<FakeColumn> columns) {}
+
+    private record FakeColumn(String name, boolean notNull, boolean primaryKey) {}
 
     private static LibsqlResultSetMetaData metadataForTable(String createSql, List<Col> cols) throws SQLException {
         List<Row> tableRows = cols.stream()
