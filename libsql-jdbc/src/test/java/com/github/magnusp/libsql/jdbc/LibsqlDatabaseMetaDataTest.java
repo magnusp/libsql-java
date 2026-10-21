@@ -11,7 +11,10 @@ import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -121,6 +124,21 @@ class LibsqlDatabaseMetaDataTest {
     }
 
     @Test
+    void getTableTypesReturnsEveryXerialTableType() throws SQLException {
+        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new TableTypesConnection());
+
+        List<String> tableTypes = new ArrayList<>();
+        try (ResultSet resultSet = metadata.getTableTypes()) {
+            while (resultSet.next()) {
+                tableTypes.add(resultSet.getString("TABLE_TYPE"));
+            }
+        }
+
+        assertThat(tableTypes)
+                .containsExactlyInAnyOrder("TABLE", "VIEW", "SYSTEM TABLE", "GLOBAL TEMPORARY");
+    }
+
+    @Test
     void getColumnsReportsDeclaredTypesSizesNullabilityAndAutoIncrement() throws SQLException {
         LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new StmtResultConnection(columnMetadataRows()));
 
@@ -220,6 +238,24 @@ class LibsqlDatabaseMetaDataTest {
         @Override
         public StmtResult executeStatement(Stmt stmt) {
             return result;
+        }
+    }
+
+    private static final class TableTypesConnection extends LibsqlConnection {
+        private static final Pattern TYPE_ROW = Pattern.compile("SELECT '([^']*)' AS TABLE_TYPE");
+
+        private TableTypesConnection() {
+            super(null, null);
+        }
+
+        @Override
+        public StmtResult executeStatement(Stmt stmt) {
+            List<Row> rows = new ArrayList<>();
+            Matcher matcher = TYPE_ROW.matcher(stmt.sql());
+            while (matcher.find()) {
+                rows.add(new Row(List.of(Value.of(matcher.group(1)))));
+            }
+            return new StmtResult(List.of(new Col("TABLE_TYPE", "TEXT")), rows, 0, null);
         }
     }
 
