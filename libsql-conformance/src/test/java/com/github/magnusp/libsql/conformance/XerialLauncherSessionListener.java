@@ -7,6 +7,10 @@ public final class XerialLauncherSessionListener implements LauncherSessionListe
 
     @Override
     public void launcherSessionOpened(LauncherSession session) {
+        if (XerialControl.isEnabled()) {
+            XerialControl.register();
+            return;
+        }
         XerialConformanceDriver.register();
         LibsqlConformanceGuard.verify();
     }

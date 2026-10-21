@@ -9,6 +9,9 @@
 // --------------------------------------
 package org.sqlite;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import java.io.File;
 import java.sql.*;
 import java.util.ArrayList;
@@ -114,70 +117,82 @@ public class InsertQueryTest {
 
     void insertAndQuery(ConnectionFactory factory) throws SQLException {
         try {
-            Statement st = factory.getConnection().createStatement();
-            st.executeUpdate(
-                    "CREATE TABLE IF NOT EXISTS data (fid VARCHAR(255) PRIMARY KEY, type VARCHAR(64), data BLOB);");
-            st.executeUpdate(
-                    "CREATE TABLE IF NOT EXISTS ResourcesTags (bd_fid VARCHAR(255), name VARCHAR(64), version INTEGER);");
-            st.close();
-
-            factory.getConnection().setAutoCommit(false);
-
-            // Object Serialization
-            PreparedStatement statAddBD =
-                    factory.getConnection()
-                            .prepareStatement("INSERT OR REPLACE INTO data values (?, ?, ?)");
-            PreparedStatement statDelRT =
-                    factory.getConnection()
-                            .prepareStatement("DELETE FROM ResourcesTags WHERE bd_fid = ?");
-            PreparedStatement statAddRT =
-                    factory.getConnection()
-                            .prepareStatement("INSERT INTO ResourcesTags values (?, ?, ?)");
-
-            for (int i = 0; i < 10; i++) {
-                BD item = new BD(Integer.toHexString(i), Integer.toString(i));
-
-                // SQLite database insertion
-                statAddBD.setString(1, item.getFullId());
-                statAddBD.setString(2, item.getType());
-                statAddBD.setBytes(3, BD.serializeBD(item));
-                statAddBD.execute();
-
-                // Then, its resources tags
-                statDelRT.setString(1, item.getFullId());
-                statDelRT.execute();
-
-                statAddRT.setString(1, item.getFullId());
-
-                for (int j = 0; j < 2; j++) {
-                    statAddRT.setString(2, "1");
-                    statAddRT.setLong(3, 1L);
-                    statAddRT.execute();
-                }
+            Connection transactionConnection = factory.getConnection();
+            try (Statement st = transactionConnection.createStatement()) {
+                st.executeUpdate(
+                        "CREATE TABLE IF NOT EXISTS data (fid VARCHAR(255) PRIMARY KEY, type VARCHAR(64), data BLOB);");
+                st.executeUpdate(
+                        "CREATE TABLE IF NOT EXISTS ResourcesTags (bd_fid VARCHAR(255), name VARCHAR(64), version INTEGER);");
             }
 
-            factory.getConnection().setAutoCommit(true);
+            transactionConnection.setAutoCommit(false);
 
-            statAddBD.close();
-            statDelRT.close();
-            statAddRT.close();
+            // Object Serialization
+            try (PreparedStatement statAddBD =
+                            transactionConnection.prepareStatement(
+                                    "INSERT OR REPLACE INTO data values (?, ?, ?)");
+                    PreparedStatement statDelRT =
+                            transactionConnection.prepareStatement(
+                                    "DELETE FROM ResourcesTags WHERE bd_fid = ?");
+                    PreparedStatement statAddRT =
+                            transactionConnection.prepareStatement(
+                                    "INSERT INTO ResourcesTags values (?, ?, ?)")) {
 
-            //
-            PreparedStatement stat;
-            Long result = 0L;
-            String query = "SELECT COUNT(fid) FROM data";
+                insertRows(statAddBD, statDelRT, statAddRT, 10);
 
-            stat = factory.getConnection().prepareStatement(query);
-            ResultSet rs = stat.executeQuery();
+                // Rolling back on the transaction connection proves the inserts ran there.
+                // Statements executed on another connection would already be committed.
+                transactionConnection.rollback();
+                assertRowCount(factory, 0, "rollback must discard the inserted rows");
 
-            rs.next();
-            result = rs.getLong(1);
-            // System.out.println("count = " + result);
+                insertRows(statAddBD, statDelRT, statAddRT, 10);
+                transactionConnection.commit();
+                assertRowCount(factory, 10, "commit must persist the inserted rows");
+            }
 
-            rs.close();
-            stat.close();
+            transactionConnection.setAutoCommit(true);
         } finally {
             factory.dispose();
+        }
+    }
+
+    private void insertRows(
+            PreparedStatement statAddBD,
+            PreparedStatement statDelRT,
+            PreparedStatement statAddRT,
+            int rows)
+            throws SQLException {
+        for (int i = 0; i < rows; i++) {
+            BD item = new BD(Integer.toHexString(i), Integer.toString(i));
+
+            // SQLite database insertion
+            statAddBD.setString(1, item.getFullId());
+            statAddBD.setString(2, item.getType());
+            statAddBD.setBytes(3, BD.serializeBD(item));
+            statAddBD.execute();
+
+            // Then, its resources tags
+            statDelRT.setString(1, item.getFullId());
+            statDelRT.execute();
+
+            statAddRT.setString(1, item.getFullId());
+
+            for (int j = 0; j < 2; j++) {
+                statAddRT.setString(2, "1");
+                statAddRT.setLong(3, 1L);
+                statAddRT.execute();
+            }
+        }
+    }
+
+    private void assertRowCount(ConnectionFactory factory, long expected, String message)
+            throws SQLException {
+        Connection verificationConnection = factory.getConnection();
+        try (PreparedStatement stat =
+                        verificationConnection.prepareStatement("SELECT COUNT(fid) FROM data");
+                ResultSet rs = stat.executeQuery()) {
+            assertTrue(rs.next(), "COUNT query must return a row");
+            assertEquals(expected, rs.getLong(1), message);
         }
     }
 

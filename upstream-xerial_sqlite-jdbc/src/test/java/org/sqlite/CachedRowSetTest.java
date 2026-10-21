@@ -1,5 +1,7 @@
 package org.sqlite;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -22,6 +24,11 @@ public class CachedRowSetTest {
             try (CachedRowSet crs = factory.createCachedRowSet()) {
                 crs.setCommand("select * from person");
                 crs.execute(connection);
+
+                assertThat(crs.next()).isTrue();
+                assertThat(crs.getInt("id")).isEqualTo(1);
+                assertThat(crs.getString("name")).isEqualTo("leo");
+                assertThat(crs.next()).isFalse();
             }
         }
     }
