@@ -64,9 +64,9 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
         if (result.cols() == null || result.cols().isEmpty()) {
             throw new SQLException("Query does not return results");
         }
-        this.currentResultSet = new LibsqlResultSet(this, result, sql, false);
-        this.updateCount = -1;
-        return currentResultSet;
+        LibsqlResultSet resultSet = new LibsqlResultSet(this, result, sql, false);
+        assignResultSet(resultSet, false);
+        return resultSet;
     }
 
     @Override
@@ -217,17 +217,7 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
 
     @Override
     public boolean execute() throws SQLException {
-        StmtResult result = executeCurrent();
-        updateGeneratedKeys(sql, result);
-        if (result.cols() != null && !result.cols().isEmpty()) {
-            this.currentResultSet = new LibsqlResultSet(this, result, sql, false);
-            this.updateCount = -1;
-            return true;
-        } else {
-            this.currentResultSet = null;
-            this.updateCount = result.affectedRowCount();
-            return false;
-        }
+        return executeResult(sql, executeCurrent());
     }
 
     private StmtResult executeCurrent() throws SQLException {
