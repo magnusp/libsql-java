@@ -237,19 +237,7 @@ public class LibsqlConnection implements Connection {
         if (autoCommit) {
             throw new SQLException("Cannot commit when in autoCommit mode");
         }
-        if (baton != null) {
-            try {
-                PipelineReqBody req = new PipelineReqBody(baton, List.of(
-                        new StreamRequest.Execute(new Stmt("COMMIT")),
-                        StreamRequest.Close.INSTANCE
-                ));
-                PipelineRespBody resp = client.sendPipeline(req, baseUrl);
-                this.baton = null;
-            } catch (LibsqlException e) {
-                closeStreamSilently();
-                throw LibsqlErrorMapper.toSQLException(e);
-            }
-        }
+        endTransaction("COMMIT");
     }
 
     @Override
@@ -258,18 +246,38 @@ public class LibsqlConnection implements Connection {
         if (autoCommit) {
             throw new SQLException("Cannot rollback when in autoCommit mode");
         }
-        if (baton != null) {
-            try {
-                PipelineReqBody req = new PipelineReqBody(baton, List.of(
-                        new StreamRequest.Execute(new Stmt("ROLLBACK")),
-                        StreamRequest.Close.INSTANCE
-                ));
-                client.sendPipeline(req, baseUrl);
-            } catch (Exception ignored) {
-            } finally {
-                this.baton = null;
-            }
+        endTransaction("ROLLBACK");
+    }
+
+    private void endTransaction(String sql) throws SQLException {
+        if (baton == null) {
+            return;
         }
+
+        PipelineRespBody resp;
+        try {
+            PipelineReqBody req = new PipelineReqBody(baton, List.of(new StreamRequest.Execute(new Stmt(sql))));
+            resp = client.sendPipeline(req, baseUrl);
+        } catch (LibsqlException e) {
+            throw LibsqlErrorMapper.toSQLException(e);
+        }
+
+        if (resp.results().isEmpty()) {
+            throw new SQLException("Empty result received from server");
+        }
+        StreamResult result = resp.results().get(0);
+        if (result instanceof StreamResult.Error error) {
+            throw new SQLException(error.error().message());
+        }
+        if (!(result instanceof StreamResult.Ok ok)
+                || !(ok.response() instanceof StreamResponse.Execute)) {
+            throw new SQLException("Unexpected response: " + result);
+        }
+
+        if (resp.baton() != null) {
+            this.baton = resp.baton();
+        }
+        closeStreamSilently();
     }
 
     @Override
