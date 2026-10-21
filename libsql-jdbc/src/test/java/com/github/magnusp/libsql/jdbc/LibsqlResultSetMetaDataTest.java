@@ -348,6 +348,17 @@ class LibsqlResultSetMetaDataTest {
     }
 
     @Test
+    void resolvesSubqueryTableNameAndNullability() throws SQLException {
+        LibsqlResultSetMetaData metadata = metadataForSql(
+                "SELECT q.a FROM (SELECT a FROM w) q",
+                schemaConnection(),
+                List.of(new Col("a", "INTEGER")));
+
+        assertThat(metadata.getTableName(1)).isEqualTo("w");
+        assertThat(metadata.isNullable(1)).isEqualTo(ResultSetMetaData.columnNoNulls);
+    }
+
+    @Test
     void leavesUnsupportedShapesUnknown() throws SQLException {
         LibsqlResultSetMetaData expression = metadataForSql(
                 "SELECT a + 1 FROM w", schemaConnection(), List.of(new Col("a + 1", "INTEGER")));

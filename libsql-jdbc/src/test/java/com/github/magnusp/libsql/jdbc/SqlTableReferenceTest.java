@@ -98,6 +98,39 @@ class SqlTableReferenceTest {
     }
 
     @Test
+    void resolvesSubqueryInFromClause() throws SQLException {
+        SqlTableReference.Resolution resolution = resolve("SELECT q.a FROM (SELECT a FROM w) q");
+
+        assertThat(resolution.labels()).containsExactly("a");
+        assertThat(resolution.tables()).containsExactly(new SqlTableReference.TableRef(null, "w"));
+    }
+
+    @Test
+    void resolvesScalarSubquery() throws SQLException {
+        SqlTableReference.Resolution resolution = resolve("SELECT (SELECT a FROM w) AS s");
+
+        assertThat(resolution.labels()).containsExactly("s");
+        assertThat(resolution.tables()).containsExactly(new SqlTableReference.TableRef(null, "w"));
+    }
+
+    @Test
+    void resolvesCommonTableExpression() throws SQLException {
+        SqlTableReference.Resolution resolution =
+                resolve("WITH cte AS (SELECT a FROM w) SELECT cte.a FROM cte");
+
+        assertThat(resolution.labels()).containsExactly("a");
+        assertThat(resolution.tables()).containsExactly(new SqlTableReference.TableRef(null, "w"));
+    }
+
+    @Test
+    void resolvesLeftmostCompoundSelectBranch() throws SQLException {
+        SqlTableReference.Resolution resolution = resolve("SELECT a FROM w UNION SELECT a FROM z");
+
+        assertThat(resolution.labels()).containsExactly("a");
+        assertThat(resolution.tables()).containsExactly(new SqlTableReference.TableRef(null, "w"));
+    }
+
+    @Test
     void leavesExpressionsAndLiteralsUnresolved() throws SQLException {
         SqlTableReference.Resolution expression = resolve("SELECT a + 1 FROM w");
         SqlTableReference.Resolution literal = resolve("SELECT 1 AS one");
