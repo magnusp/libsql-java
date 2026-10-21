@@ -188,10 +188,14 @@ public class LibsqlConnection implements Connection {
         }
     }
 
-    @Override
-    public Statement createStatement() throws SQLException {
+    LibsqlStatement createStatementInternal() throws SQLException {
         checkClosed();
         return new LibsqlStatement(this);
+    }
+
+    @Override
+    public Statement createStatement() throws SQLException {
+        return createStatementInternal();
     }
 
     @Override

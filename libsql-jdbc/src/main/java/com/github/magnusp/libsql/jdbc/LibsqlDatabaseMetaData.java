@@ -267,14 +267,29 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     @Override
     public boolean dataDefinitionIgnoredInTransactions() throws SQLException { return false; }
 
+    private ResultSet executeMetadataQuery(String sql) throws SQLException {
+        LibsqlStatement statement = connection.createStatementInternal();
+        try {
+            statement.closeOnCompletion();
+            return statement.executeQuery(sql);
+        } catch (SQLException e) {
+            statement.close();
+            throw e;
+        }
+    }
+
+    private static String escapeLiteral(String value) {
+        return value.replace("'", "''");
+    }
+
     @Override
     public ResultSet getTables(String catalog, String schemaPattern, String tableNamePattern, String[] types) throws SQLException {
         StringBuilder sql = new StringBuilder("SELECT NULL AS TABLE_CAT, NULL AS TABLE_SCHEM, name AS TABLE_NAME, UPPER(type) AS TABLE_TYPE, NULL AS REMARKS, NULL AS TYPE_CAT, NULL AS TYPE_SCHEM, NULL AS TYPE_NAME, NULL AS SELF_REFERENCING_COL_NAME, NULL AS REF_GENERATION FROM sqlite_master WHERE 1=1");
         if (tableNamePattern != null && !tableNamePattern.equals("%")) {
-            sql.append(" AND name LIKE '").append(tableNamePattern).append("'");
+            sql.append(" AND name LIKE '").append(escapeLiteral(tableNamePattern)).append("'");
         }
         sql.append(" ORDER BY TABLE_TYPE, TABLE_NAME");
-        return connection.createStatement().executeQuery(sql.toString());
+        return executeMetadataQuery(sql.toString());
     }
 
     @Override
@@ -297,27 +312,26 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
                 "FROM sqlite_master m JOIN pragma_table_info(m.name) p " +
                 "WHERE 1=1";
         if (tableNamePattern != null && !tableNamePattern.equals("%")) {
-            sql += " AND m.name LIKE '" + tableNamePattern + "'";
+            sql += " AND m.name LIKE '" + escapeLiteral(tableNamePattern) + "'";
         }
         if (columnNamePattern != null && !columnNamePattern.equals("%")) {
-            sql += " AND p.name LIKE '" + columnNamePattern + "'";
+            sql += " AND p.name LIKE '" + escapeLiteral(columnNamePattern) + "'";
         }
         sql += " ORDER BY TABLE_NAME, ORDINAL_POSITION";
-        return connection.createStatement().executeQuery(sql);
+        return executeMetadataQuery(sql);
     }
 
     @Override
     public ResultSet getPrimaryKeys(String catalog, String schema, String table) throws SQLException {
-        String sql = "SELECT NULL AS TABLE_CAT, NULL AS TABLE_SCHEM, '" + table + "' AS TABLE_NAME, name AS COLUMN_NAME, pk AS KEY_SEQ, NULL AS PK_NAME " +
-                "FROM pragma_table_info('" + table + "') WHERE pk > 0 ORDER BY pk";
-        return connection.createStatement().executeQuery(sql);
+        String escapedTable = escapeLiteral(table == null ? "" : table);
+        String sql = "SELECT NULL AS TABLE_CAT, NULL AS TABLE_SCHEM, '" + escapedTable + "' AS TABLE_NAME, name AS COLUMN_NAME, pk AS KEY_SEQ, NULL AS PK_NAME " +
+                "FROM pragma_table_info('" + escapedTable + "') WHERE pk > 0 ORDER BY pk";
+        return executeMetadataQuery(sql);
     }
 
     @Override
     public ResultSet getTableTypes() throws SQLException {
-        return connection.createStatement().executeQuery(
-                "SELECT 'TABLE' AS TABLE_TYPE UNION SELECT 'VIEW' AS TABLE_TYPE"
-        );
+        return executeMetadataQuery("SELECT 'TABLE' AS TABLE_TYPE UNION SELECT 'VIEW' AS TABLE_TYPE");
     }
 
     @Override

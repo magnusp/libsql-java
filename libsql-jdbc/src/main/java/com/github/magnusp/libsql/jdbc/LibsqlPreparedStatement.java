@@ -69,9 +69,11 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
     @Override
     public boolean execute() throws SQLException {
         checkClosed();
+        closeCurrentResultSet();
+        checkClosed();
         StmtResult result = connection.executeStatement(buildCurrentStmt());
         if (result.cols() != null && !result.cols().isEmpty()) {
-            this.currentResultSet = new LibsqlResultSet(this, result);
+            this.currentResultSet = new LibsqlResultSet(this, result, sql, false);
             this.updateCount = -1;
             return true;
         } else {

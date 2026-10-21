@@ -33,6 +33,7 @@
         <module>libsql-client</module>
         <module>libsql-jdbc</module>
         <module>libsql-itests</module>
+        <module>libsql-conformance</module>
     </modules>
 
     <properties>

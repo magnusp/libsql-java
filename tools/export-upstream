@@ -1,0 +1,254 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage: export-upstream <tag> [options]
+
+Export xerial/sqlite-jdbc at the given tag into upstream-xerial_sqlite-jdbc/
+and update upstream-xerial_sqlite-jdbc/UPSTREAM.md. The tag is resolved to its
+commit SHA with the GitHub API, and both the tag and the SHA are recorded.
+
+Requires the GitHub CLI, authenticated with `gh auth login`.
+
+Examples:
+  export-upstream 3.53.4.0
+  export-upstream 3.53.4.0 --manifest upstream.manifest
+
+Options:
+  --manifest FILE     Repo-relative paths to export, one per line.
+                      Blank lines and lines starting with # are ignored.
+  --all               Export the whole repository instead of the default slice.
+  --force             Replace a non-empty destination not created by this script.
+  -h, --help          Show this help.
+
+Default export slice when no manifest is given and --all is not used:
+  src/test/java
+  src/test/resources
+  LICENSE
+  LICENSE.zentus
+  NOTICE
+  VERSION
+
+The destination must be empty, missing, or marked with .export-upstream.
+The script never edits UPSTREAM.md content outside its managed markers.
+EOF
+}
+
+die() {
+    echo "error: $*" >&2
+    exit 1
+}
+
+md_cell() {
+    printf '%s' "$1" | sed 's/|/\\|/g'
+}
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+
+repo="xerial/sqlite-jdbc"
+dest="upstream-xerial_sqlite-jdbc"
+upstream_md="$dest/UPSTREAM.md"
+manifest=""
+manifest_set=0
+export_all=0
+force=0
+
+if [ "$#" -lt 1 ]; then
+    usage
+    exit 2
+fi
+
+case "$1" in
+    -h|--help)
+        usage
+        exit 0
+        ;;
+    -*)
+        usage
+        exit 2
+        ;;
+esac
+
+tag="$1"
+shift
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --manifest)
+            [ "$#" -ge 2 ] || die "--manifest needs a value"
+            manifest="$2"
+            manifest_set=1
+            shift 2
+            ;;
+        --all)
+            export_all=1
+            shift
+            ;;
+        --force)
+            force=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            die "unknown option: $1"
+            ;;
+    esac
+done
+
+if [ "$export_all" -eq 1 ] && [ "$manifest_set" -eq 1 ]; then
+    die "--all and --manifest cannot be used together"
+fi
+
+printf '%s' "$tag" | grep -Eq '^[A-Za-z0-9._+-]+$' \
+    || die "tag contains unsupported characters: $tag"
+
+if [ -e "$dest" ] && [ ! -d "$dest" ]; then
+    die "destination is not a directory: $dest"
+fi
+
+command -v gh >/dev/null 2>&1 || die "gh is required"
+gh auth status >/dev/null 2>&1 || die "gh is not authenticated; run 'gh auth login'"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+old_md=""
+if [ -f "$upstream_md" ]; then
+    old_md="$tmp/UPSTREAM.md.old"
+    cp "$upstream_md" "$old_md"
+fi
+
+metadata=$(gh api "repos/$repo/commits/$tag" \
+    --jq '[.sha, .commit.committer.date, .commit.author.name, .commit.author.email, (.commit.message | split("\n")[0])] | @tsv') \
+    || die "could not resolve tag $tag in $repo"
+IFS=$'\t' read -r sha commit_date author_name author_email commit_subject <<< "$metadata"
+commit_author="$author_name <$author_email>"
+
+mkdir -p "$tmp/src"
+if ! gh api "repos/$repo/tarball/$sha" \
+    | tar -xzf - -C "$tmp/src" --strip-components=1; then
+    die "could not download or extract tag $tag from $repo"
+fi
+
+if [ "$export_all" -eq 1 ]; then
+    paths_label="whole repository"
+else
+    paths=()
+    if [ -n "$manifest" ]; then
+        [ -f "$manifest" ] || die "manifest not found: $manifest"
+        while IFS= read -r line || [ -n "$line" ]; do
+            line=${line%$'\r'}
+            case "$line" in
+                ""|"#"*)
+                    continue
+                    ;;
+                /*|..|../*|*/../*|*/..)
+                    die "manifest path must be relative and stay inside the repository: $line"
+                    ;;
+            esac
+            paths+=("$line")
+        done < "$manifest"
+    else
+        paths=(src/test/java src/test/resources LICENSE LICENSE.zentus NOTICE VERSION)
+    fi
+
+    [ "${#paths[@]}" -gt 0 ] || die "manifest is empty: $manifest"
+
+    for path in "${paths[@]}"; do
+        [ -e "$tmp/src/$path" ] || die "path not found in tag $tag: $path"
+    done
+
+    paths_label=$(printf '%s, ' "${paths[@]}")
+    paths_label=${paths_label%, }
+fi
+
+if [ -e "$dest" ] && [ -n "$(ls -A "$dest" 2>/dev/null)" ]; then
+    if [ ! -f "$dest/.export-upstream" ] && [ "$force" -ne 1 ]; then
+        die "destination is not empty and was not created by export-upstream: $dest (pass --force)"
+    fi
+    rm -rf -- "$dest"
+fi
+
+mkdir -p "$dest"
+if [ "$export_all" -eq 1 ]; then
+    cp -a "$tmp/src/." "$dest/"
+else
+    for path in "${paths[@]}"; do
+        mkdir -p "$dest/$(dirname "$path")"
+        cp -a "$tmp/src/$path" "$dest/$path"
+    done
+fi
+
+{
+    printf 'tag=%s\n' "$tag"
+    printf 'sha=%s\n' "$sha"
+} > "$dest/.export-upstream"
+
+block="$tmp/upstream-block.md"
+{
+    echo '<!-- export-upstream:begin -->'
+    echo '# Upstream export'
+    echo
+    echo '| Field | Value |'
+    echo '|---|---|'
+    printf '| Repository | `https://github.com/%s` |\n' "$(md_cell "$repo")"
+    printf '| Tag | %s |\n' "$(md_cell "$tag")"
+    printf '| Commit | `%s` |\n' "$sha"
+    printf '| Commit date | %s |\n' "$(md_cell "$commit_date")"
+    printf '| Commit author | %s |\n' "$(md_cell "$commit_author")"
+    printf '| Commit subject | %s |\n' "$(md_cell "$commit_subject")"
+    printf '| Paths | %s |\n' "$(md_cell "$paths_label")"
+    echo '| License | Apache-2.0 and Zentus BSD. See `LICENSE`, `LICENSE.zentus`, and `NOTICE`. |'
+    echo
+    echo 'The exported upstream files are byte-identical copies at this commit and must not be edited. `export-upstream` regenerates this tree.'
+    echo '<!-- export-upstream:end -->'
+} > "$block"
+
+mkdir -p "$(dirname "$upstream_md")"
+if [ -n "$old_md" ] && [ -f "$old_md" ]; then
+    if grep -q '<!-- export-upstream:begin -->' "$old_md"; then
+        awk -v blockfile="$block" '
+            /<!-- export-upstream:begin -->/ {
+                while ((getline line < blockfile) > 0) print line
+                close(blockfile)
+                skip = 1
+                next
+            }
+            /<!-- export-upstream:end -->/ {
+                skip = 0
+                next
+            }
+            !skip {
+                print
+            }
+        ' "$old_md" > "$upstream_md.tmp"
+    else
+        cat "$old_md" > "$upstream_md.tmp"
+        printf '\n' >> "$upstream_md.tmp"
+        cat "$block" >> "$upstream_md.tmp"
+    fi
+else
+    cat "$block" > "$upstream_md.tmp"
+fi
+mv "$upstream_md.tmp" "$upstream_md"
+
+if command -v sha256sum >/dev/null 2>&1; then
+    (
+        cd "$dest"
+        find . -type f \
+            ! -name CHECKSUMS.sha256 \
+            ! -name .export-upstream \
+            ! -name UPSTREAM.md \
+            -print0 \
+            | sort -z \
+            | xargs -0 -r sha256sum > CHECKSUMS.sha256
+    )
+fi
+
+echo "Exported tag $tag ($sha) to $dest"
+echo "Updated $upstream_md"

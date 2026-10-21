@@ -17,6 +17,7 @@ public class LibsqlStatement implements Statement {
     protected LibsqlResultSet currentResultSet = null;
     protected long updateCount = -1;
     protected boolean closed = false;
+    protected boolean closeOnCompletion = false;
     protected final List<Stmt> batchStatements = new ArrayList<>();
 
     public LibsqlStatement(LibsqlConnection connection) {
@@ -48,15 +49,24 @@ public class LibsqlStatement implements Statement {
     @Override
     public boolean execute(String sql) throws SQLException {
         checkClosed();
+        closeCurrentResultSet();
+        checkClosed();
         StmtResult result = connection.executeStatement(new Stmt(sql));
         if (result.cols() != null && !result.cols().isEmpty()) {
-            this.currentResultSet = new LibsqlResultSet(this, result);
+            this.currentResultSet = new LibsqlResultSet(this, result, sql, false);
             this.updateCount = -1;
             return true;
         } else {
             this.currentResultSet = null;
             this.updateCount = result.affectedRowCount();
             return false;
+        }
+    }
+
+    protected void closeCurrentResultSet() throws SQLException {
+        if (currentResultSet != null) {
+            currentResultSet.close();
+            currentResultSet = null;
         }
     }
 
@@ -81,10 +91,7 @@ public class LibsqlStatement implements Statement {
     @Override
     public boolean getMoreResults() throws SQLException {
         checkClosed();
-        if (currentResultSet != null) {
-            currentResultSet.close();
-            currentResultSet = null;
-        }
+        closeCurrentResultSet();
         updateCount = -1;
         return false;
     }
@@ -161,8 +168,8 @@ public class LibsqlStatement implements Statement {
     @Override public int getResultSetHoldability() throws SQLException { return ResultSet.HOLD_CURSORS_OVER_COMMIT; }
     @Override public void setPoolable(boolean poolable) throws SQLException {}
     @Override public boolean isPoolable() throws SQLException { return false; }
-    @Override public void closeOnCompletion() throws SQLException {}
-    @Override public boolean isCloseOnCompletion() throws SQLException { return false; }
+    @Override public void closeOnCompletion() throws SQLException { closeOnCompletion = true; }
+    @Override public boolean isCloseOnCompletion() throws SQLException { return closeOnCompletion; }
 
     @Override
     public <T> T unwrap(Class<T> iface) throws SQLException {
