@@ -8,6 +8,7 @@ public final class XerialLauncherSessionListener implements LauncherSessionListe
     @Override
     public void launcherSessionOpened(LauncherSession session) {
         XerialConformanceDriver.register();
+        LibsqlConformanceGuard.verify();
     }
 
     @Override
