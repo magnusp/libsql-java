@@ -2,124 +2,96 @@ package com.github.magnusp.libsql.jdbc;
 
 import org.junit.jupiter.api.Test;
 
+import java.sql.SQLException;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class SqlTableReferenceTest {
 
+    private static final Map<String, SqlTableReference.TableDefinition> DEFINITIONS = Map.of(
+            "w",
+            new SqlTableReference.TableDefinition("CREATE TABLE w (a INTEGER NOT NULL, b TEXT)", List.of("a", "b")),
+            "z",
+            new SqlTableReference.TableDefinition("CREATE TABLE z (a INTEGER)", List.of("a")),
+            "v",
+            new SqlTableReference.TableDefinition("CREATE VIEW v AS SELECT a, b FROM w", List.of("a", "b")),
+            "my table",
+            new SqlTableReference.TableDefinition("CREATE TABLE [my table] (c TEXT)", List.of("c")));
+
+    private static final SqlTableReference.Schema SCHEMA = reference -> {
+        if (reference.table() == null) {
+            return null;
+        }
+        return DEFINITIONS.get(reference.table().toLowerCase(Locale.ROOT));
+    };
+
     @Test
-    void parsesSimpleTable() {
-        assertThat(SqlTableReference.parse("SELECT * FROM people"))
-                .isEqualTo(new SqlTableReference.TableRef(null, "people"));
+    void resolvesSimpleTable() throws SQLException {
+        assertThat(resolve("SELECT * FROM w").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "w"), new SqlTableReference.TableRef(null, "w"));
     }
 
     @Test
-    void parsesSchemaQualifiedTable() {
-        assertThat(SqlTableReference.parse("SELECT * FROM main.people"))
-                .isEqualTo(new SqlTableReference.TableRef("main", "people"));
+    void resolvesSchemaQualifiedTable() throws SQLException {
+        assertThat(resolve("SELECT a FROM main.w").tables())
+                .containsExactly(new SqlTableReference.TableRef("main", "w"));
     }
 
     @Test
-    void parsesTempSchema() {
-        assertThat(SqlTableReference.parse("SELECT * FROM temp.people"))
-                .isEqualTo(new SqlTableReference.TableRef("temp", "people"));
+    void resolvesQuotedAndBracketedNames() throws SQLException {
+        assertThat(resolve("SELECT c FROM \"my table\"").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "my table"));
+        assertThat(resolve("SELECT c FROM [my table]").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "my table"));
     }
 
     @Test
-    void parsesQuotedNamesWithSpaces() {
-        assertThat(SqlTableReference.parse("SELECT * FROM \"my schema\".\"my table\""))
-                .isEqualTo(new SqlTableReference.TableRef("my schema", "my table"));
+    void resolvesAliasesWithAndWithoutAs() throws SQLException {
+        assertThat(resolve("SELECT a AS z FROM w").labels()).containsExactly("z");
+        assertThat(resolve("SELECT a AS z FROM w").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "w"));
+        assertThat(resolve("SELECT a z FROM w").labels()).containsExactly("z");
+        assertThat(resolve("SELECT a z FROM w").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "w"));
     }
 
     @Test
-    void parsesQuotedIdentifierKinds() {
-        assertThat(SqlTableReference.parse("SELECT * FROM `my table`"))
-                .isEqualTo(new SqlTableReference.TableRef(null, "my table"));
-        assertThat(SqlTableReference.parse("SELECT * FROM [my table]"))
-                .isEqualTo(new SqlTableReference.TableRef(null, "my table"));
-        assertThat(SqlTableReference.parse("SELECT * FROM \"my \"\"table\"\"\""))
-                .isEqualTo(new SqlTableReference.TableRef(null, "my \"table\""));
+    void ignoresStringLiteralsAndCommentsContainingFrom() throws SQLException {
+        assertThat(resolve("SELECT 'from elsewhere' AS s FROM w WHERE b = 'from x'").tables())
+                .containsExactly((SqlTableReference.TableRef) null);
+        assertThat(resolve("SELECT a -- from noise\nFROM /* from noise */ w -- trailing from noise").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "w"));
     }
 
     @Test
-    void parsesAliasesWithAndWithoutAs() {
-        assertThat(SqlTableReference.parse("SELECT * FROM people p WHERE p.id = 1"))
-                .isEqualTo(new SqlTableReference.TableRef(null, "people"));
-        assertThat(SqlTableReference.parse("SELECT * FROM people AS p"))
-                .isEqualTo(new SqlTableReference.TableRef(null, "people"));
+    void leavesExpressionsAndLiteralsUnresolved() throws SQLException {
+        SqlTableReference.Resolution expression = resolve("SELECT a + 1 FROM w");
+        SqlTableReference.Resolution literal = resolve("SELECT 1 AS one");
+
+        assertThat(expression.labels()).containsExactly("a+1");
+        assertThat(expression.tables()).containsExactly((SqlTableReference.TableRef) null);
+        assertThat(literal.labels()).containsExactly("one");
+        assertThat(literal.tables()).containsExactly((SqlTableReference.TableRef) null);
     }
 
     @Test
-    void ignoresStringLiteralsContainingFrom() {
-        assertThat(SqlTableReference.parse("SELECT 'from elsewhere' AS s FROM people WHERE name = 'from x'"))
-                .isEqualTo(new SqlTableReference.TableRef(null, "people"));
+    void acceptsTrailingSemicolon() throws SQLException {
+        assertThat(resolve("SELECT a FROM w;").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "w"));
     }
 
     @Test
-    void ignoresCommentsContainingFrom() {
-        assertThat(SqlTableReference.parse(
-                        "SELECT * -- from noise\nFROM /* from noise */ people -- trailing from noise"))
-                .isEqualTo(new SqlTableReference.TableRef(null, "people"));
+    void rejectsUnparseableInput() throws SQLException {
+        assertThat(SqlTableReference.resolve(null, SCHEMA)).isNull();
+        assertThat(SqlTableReference.resolve("", SCHEMA)).isNull();
+        assertThat(SqlTableReference.resolve("SELECT * FROM 'w'", SCHEMA)).isNull();
+        assertThat(SqlTableReference.resolve("SELECT * FROM w WHERE id IN (1, 2", SCHEMA)).isNull();
     }
 
-    @Test
-    void ignoresFromInNestedSubquery() {
-        assertThat(SqlTableReference.parse("SELECT * FROM people WHERE id IN (SELECT id FROM other)"))
-                .isEqualTo(new SqlTableReference.TableRef(null, "people"));
-    }
-
-    @Test
-    void rejectsJoin() {
-        assertThat(SqlTableReference.parse("SELECT * FROM a JOIN b ON a.id = b.id")).isNull();
-    }
-
-    @Test
-    void rejectsCommaSeparatedTables() {
-        assertThat(SqlTableReference.parse("SELECT * FROM a, b")).isNull();
-    }
-
-    @Test
-    void rejectsCommonTableExpression() {
-        assertThat(SqlTableReference.parse("WITH cte AS (SELECT * FROM a) SELECT * FROM cte")).isNull();
-    }
-
-    @Test
-    void rejectsCompoundSelect() {
-        assertThat(SqlTableReference.parse("SELECT * FROM a UNION SELECT * FROM b")).isNull();
-        assertThat(SqlTableReference.parse("SELECT * FROM a INTERSECT SELECT * FROM b")).isNull();
-        assertThat(SqlTableReference.parse("SELECT * FROM a EXCEPT SELECT * FROM b")).isNull();
-    }
-
-    @Test
-    void rejectsSubqueryInFromPosition() {
-        assertThat(SqlTableReference.parse("SELECT * FROM (SELECT * FROM a) AS x")).isNull();
-    }
-
-    @Test
-    void rejectsSubqueryInSelectList() {
-        assertThat(SqlTableReference.parse("SELECT (SELECT id FROM other) AS id FROM people"))
-                .isNull();
-    }
-
-    @Test
-    void rejectsSecondTableReferenceOrSecondFrom() {
-        assertThat(SqlTableReference.parse("SELECT * FROM a b c")).isNull();
-        assertThat(SqlTableReference.parse("SELECT * FROM a FROM b")).isNull();
-        assertThat(SqlTableReference.parse("SELECT * FROM a AS x, b")).isNull();
-    }
-
-    @Test
-    void rejectsAmbiguousInput() {
-        assertThat(SqlTableReference.parse(null)).isNull();
-        assertThat(SqlTableReference.parse("SELECT 1")).isNull();
-        assertThat(SqlTableReference.parse("SELECT * FROM 'people'")).isNull();
-        assertThat(SqlTableReference.parse("SELECT * FROM a.")).isNull();
-        assertThat(SqlTableReference.parse("SELECT * FROM a.b.c")).isNull();
-        assertThat(SqlTableReference.parse("SELECT * FROM a WHERE id IN (1, 2")).isNull();
-    }
-
-    @Test
-    void acceptsTrailingSemicolon() {
-        assertThat(SqlTableReference.parse("SELECT * FROM people;"))
-                .isEqualTo(new SqlTableReference.TableRef(null, "people"));
+    private static SqlTableReference.Resolution resolve(String sql) throws SQLException {
+        return SqlTableReference.resolve(sql, SCHEMA);
     }
 }
