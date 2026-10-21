@@ -105,7 +105,11 @@ public class PreparedStatementThreadTest {
             Thread.currentThread().interrupt();
             fail("", e);
         } catch (ExecutionException e) {
-            // this is OK, so long as we don't seg fault
+            // A checked SQLException from the close race is expected. Assertion failures are
+            // not: ExecutionException wraps them, so rethrow them or the test cannot fail.
+            if (e.getCause() instanceof AssertionError assertionError) {
+                throw assertionError;
+            }
         }
     }
 

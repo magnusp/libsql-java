@@ -8,12 +8,63 @@
 #   # divergence: <path> -- <non-empty reason>
 # Use the reason to say which libSQL or Hrana behavior makes parity impossible.
 #
+# Selection rationale. The conformance suite selects tests that exercise JDBC
+# behavior through ordinary SQL, so the Hrana transport can satisfy them
+# unchanged. Tests that drive sqlite-jdbc's native extension API, connection
+# configuration surface, or known libSQL parity gaps stay upstream. Each
+# selected and rejected class from the pinned 3.53.4.0 test tree is listed.
+
+# Selected support code.
+# selected: src/test/java/org/sqlite/Utils.java -- compile-option assumptions shared by selected tests; not a test class.
+
+# Selected tests.
+# selected: src/test/java/org/sqlite/ResultSetTest.java -- ResultSet navigation and getter conversions over ordinary SQL.
+# selected: src/test/java/org/sqlite/InsertQueryTest.java -- transaction reuse and commit visibility across shared and independent connections.
+# selected: src/test/java/org/sqlite/FetchSizeTest.java -- fetch-size configuration and stable result ordering.
+# selected: src/test/java/org/sqlite/CachedRowSetTest.java -- disconnected CachedRowSet population through a JDBC connection.
+# selected: src/test/java/org/sqlite/JSON1Test.java -- SQL JSON function output and text conversion.
+# selected: src/test/java/org/sqlite/MetadataLeakTest.java -- metadata result sets close the statement that produced them.
+# selected: src/test/java/org/sqlite/PreparedStatementThreadTest.java -- concurrent execute and close must not crash or hide failures.
+# selected: src/test/java/org/sqlite/ResultSetWithoutResultsTest.java -- statement result-kind transitions leave no stale result set.
+# selected: src/test/java/org/sqlite/RSMetaDataTest.java -- ResultSetMetaData column names, types, and nullability.
+
+# Rejected tests.
+# rejected: src/test/java/org/sqlite/TypeMapTest.java -- removed: libSQL accepts but ignores type maps (tracked by #48), so a parity assertion would be red; asserting the no-op would be a weak test.
+# rejected: src/test/java/org/sqlite/BackupTest.java -- drives sqlite-jdbc's native backup API; Hrana exposes no backup primitive.
+# rejected: src/test/java/org/sqlite/BusyHandlerTest.java -- registers native busy-handler callbacks that Hrana does not expose.
+# rejected: src/test/java/org/sqlite/CollationTest.java -- registers JVM collations through sqlite-jdbc's native extension API.
+# rejected: src/test/java/org/sqlite/ConnectionTest.java -- exercises sqlite-jdbc URL, open-mode, and resource-loading configuration that has no Hrana equivalent; covered JDBC paths are asserted by selected tests.
+# rejected: src/test/java/org/sqlite/DBMetaDataTest.java -- DatabaseMetaData parity is tracked by #41, #42, and #50; selecting it now would be red.
+# rejected: src/test/java/org/sqlite/ErrorMessageTest.java -- asserts sqlite-jdbc wording and native result codes; sqld returns different messages and error codes.
+# rejected: src/test/java/org/sqlite/ExtendedCommandTest.java -- exercises sqlite-jdbc's dot-command parser, not the JDBC API.
+# rejected: src/test/java/org/sqlite/ExtensionTest.java -- loads native SQLite extensions; the libSQL server does not permit extension loading.
+# rejected: src/test/java/org/sqlite/JDBCTest.java -- mixes driver URL handling, extension loading, and sqlite-jdbc read-only configuration; broad driver-level coverage is asserted by selected tests.
+# rejected: src/test/java/org/sqlite/ListenerTest.java -- update, commit, rollback, and authorizer hooks require native callbacks unavailable over Hrana.
+# rejected: src/test/java/org/sqlite/MathFunctionsTest.java -- passes only when the server binary was compiled with SQLITE_ENABLE_MATH_FUNCTIONS; the sqld image build is not pinned to that option.
+# rejected: src/test/java/org/sqlite/MultipleClassLoaderTest.java -- verifies sqlite-jdbc's native library loading per class loader; libSQL has no native library.
+# rejected: src/test/java/org/sqlite/PrepStmtTest.java -- includes getGeneratedKeys (#39) and CLOB/binary binding parity that are not yet implemented; selected prepared-statement paths cover the rest.
+# rejected: src/test/java/org/sqlite/ProgressHandlerTest.java -- registers native progress callbacks that Hrana does not expose.
+# rejected: src/test/java/org/sqlite/QueryTest.java -- date/time and blob conversion cases belong to the value-conversion lane (#31, #32, #33, #34); selecting it now would mix known gaps into the parity baseline.
+# rejected: src/test/java/org/sqlite/ReadUncommittedTest.java -- depends on sqlite-jdbc shared-cache and read-uncommitted connection configuration; sqld does not expose it.
+# rejected: src/test/java/org/sqlite/SavepointTest.java -- savepoints are not implemented by the libSQL driver.
+# rejected: src/test/java/org/sqlite/SerializeTest.java -- serializes and restores a native database image; Hrana has no equivalent.
+# rejected: src/test/java/org/sqlite/SQLiteConfigTest.java -- tests sqlite-jdbc's configuration object, not the JDBC API.
+# rejected: src/test/java/org/sqlite/SQLiteConnectionPoolDataSourceTest.java -- tests sqlite-jdbc DataSource and pooling classes that libSQL does not provide.
+# rejected: src/test/java/org/sqlite/SQLiteDataSourceTest.java -- tests sqlite-jdbc DataSource classes that libSQL does not provide.
+# rejected: src/test/java/org/sqlite/SQLiteJDBCLoaderTest.java -- tests the native SQLite library loader.
+# rejected: src/test/java/org/sqlite/StatementTest.java -- statement reuse and lifecycle parity is tracked by #47; selected ResultSet tests cover the current read paths.
+# rejected: src/test/java/org/sqlite/TransactionTest.java -- asserts SQLite file-locking and multi-connection wait behavior that a single sqld server cannot reproduce; commit visibility is covered by InsertQueryTest.
+# rejected: src/test/java/org/sqlite/UDFCustomErrorTest.java -- registers JVM UDFs and inspects native error callbacks.
+# rejected: src/test/java/org/sqlite/UDFTest.java -- registers JVM UDFs through sqlite-jdbc's native extension API.
+# rejected: src/test/java/org/sqlite/util/OSInfoTest.java -- tests sqlite-jdbc's OS and native-library detection utility.
+# rejected: src/test/java/org/sqlite/architecture/CodingRulesTest.java -- ArchUnit rules over sqlite-jdbc source conventions; not runtime JDBC behavior.
+# rejected: src/test/java/org/sqlite/architecture/TestCodingRulesTest.java -- ArchUnit rules over sqlite-jdbc test conventions; not runtime JDBC behavior.
+
 # First conformance batch.
 src/test/java/org/sqlite/Utils.java
 src/test/java/org/sqlite/ResultSetTest.java
 src/test/java/org/sqlite/InsertQueryTest.java
 src/test/java/org/sqlite/FetchSizeTest.java
-src/test/java/org/sqlite/TypeMapTest.java
 src/test/java/org/sqlite/CachedRowSetTest.java
 
 # Second batch: metadata, JSON, threading, and empty result sets.
@@ -32,4 +83,6 @@ VERSION
 # when its last connection closes, so the conformance tests must close every
 # connection they open; leaving one open leaks the namespace for the whole run.
 # divergence: src/test/java/org/sqlite/JSON1Test.java -- Hrana holds a namespace until its last connection closes, so the conformance copy closes the leaked per-test connections.
-# divergence: src/test/java/org/sqlite/CachedRowSetTest.java -- Hrana holds a namespace until its last connection closes, so the conformance copy closes the leaked connection.
+# divergence: src/test/java/org/sqlite/CachedRowSetTest.java -- Hrana holds a namespace until its last connection closes, so the conformance copy closes the leaked connection and asserts the row it reads.
+# divergence: src/test/java/org/sqlite/InsertQueryTest.java -- upstream misuses the connection factory so the transaction is applied to a different connection and never asserts the result; the conformance copy reuses the transaction connection, asserts rollback and commit visibility, and asserts the final count (#51).
+# divergence: src/test/java/org/sqlite/PreparedStatementThreadTest.java -- upstream swallows ExecutionException, which also wraps assertion failures; the conformance copy rethrows AssertionError so the race test can fail (#51).

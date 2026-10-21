@@ -15,6 +15,7 @@
 
     <properties>
         <docker.config.dir>${project.build.directory}/docker-config</docker.config.dir>
+        <xerial.version>3.53.4.0</xerial.version>
     </properties>
 
     <dependencies>
@@ -155,4 +156,41 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+            Parity baseline: run the same vendored test manifest against the pinned
+            xerial 3.53.4.0 driver instead of the libSQL driver.
+        -->
+        <profile>
+            <id>xerial-control</id>
+            <dependencies>
+                <dependency>
+                    <groupId>org.xerial</groupId>
+                    <artifactId>sqlite-jdbc</artifactId>
+                    <version>${xerial.version}</version>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <configuration>
+                            <includes combine.self="override">
+                                <include>**/*Test.java</include>
+                            </includes>
+                            <excludes combine.self="override">
+                                <exclude>**/com/github/magnusp/**/*Test.java</exclude>
+                            </excludes>
+                            <systemPropertyVariables>
+                                <conformance.control.driver>xerial</conformance.control.driver>
+                            </systemPropertyVariables>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
