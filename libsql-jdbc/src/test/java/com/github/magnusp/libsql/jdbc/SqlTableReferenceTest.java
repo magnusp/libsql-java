@@ -67,6 +67,37 @@ class SqlTableReferenceTest {
     }
 
     @Test
+    void resolvesJoins() throws SQLException {
+        SqlTableReference.Resolution resolution = resolve("SELECT w.a, z.a FROM w JOIN z ON w.a = z.a");
+
+        assertThat(resolution.labels()).containsExactly("a", "a");
+        assertThat(resolution.tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "w"), new SqlTableReference.TableRef(null, "z"));
+    }
+
+    @Test
+    void resolvesCommaAndOuterJoins() throws SQLException {
+        assertThat(resolve("SELECT w.a, z.a FROM w, z").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "w"), new SqlTableReference.TableRef(null, "z"));
+        assertThat(resolve("SELECT x.a, y.a FROM w x LEFT OUTER JOIN z y ON x.a = y.a").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "w"), new SqlTableReference.TableRef(null, "z"));
+    }
+
+    @Test
+    void resolvesStarExpansion() throws SQLException {
+        SqlTableReference.Resolution resolution = resolve("SELECT * FROM w JOIN z ON w.a = z.a");
+
+        assertThat(resolution.labels()).containsExactly("a", "b", "a");
+        assertThat(resolution.tables())
+                .containsExactly(
+                        new SqlTableReference.TableRef(null, "w"),
+                        new SqlTableReference.TableRef(null, "w"),
+                        new SqlTableReference.TableRef(null, "z"));
+        assertThat(resolve("SELECT w.* FROM w JOIN z ON w.a = z.a").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "w"), new SqlTableReference.TableRef(null, "w"));
+    }
+
+    @Test
     void leavesExpressionsAndLiteralsUnresolved() throws SQLException {
         SqlTableReference.Resolution expression = resolve("SELECT a + 1 FROM w");
         SqlTableReference.Resolution literal = resolve("SELECT 1 AS one");

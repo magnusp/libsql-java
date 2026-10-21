@@ -335,6 +335,19 @@ class LibsqlResultSetMetaDataTest {
     }
 
     @Test
+    void resolvesJoinTableNamesAndNullability() throws SQLException {
+        LibsqlResultSetMetaData metadata = metadataForSql(
+                "SELECT w.a, z.a FROM w JOIN z ON w.a = z.a",
+                schemaConnection(),
+                List.of(new Col("a", "INTEGER"), new Col("a", "INTEGER")));
+
+        assertThat(metadata.getTableName(1)).isEqualTo("w");
+        assertThat(metadata.getTableName(2)).isEqualTo("z");
+        assertThat(metadata.isNullable(1)).isEqualTo(ResultSetMetaData.columnNoNulls);
+        assertThat(metadata.isNullable(2)).isEqualTo(ResultSetMetaData.columnNullable);
+    }
+
+    @Test
     void leavesUnsupportedShapesUnknown() throws SQLException {
         LibsqlResultSetMetaData expression = metadataForSql(
                 "SELECT a + 1 FROM w", schemaConnection(), List.of(new Col("a + 1", "INTEGER")));
