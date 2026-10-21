@@ -36,5 +36,8 @@ jobs:
       - name: Check Code Formatting (Spotless)
         run: mvn --batch-mode spotless:check
 
+      - name: Validate reactor
+        run: mvn --batch-mode validate
+
       - name: Run Tests and Verifications
         run: mvn --batch-mode clean verify

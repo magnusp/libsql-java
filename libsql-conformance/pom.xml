@@ -83,7 +83,7 @@
                 <executions>
                     <execution>
                         <id>verify-vendored-upstream</id>
-                        <phase>validate</phase>
+                        <phase>generate-test-sources</phase>
                         <goals>
                             <goal>run</goal>
                         </goals>
