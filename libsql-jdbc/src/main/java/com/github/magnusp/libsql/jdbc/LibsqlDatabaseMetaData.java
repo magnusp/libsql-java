@@ -401,7 +401,7 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     @Override public boolean supportsSavepoints() throws SQLException { return false; }
     @Override public boolean supportsNamedParameters() throws SQLException { return false; }
     @Override public boolean supportsMultipleOpenResults() throws SQLException { return false; }
-    @Override public boolean supportsGetGeneratedKeys() throws SQLException { return false; }
+    @Override public boolean supportsGetGeneratedKeys() throws SQLException { return true; }
     @Override public ResultSet getSuperTypes(String catalog, String schemaPattern, String typeNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public ResultSet getSuperTables(String catalog, String schemaPattern, String tableNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public ResultSet getAttributes(String catalog, String schemaPattern, String typeNamePattern, String attributeNamePattern) throws SQLException { throw new UnsupportedOperationException(); }

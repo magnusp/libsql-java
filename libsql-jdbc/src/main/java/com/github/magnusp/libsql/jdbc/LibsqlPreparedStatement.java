@@ -219,6 +219,7 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
         closeCurrentResultSet();
         checkClosed();
         StmtResult result = connection.executeStatement(buildCurrentStmt());
+        updateGeneratedKeys(sql, result);
         if (result.cols() != null && !result.cols().isEmpty()) {
             this.currentResultSet = new LibsqlResultSet(this, result, sql, false);
             this.updateCount = -1;
