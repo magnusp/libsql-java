@@ -123,16 +123,15 @@ public class LibsqlResultSet implements ResultSet {
         };
     }
 
+    /**
+     * Converts every storage class through {@link #getInt(int)}, matching sqlite-jdbc. NULL and values
+     * whose integer coercion is zero are false: non-numeric text such as {@code "true"}, REAL values
+     * between -1 and 1, and empty or non-numeric blobs. Integers, REAL values truncated to a nonzero
+     * integer, and text or blob numeric prefixes such as {@code "2"} or {@code x'313233'} are true.
+     */
     @Override
     public boolean getBoolean(int columnIndex) throws SQLException {
-        Value val = getCurrentValue(columnIndex);
-        return switch (val) {
-            case Value.Null n -> false;
-            case Value.Integer i -> i.value() != 0;
-            case Value.Float f -> f.value() != 0.0;
-            case Value.Text t -> "true".equalsIgnoreCase(t.value()) || "1".equals(t.value());
-            case Value.Blob b -> b.bytes().length > 0 && b.bytes()[0] != 0;
-        };
+        return getInt(columnIndex) != 0;
     }
 
     @Override
