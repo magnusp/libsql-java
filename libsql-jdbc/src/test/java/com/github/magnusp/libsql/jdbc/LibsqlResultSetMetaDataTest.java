@@ -94,6 +94,30 @@ class LibsqlResultSetMetaDataTest {
     }
 
     @Test
+    void doesNotReportAutoIncrementForColumnNamedAutoincrement() throws SQLException {
+        String createSql = "CREATE TABLE T (myautoincrement INTEGER PRIMARY KEY)";
+        LibsqlResultSetMetaData metadata = metadataForTable(createSql, List.of(new Col("myautoincrement", "INTEGER")));
+
+        assertThat(metadata.isAutoIncrement(1)).isFalse();
+    }
+
+    @Test
+    void reportsAutoIncrementForTableLevelAutoincrementPrimaryKey() throws SQLException {
+        String createSql = "CREATE TABLE T (id INTEGER, PRIMARY KEY (id AUTOINCREMENT))";
+        LibsqlResultSetMetaData metadata = metadataForTable(createSql, List.of(new Col("id", "INTEGER")));
+
+        assertThat(metadata.isAutoIncrement(1)).isTrue();
+    }
+
+    @Test
+    void ignoresQuotedIdentifierNamedAutoincrement() throws SQLException {
+        String createSql = "CREATE TABLE T (\"AUTOINCREMENT\" INTEGER PRIMARY KEY)";
+        LibsqlResultSetMetaData metadata = metadataForTable(createSql, List.of(new Col("AUTOINCREMENT", "INTEGER")));
+
+        assertThat(metadata.isAutoIncrement(1)).isFalse();
+    }
+
+    @Test
     void usesFirstNonNullValueForIntegerTypeAndClass() throws SQLException {
         LibsqlResultSetMetaData metadata = new LibsqlResultSetMetaData(
                 List.of(new Col("wide", "INTEGER"), new Col("narrow", "INTEGER")),
@@ -134,6 +158,19 @@ class LibsqlResultSetMetaDataTest {
         assertThat(metadata.getTableName(1)).isEmpty();
         assertThat(metadata.isNullable(1)).isEqualTo(ResultSetMetaData.columnNullableUnknown);
         assertThat(metadata.isAutoIncrement(1)).isFalse();
+    }
+
+    private static LibsqlResultSetMetaData metadataForTable(String createSql, List<Col> cols) throws SQLException {
+        List<Row> tableRows = cols.stream()
+                .map(col -> new Row(List.of(
+                        Value.of("T"),
+                        Value.of(createSql),
+                        Value.of(col.name()),
+                        Value.of(0L),
+                        Value.of(1L))))
+                .toList();
+        StmtResult result = new StmtResult(List.of(), tableRows, 0, null);
+        return new LibsqlResultSetMetaData(cols, List.of(), "SELECT * FROM T", connectionReturning(result));
     }
 
     private static LibsqlConnection connectionReturning(StmtResult result) {

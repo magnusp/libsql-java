@@ -9,6 +9,7 @@ import com.github.magnusp.libsql.hrana.codec.Value;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -58,12 +59,24 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         getCol(column);
         TableInfo table = resolveTableContext();
         ColumnInfo info = table != null ? table.columns().get(columnName(column)) : null;
-        return info != null
-                && info.primaryKey()
-                && table.createSql() != null
-                && stripSqlCommentsAndLiterals(table.createSql())
-                        .toUpperCase(Locale.ENGLISH)
-                        .contains("AUTOINCREMENT");
+        return info != null && info.primaryKey() && isAutoIncrementColumn(table.createSql(), columnName(column));
+    }
+
+    static boolean isAutoIncrementColumn(String createSql, String columnName) {
+        if (createSql == null || columnName == null) {
+            return false;
+        }
+        List<List<Token>> definitions = tableDefinitions(createSql);
+        if (definitions == null) {
+            return false;
+        }
+        for (List<Token> definition : definitions) {
+            if (columnDefinitionIsAutoIncrement(definition, columnName)
+                    || tableConstraintIsAutoIncrement(definition, columnName)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
@@ -515,50 +528,219 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         return new TableInfo(tableName != null ? tableName : fallbackName, createSql, columns);
     }
 
-    private static String stripSqlCommentsAndLiterals(String sql) {
-        StringBuilder result = new StringBuilder(sql.length());
+    private static List<List<Token>> tableDefinitions(String createSql) {
+        List<Token> tokens = tokenize(createSql);
+        if (tokens == null) {
+            return null;
+        }
+        int open = -1;
+        for (int i = 0; i < tokens.size(); i++) {
+            if (isSymbol(tokens.get(i), "(")) {
+                open = i;
+                break;
+            }
+        }
+        if (open < 0) {
+            return null;
+        }
+
+        List<List<Token>> definitions = new ArrayList<>();
+        List<Token> current = new ArrayList<>();
+        for (int i = open + 1; i < tokens.size(); i++) {
+            Token token = tokens.get(i);
+            if (isSymbol(token, ")") && token.depth() == 0) {
+                if (!current.isEmpty()) {
+                    definitions.add(current);
+                }
+                return definitions;
+            }
+            if (isSymbol(token, ",") && token.depth() == 1) {
+                definitions.add(current);
+                current = new ArrayList<>();
+                continue;
+            }
+            current.add(token);
+        }
+        return null;
+    }
+
+    private static boolean columnDefinitionIsAutoIncrement(List<Token> definition, String columnName) {
+        int start = skipConstraintName(definition);
+        if (start >= definition.size()) {
+            return false;
+        }
+        if (isConstraintKeyword(definition.get(start))) {
+            return false;
+        }
+        String name = identifier(definition.get(start));
+        if (name == null || !name.equalsIgnoreCase(columnName)) {
+            return false;
+        }
+        return containsKeyword(definition, start + 1, definition.size(), "AUTOINCREMENT", 1);
+    }
+
+    private static boolean tableConstraintIsAutoIncrement(List<Token> definition, String columnName) {
+        int start = skipConstraintName(definition);
+        if (start + 1 >= definition.size()
+                || !isWord(definition.get(start), "PRIMARY")
+                || !isWord(definition.get(start + 1), "KEY")) {
+            return false;
+        }
+        int open = -1;
+        for (int i = start + 2; i < definition.size(); i++) {
+            if (isSymbol(definition.get(i), "(")) {
+                open = i;
+                break;
+            }
+        }
+        if (open < 0) {
+            return false;
+        }
+
+        int partStart = open + 1;
+        for (int i = open + 1; i < definition.size(); i++) {
+            Token token = definition.get(i);
+            if ((isSymbol(token, ",") && token.depth() == 2) || (isSymbol(token, ")") && token.depth() == 1)) {
+                if (indexedColumnIsAutoIncrement(definition, partStart, i, columnName)) {
+                    return true;
+                }
+                partStart = i + 1;
+            }
+        }
+        return false;
+    }
+
+    private static boolean indexedColumnIsAutoIncrement(
+            List<Token> definition, int start, int end, String columnName) {
+        if (start >= end) {
+            return false;
+        }
+        String name = identifier(definition.get(start));
+        return name != null
+                && name.equalsIgnoreCase(columnName)
+                && containsKeyword(definition, start + 1, end, "AUTOINCREMENT", 2);
+    }
+
+    private static int skipConstraintName(List<Token> definition) {
+        if (definition.size() >= 2 && isWord(definition.get(0), "CONSTRAINT")) {
+            return 2;
+        }
+        return 0;
+    }
+
+    private static boolean isConstraintKeyword(Token token) {
+        return isWord(token, "PRIMARY")
+                || isWord(token, "UNIQUE")
+                || isWord(token, "CHECK")
+                || isWord(token, "FOREIGN");
+    }
+
+    private static boolean containsKeyword(
+            List<Token> tokens, int start, int end, String keyword, int depth) {
+        for (int i = start; i < end; i++) {
+            Token token = tokens.get(i);
+            if (token.depth() == depth && isWord(token, keyword)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isWord(Token token, String word) {
+        return token.type() == TokenType.WORD && token.text().equalsIgnoreCase(word);
+    }
+
+    private static boolean isSymbol(Token token, String symbol) {
+        return token.type() == TokenType.SYMBOL && token.text().equals(symbol);
+    }
+
+    private static String identifier(Token token) {
+        return switch (token.type()) {
+            case IDENT, WORD -> token.text();
+            case SYMBOL -> null;
+        };
+    }
+
+    private static List<Token> tokenize(String sql) {
+        List<Token> tokens = new ArrayList<>();
+        int depth = 0;
         int i = 0;
         while (i < sql.length()) {
             char c = sql.charAt(i);
+            if (Character.isWhitespace(c)) {
+                i++;
+                continue;
+            }
             if (c == '-' && i + 1 < sql.length() && sql.charAt(i + 1) == '-') {
                 i += 2;
                 while (i < sql.length() && sql.charAt(i) != '\n' && sql.charAt(i) != '\r') {
                     i++;
                 }
-                result.append(' ');
                 continue;
             }
             if (c == '/' && i + 1 < sql.length() && sql.charAt(i + 1) == '*') {
                 int end = sql.indexOf("*/", i + 2);
                 if (end < 0) {
-                    break;
+                    return null;
                 }
-                result.append(' ');
                 i = end + 2;
                 continue;
             }
-            if (c == '\'' || c == '"' || c == '`') {
+            if (c == '\'') {
+                i = skipQuoted(sql, i, c);
+                if (i < 0) {
+                    return null;
+                }
+                continue;
+            }
+            if (c == '"' || c == '`') {
                 int end = skipQuoted(sql, i, c);
                 if (end < 0) {
-                    break;
+                    return null;
                 }
-                result.append(' ');
+                tokens.add(new Token(TokenType.IDENT, unescape(sql.substring(i + 1, end - 1), c), depth));
                 i = end;
                 continue;
             }
             if (c == '[') {
                 int end = sql.indexOf(']', i + 1);
                 if (end < 0) {
-                    break;
+                    return null;
                 }
-                result.append(' ');
+                tokens.add(new Token(TokenType.IDENT, sql.substring(i + 1, end), depth));
                 i = end + 1;
                 continue;
             }
-            result.append(c);
+            if (c == '(') {
+                tokens.add(new Token(TokenType.SYMBOL, "(", depth));
+                depth++;
+                i++;
+                continue;
+            }
+            if (c == ')') {
+                if (depth == 0) {
+                    return null;
+                }
+                depth--;
+                tokens.add(new Token(TokenType.SYMBOL, ")", depth));
+                i++;
+                continue;
+            }
+            if (isWordChar(c)) {
+                int start = i;
+                while (i < sql.length() && isWordChar(sql.charAt(i))) {
+                    i++;
+                }
+                tokens.add(new Token(TokenType.WORD, sql.substring(start, i), depth));
+                continue;
+            }
+            tokens.add(new Token(TokenType.SYMBOL, String.valueOf(c), depth));
             i++;
         }
-        return result.toString();
+        if (depth != 0) {
+            return null;
+        }
+        return tokens;
     }
 
     private static int skipQuoted(String sql, int start, char quote) {
@@ -576,6 +758,15 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         return -1;
     }
 
+    private static String unescape(String content, char quote) {
+        String doubled = new String(new char[] {quote, quote});
+        return content.replace(doubled, String.valueOf(quote));
+    }
+
+    private static boolean isWordChar(char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '$';
+    }
+
     private static String text(Value value) {
         return value instanceof Value.Text t ? t.value() : null;
     }
@@ -591,6 +782,14 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         TEXT,
         NULL
     }
+
+    private enum TokenType {
+        WORD,
+        IDENT,
+        SYMBOL
+    }
+
+    private record Token(TokenType type, String text, int depth) {}
 
     private record ColumnInfo(boolean notNull, boolean primaryKey) {}
 
