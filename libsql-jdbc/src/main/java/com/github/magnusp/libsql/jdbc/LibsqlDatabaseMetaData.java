@@ -1,12 +1,29 @@
 package com.github.magnusp.libsql.jdbc;
 
+import com.github.magnusp.libsql.hrana.codec.Col;
+import com.github.magnusp.libsql.hrana.codec.Row;
+import com.github.magnusp.libsql.hrana.codec.Stmt;
+import com.github.magnusp.libsql.hrana.codec.StmtResult;
+import com.github.magnusp.libsql.hrana.codec.Value;
+
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.RowIdLifetime;
 import java.sql.SQLException;
+import java.sql.Types;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.regex.Pattern;
 
 public class LibsqlDatabaseMetaData implements DatabaseMetaData {
+
+    private static final Pattern INTEGER_TYPE = Pattern.compile(".*(INT|BOOL).*");
+    private static final Pattern VARCHAR_TYPE = Pattern.compile(".*(CHAR|CLOB|TEXT|BLOB).*");
+    private static final Pattern FLOAT_TYPE = Pattern.compile(".*(REAL|FLOA|DOUB|DEC|NUM).*");
+    private static final int UNKNOWN_COLUMN_SIZE = 2_000_000_000;
+    private static final int DEFAULT_DECIMAL_DIGITS = 10;
 
     private final LibsqlConnection connection;
     private String cachedDatabaseProductVersion;
@@ -314,32 +331,150 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public ResultSet getColumns(String catalog, String schemaPattern, String tableNamePattern, String columnNamePattern) throws SQLException {
-        String sql = "SELECT NULL AS TABLE_CAT, NULL AS TABLE_SCHEM, m.name AS TABLE_NAME, p.name AS COLUMN_NAME, " +
-                "CASE UPPER(p.type) " +
-                "  WHEN 'INTEGER' THEN " + java.sql.Types.BIGINT + " " +
-                "  WHEN 'INT' THEN " + java.sql.Types.BIGINT + " " +
-                "  WHEN 'TEXT' THEN " + java.sql.Types.VARCHAR + " " +
-                "  WHEN 'BLOB' THEN " + java.sql.Types.BLOB + " " +
-                "  WHEN 'REAL' THEN " + java.sql.Types.DOUBLE + " " +
-                "  ELSE " + java.sql.Types.OTHER + " " +
-                "END AS DATA_TYPE, " +
-                "p.type AS TYPE_NAME, 0 AS COLUMN_SIZE, 0 AS BUFFER_LENGTH, 0 AS DECIMAL_DIGITS, 10 AS NUM_PREC_RADIX, " +
-                "CASE p.\"notnull\" WHEN 1 THEN 0 ELSE 1 END AS NULLABLE, " +
-                "NULL AS REMARKS, p.dflt_value AS COLUMN_DEF, 0 AS SQL_DATA_TYPE, 0 AS SQL_DATETIME_SUB, 0 AS CHAR_OCTET_LENGTH, " +
-                "p.cid + 1 AS ORDINAL_POSITION, " +
-                "CASE p.\"notnull\" WHEN 1 THEN 'NO' ELSE 'YES' END AS IS_NULLABLE, " +
-                "NULL AS SCOPE_CATALOG, NULL AS SCOPE_SCHEMA, NULL AS SCOPE_TABLE, NULL AS SOURCE_DATA_TYPE, 'NO' AS IS_AUTOINCREMENT, 'NO' AS IS_GENERATEDCOLUMN " +
-                "FROM sqlite_master m JOIN pragma_table_info(m.name) p " +
-                "WHERE 1=1";
-        if (tableNamePattern != null && !tableNamePattern.equals("%")) {
-            sql += " AND m.name LIKE '" + escapeLiteral(tableNamePattern) + "'";
-        }
-        if (columnNamePattern != null && !columnNamePattern.equals("%")) {
-            sql += " AND p.name LIKE '" + escapeLiteral(columnNamePattern) + "'";
-        }
-        sql += " ORDER BY TABLE_NAME, ORDINAL_POSITION";
-        return executeMetadataQuery(sql);
+        String tablePattern = tableNamePattern == null || tableNamePattern.isEmpty() ? "%" : tableNamePattern;
+        String columnPattern = columnNamePattern == null || columnNamePattern.isEmpty() ? "%" : columnNamePattern;
+        String sql = "SELECT m.name AS TABLE_NAME, m.sql AS CREATE_SQL, p.cid AS CID, p.name AS COLUMN_NAME, "
+                + "p.type AS DECLARED_TYPE, p.\"notnull\" AS NOT_NULL, p.dflt_value AS COLUMN_DEF, p.pk AS PK, "
+                + "p.hidden AS HIDDEN FROM sqlite_master m JOIN pragma_table_xinfo(m.name) p "
+                + "WHERE m.type IN ('table', 'view')"
+                + " AND m.name LIKE '" + escapeLiteral(tablePattern) + "' ESCAPE '\\'"
+                + " AND p.name LIKE '" + escapeLiteral(columnPattern) + "' ESCAPE '\\'"
+                + " ORDER BY m.name, p.cid";
+        return new LibsqlResultSet(null, columnsResult(connection.executeStatement(new Stmt(sql))));
     }
+
+    private static StmtResult columnsResult(StmtResult raw) {
+        List<Col> columns = List.of(
+                new Col("TABLE_CAT", "TEXT"),
+                new Col("TABLE_SCHEM", "TEXT"),
+                new Col("TABLE_NAME", "TEXT"),
+                new Col("COLUMN_NAME", "TEXT"),
+                new Col("DATA_TYPE", "INTEGER"),
+                new Col("TYPE_NAME", "TEXT"),
+                new Col("COLUMN_SIZE", "INTEGER"),
+                new Col("BUFFER_LENGTH", "INTEGER"),
+                new Col("DECIMAL_DIGITS", "INTEGER"),
+                new Col("NUM_PREC_RADIX", "INTEGER"),
+                new Col("NULLABLE", "INTEGER"),
+                new Col("REMARKS", "TEXT"),
+                new Col("COLUMN_DEF", "TEXT"),
+                new Col("SQL_DATA_TYPE", "INTEGER"),
+                new Col("SQL_DATETIME_SUB", "INTEGER"),
+                new Col("CHAR_OCTET_LENGTH", "INTEGER"),
+                new Col("ORDINAL_POSITION", "INTEGER"),
+                new Col("IS_NULLABLE", "TEXT"),
+                new Col("SCOPE_CATALOG", "TEXT"),
+                new Col("SCOPE_SCHEMA", "TEXT"),
+                new Col("SCOPE_TABLE", "TEXT"),
+                new Col("SOURCE_DATA_TYPE", "INTEGER"),
+                new Col("IS_AUTOINCREMENT", "TEXT"),
+                new Col("IS_GENERATEDCOLUMN", "TEXT"));
+        List<Row> rows = new ArrayList<>();
+        if (raw != null && raw.rows() != null) {
+            for (Row row : raw.rows()) {
+                List<Value> values = row.values();
+                String tableName = text(values.get(0));
+                String createSql = text(values.get(1));
+                long cid = integer(values.get(2));
+                String columnName = text(values.get(3));
+                String declaredType = text(values.get(4));
+                boolean notNull = integer(values.get(5)) != 0;
+                String columnDefault = text(values.get(6));
+                boolean primaryKey = integer(values.get(7)) != 0;
+                long hidden = integer(values.get(8));
+
+                ColumnShape shape = columnShape(declaredType);
+                boolean autoIncrement = primaryKey
+                        && LibsqlResultSetMetaData.isAutoIncrementColumn(createSql, columnName);
+                boolean generated = hidden == 2 || hidden == 3;
+
+                rows.add(new Row(List.of(
+                        Value.ofNull(),
+                        Value.ofNull(),
+                        Value.of(tableName),
+                        Value.of(columnName),
+                        Value.of(shape.jdbcType()),
+                        Value.of(shape.typeName()),
+                        Value.of(shape.columnSize()),
+                        Value.of(UNKNOWN_COLUMN_SIZE),
+                        Value.of(shape.decimalDigits()),
+                        Value.of(10),
+                        Value.of(notNull ? DatabaseMetaData.columnNoNulls : DatabaseMetaData.columnNullable),
+                        Value.ofNull(),
+                        Value.of(columnDefault),
+                        Value.of(0),
+                        Value.of(0),
+                        Value.of(UNKNOWN_COLUMN_SIZE),
+                        Value.of(cid + 1),
+                        Value.of(notNull ? "NO" : "YES"),
+                        Value.ofNull(),
+                        Value.ofNull(),
+                        Value.ofNull(),
+                        Value.ofNull(),
+                        Value.of(autoIncrement ? "YES" : "NO"),
+                        Value.of(generated ? "YES" : "NO"))));
+            }
+        }
+        return new StmtResult(columns, rows, 0, null);
+    }
+
+    private static ColumnShape columnShape(String declaredType) {
+        String typeName = declaredType == null ? "TEXT" : declaredType.toUpperCase(Locale.ENGLISH);
+        int jdbcType;
+        int decimalDigits = DEFAULT_DECIMAL_DIGITS;
+        if (INTEGER_TYPE.matcher(typeName).find()) {
+            jdbcType = Types.INTEGER;
+            decimalDigits = 0;
+        } else if (VARCHAR_TYPE.matcher(typeName).find()) {
+            jdbcType = Types.VARCHAR;
+            decimalDigits = 0;
+        } else if (FLOAT_TYPE.matcher(typeName).find()) {
+            jdbcType = Types.FLOAT;
+        } else {
+            jdbcType = Types.VARCHAR;
+        }
+
+        int columnSize = UNKNOWN_COLUMN_SIZE;
+        int startOfDimension = typeName.indexOf('(');
+        if (startOfDimension > 0) {
+            int endOfDimension = typeName.indexOf(')', startOfDimension);
+            if (endOfDimension > 0) {
+                int dimensionSeparator = typeName.indexOf(',', startOfDimension);
+                String integerPart;
+                String decimalPart;
+                if (dimensionSeparator > 0) {
+                    integerPart = typeName.substring(startOfDimension + 1, dimensionSeparator);
+                    decimalPart = typeName.substring(dimensionSeparator + 1, endOfDimension);
+                } else {
+                    integerPart = typeName.substring(startOfDimension + 1, endOfDimension);
+                    decimalPart = null;
+                }
+                try {
+                    int integerValue = Integer.parseUnsignedInt(integerPart.trim());
+                    if (decimalPart != null) {
+                        decimalDigits = Integer.parseUnsignedInt(decimalPart.trim());
+                        columnSize = integerValue + decimalDigits;
+                    } else {
+                        decimalDigits = 0;
+                        columnSize = integerValue;
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
+            typeName = typeName.substring(0, startOfDimension).trim();
+        }
+        return new ColumnShape(jdbcType, typeName, columnSize, decimalDigits);
+    }
+
+    private static String text(Value value) {
+        return value instanceof Value.Text text ? text.value() : null;
+    }
+
+    private static long integer(Value value) {
+        return value instanceof Value.Integer integer ? integer.value() : 0L;
+    }
+
+    private record ColumnShape(int jdbcType, String typeName, int columnSize, int decimalDigits) {}
 
     @Override
     public ResultSet getPrimaryKeys(String catalog, String schema, String table) throws SQLException {
