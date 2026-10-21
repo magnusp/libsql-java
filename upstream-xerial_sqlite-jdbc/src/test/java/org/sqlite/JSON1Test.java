@@ -6,6 +6,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -15,8 +16,18 @@ import org.junit.jupiter.api.Test;
  */
 public class JSON1Test {
 
+    private Connection connection;
+
     public Connection getConnection() throws SQLException {
-        return DriverManager.getConnection("jdbc:sqlite::memory:");
+        connection = DriverManager.getConnection("jdbc:sqlite::memory:");
+        return connection;
+    }
+
+    @AfterEach
+    public void closeConnection() throws SQLException {
+        if (connection != null) {
+            connection.close();
+        }
     }
 
     @Test

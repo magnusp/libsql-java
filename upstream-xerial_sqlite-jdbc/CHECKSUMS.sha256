@@ -11,13 +11,13 @@ a0670cf020edf700524c43c85321c2ba027a8bace5682001db60875d4a9fe52b  ./NOTICE
 # upstream 0a60829ce6edd56de46fb87303401c5c1e1e666da5631056340f5c5ce902dcdf ./VERSION
 0a60829ce6edd56de46fb87303401c5c1e1e666da5631056340f5c5ce902dcdf  ./VERSION
 # upstream 1351fdca2644e90ac9028ed99c6096c9ecee82ccb7d45cedd9bb454887fd2c6b ./src/test/java/org/sqlite/CachedRowSetTest.java
-1351fdca2644e90ac9028ed99c6096c9ecee82ccb7d45cedd9bb454887fd2c6b  ./src/test/java/org/sqlite/CachedRowSetTest.java
+9e896e20522e4c5f4bc786ad7f8c5b6765428ad531fc0c07130b5f0beb81756f  ./src/test/java/org/sqlite/CachedRowSetTest.java
 # upstream 9fb0f2df7de66cac0a46b241c0c1cd3311a80646d0431d377097741b99053760 ./src/test/java/org/sqlite/FetchSizeTest.java
 9fb0f2df7de66cac0a46b241c0c1cd3311a80646d0431d377097741b99053760  ./src/test/java/org/sqlite/FetchSizeTest.java
 # upstream 6dfcecb209e01829ba0aea782b47351443e3970ad1d33ac4c3fb979e6dff1f40 ./src/test/java/org/sqlite/InsertQueryTest.java
 6dfcecb209e01829ba0aea782b47351443e3970ad1d33ac4c3fb979e6dff1f40  ./src/test/java/org/sqlite/InsertQueryTest.java
 # upstream bb07398946480ca44c70d03e6f8c399f53506b44c83a312e2d28aebd239c0238 ./src/test/java/org/sqlite/JSON1Test.java
-bb07398946480ca44c70d03e6f8c399f53506b44c83a312e2d28aebd239c0238  ./src/test/java/org/sqlite/JSON1Test.java
+075745907a5174b922db6a45b9c29f45901af1835af27a0014f5fac835b41d0f  ./src/test/java/org/sqlite/JSON1Test.java
 # upstream 242bb51330240174bab5f443aa4d8de1049e6d947374e080a636c4aa4d0049ee ./src/test/java/org/sqlite/MetadataLeakTest.java
 242bb51330240174bab5f443aa4d8de1049e6d947374e080a636c4aa4d0049ee  ./src/test/java/org/sqlite/MetadataLeakTest.java
 # upstream 7af8ae0999a0bf26a20c96ab23131505bd79827e6af17742771e36e9d8d985f4 ./src/test/java/org/sqlite/PreparedStatementThreadTest.java

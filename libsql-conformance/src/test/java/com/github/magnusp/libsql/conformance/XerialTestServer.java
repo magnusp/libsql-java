@@ -21,9 +21,19 @@ public final class XerialTestServer {
     private static final int HTTP_PORT = 8080;
     private static final int ADMIN_PORT = 9090;
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(30);
+    private static final int DELETE_ATTEMPTS = 3;
+    private static final Duration DELETE_RETRY_DELAY = Duration.ofMillis(100);
 
     private static final HttpClient HTTP = HttpClient.newHttpClient();
+    private static final AdminClient DEFAULT_ADMIN =
+            request -> {
+                HttpResponse<String> response =
+                        HTTP.send(request, HttpResponse.BodyHandlers.ofString());
+                return new AdminResponse(response.statusCode(), response.body());
+            };
     private static final Map<String, Integer> NAMESPACES = new ConcurrentHashMap<>();
+    private static final Map<String, RuntimeException> FAILED_NAMESPACES =
+            new ConcurrentHashMap<>();
 
     private static GenericContainer<?> container;
     private static String httpBaseUrl;
@@ -83,6 +93,7 @@ public final class XerialTestServer {
             httpBaseUrl = null;
             adminBaseUrl = null;
             NAMESPACES.clear();
+            FAILED_NAMESPACES.clear();
         }
     }
 
@@ -93,6 +104,11 @@ public final class XerialTestServer {
     }
 
     public static synchronized void releaseNamespace(String namespace) {
+        releaseNamespace(namespace, adminBaseUrl, DEFAULT_ADMIN);
+    }
+
+    static synchronized void releaseNamespace(
+            String namespace, String adminUrl, AdminClient admin) {
         int active = NAMESPACES.getOrDefault(namespace, 0);
         if (active == 0) {
             return;
@@ -102,23 +118,15 @@ public final class XerialTestServer {
             return;
         }
         NAMESPACES.remove(namespace);
-        if (container == null) {
+        if (adminUrl == null) {
             return;
         }
 
-        HttpRequest request =
-                HttpRequest.newBuilder()
-                        .uri(URI.create(adminBaseUrl + "/v1/namespaces/" + namespace))
-                        .timeout(REQUEST_TIMEOUT)
-                        .DELETE()
-                        .build();
-
         try {
-            HTTP.send(request, HttpResponse.BodyHandlers.ofString());
-        } catch (IOException e) {
-            return;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+            deleteNamespace(namespace, adminUrl, admin);
+        } catch (RuntimeException e) {
+            FAILED_NAMESPACES.put(namespace, e);
+            throw e;
         }
     }
 
@@ -126,24 +134,44 @@ public final class XerialTestServer {
         return status == 405 || (status >= 200 && status < 300);
     }
 
-    private static synchronized void ensureNamespace(String namespace) {
+    static synchronized void ensureNamespace(String namespace) {
+        ensureNamespace(namespace, adminBaseUrl, DEFAULT_ADMIN);
+    }
+
+    static synchronized void ensureNamespace(
+            String namespace, String adminUrl, AdminClient admin) {
+        RuntimeException failed = FAILED_NAMESPACES.get(namespace);
+        if (failed != null) {
+            throw new IllegalStateException(
+                    "Namespace "
+                            + namespace
+                            + " cannot be reused because an earlier cleanup failed",
+                    failed);
+        }
+
         int active = NAMESPACES.getOrDefault(namespace, 0);
         if (active > 0) {
             NAMESPACES.put(namespace, active + 1);
             return;
         }
 
+        if (adminUrl == null) {
+            throw new IllegalStateException("libSQL server is not running");
+        }
+
         HttpRequest request =
                 HttpRequest.newBuilder()
-                        .uri(URI.create(adminBaseUrl + "/v1/namespaces/" + namespace + "/create"))
+                        .uri(
+                                URI.create(
+                                        adminUrl + "/v1/namespaces/" + namespace + "/create"))
                         .header("Content-Type", "application/json")
                         .timeout(REQUEST_TIMEOUT)
                         .POST(HttpRequest.BodyPublishers.ofString("{}"))
                         .build();
 
-        HttpResponse<String> response;
+        AdminResponse response;
         try {
-            response = HTTP.send(request, HttpResponse.BodyHandlers.ofString());
+            response = admin.send(request);
         } catch (IOException e) {
             throw new IllegalStateException("Failed to create namespace " + namespace, e);
         } catch (InterruptedException e) {
@@ -152,16 +180,101 @@ public final class XerialTestServer {
                     "Interrupted while creating namespace " + namespace, e);
         }
 
-        if (response.statusCode() != 200 && response.statusCode() != 409) {
-            throw new IllegalStateException(
-                    "Failed to create namespace "
-                            + namespace
-                            + ": HTTP "
-                            + response.statusCode()
-                            + " "
-                            + response.body());
+        int status = response.status();
+        if (status >= 200 && status < 300) {
+            NAMESPACES.put(namespace, 1);
+            return;
         }
 
-        NAMESPACES.put(namespace, 1);
+        IllegalStateException failure =
+                new IllegalStateException(
+                        "Failed to create namespace "
+                                + namespace
+                                + ": HTTP "
+                                + status
+                                + " "
+                                + response.body());
+        if (status == 409) {
+            failure =
+                    new IllegalStateException(
+                            "Namespace "
+                                    + namespace
+                                    + " already exists and cannot be reused: HTTP "
+                                    + status
+                                    + " "
+                                    + response.body());
+            FAILED_NAMESPACES.put(namespace, failure);
+        }
+        throw failure;
+    }
+
+    private static void deleteNamespace(
+            String namespace, String adminUrl, AdminClient admin) {
+        HttpRequest request =
+                HttpRequest.newBuilder()
+                        .uri(URI.create(adminUrl + "/v1/namespaces/" + namespace))
+                        .timeout(REQUEST_TIMEOUT)
+                        .DELETE()
+                        .build();
+
+        RuntimeException failure = null;
+        for (int attempt = 1; attempt <= DELETE_ATTEMPTS; attempt++) {
+            try {
+                AdminResponse response = admin.send(request);
+                int status = response.status();
+                if ((status >= 200 && status < 300) || status == 404) {
+                    return;
+                }
+                failure =
+                        new IllegalStateException(
+                                "Failed to delete namespace "
+                                        + namespace
+                                        + ": HTTP "
+                                        + status
+                                        + " "
+                                        + response.body());
+                if (!isRetryable(status) || attempt == DELETE_ATTEMPTS) {
+                    break;
+                }
+            } catch (IOException e) {
+                failure =
+                        new IllegalStateException(
+                                "Failed to delete namespace " + namespace, e);
+                if (attempt == DELETE_ATTEMPTS) {
+                    break;
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(
+                        "Interrupted while deleting namespace " + namespace, e);
+            }
+
+            sleepBeforeRetry(namespace, failure);
+        }
+        throw failure;
+    }
+
+    @FunctionalInterface
+    interface AdminClient {
+        AdminResponse send(HttpRequest request) throws IOException, InterruptedException;
+    }
+
+    record AdminResponse(int status, String body) {}
+
+    private static boolean isRetryable(int status) {
+        return status == 408 || status == 429 || status >= 500;
+    }
+
+    private static void sleepBeforeRetry(String namespace, RuntimeException failure) {
+        try {
+            Thread.sleep(DELETE_RETRY_DELAY.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            IllegalStateException interrupted =
+                    new IllegalStateException(
+                            "Interrupted while deleting namespace " + namespace, e);
+            interrupted.addSuppressed(failure);
+            throw interrupted;
+        }
     }
 }

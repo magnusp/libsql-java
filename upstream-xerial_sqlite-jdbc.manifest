@@ -27,3 +27,9 @@ LICENSE
 LICENSE.zentus
 NOTICE
 VERSION
+
+# Deliberate divergences. libSQL's Hrana transport releases a sqld namespace
+# when its last connection closes, so the conformance tests must close every
+# connection they open; leaving one open leaks the namespace for the whole run.
+# divergence: src/test/java/org/sqlite/JSON1Test.java -- Hrana holds a namespace until its last connection closes, so the conformance copy closes the leaked per-test connections.
+# divergence: src/test/java/org/sqlite/CachedRowSetTest.java -- Hrana holds a namespace until its last connection closes, so the conformance copy closes the leaked connection.

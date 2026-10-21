@@ -15,6 +15,8 @@ import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.util.Properties;
 import java.util.UUID;
+import java.util.concurrent.Executor;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 public final class XerialConformanceDriver implements Driver {
@@ -43,7 +45,7 @@ public final class XerialConformanceDriver implements Driver {
         try {
             connection = delegate.connect(target.url(), info);
         } catch (SQLException e) {
-            XerialTestServer.releaseNamespace(target.namespace());
+            releaseAfterConnectFailure(target.namespace(), e);
             throw e;
         }
         if (connection == null) {
@@ -57,7 +59,11 @@ public final class XerialConformanceDriver implements Driver {
                             new Class<?>[] {Connection.class},
                             new NamespaceClosingHandler(connection, target.namespace()));
         } catch (RuntimeException e) {
-            XerialTestServer.releaseNamespace(target.namespace());
+            try {
+                XerialTestServer.releaseNamespace(target.namespace());
+            } catch (RuntimeException cleanup) {
+                e.addSuppressed(cleanup);
+            }
             throw e;
         }
     }
@@ -95,6 +101,14 @@ public final class XerialConformanceDriver implements Driver {
         return delegate.getParentLogger();
     }
 
+    private static void releaseAfterConnectFailure(String namespace, SQLException failure) {
+        try {
+            XerialTestServer.releaseNamespace(namespace);
+        } catch (RuntimeException cleanup) {
+            failure.addSuppressed(cleanup);
+        }
+    }
+
     private static Target rewrite(String url) {
         String target = url.substring(PREFIX.length());
         String namespace;
@@ -112,15 +126,22 @@ public final class XerialConformanceDriver implements Driver {
 
     private record Target(String url, String namespace) {}
 
-    private static final class NamespaceClosingHandler implements InvocationHandler {
+    static final class NamespaceClosingHandler implements InvocationHandler {
 
         private final Connection connection;
         private final String namespace;
+        private final Consumer<String> release;
         private boolean closed;
 
-        private NamespaceClosingHandler(Connection connection, String namespace) {
+        NamespaceClosingHandler(Connection connection, String namespace) {
+            this(connection, namespace, XerialTestServer::releaseNamespace);
+        }
+
+        NamespaceClosingHandler(
+                Connection connection, String namespace, Consumer<String> release) {
             this.connection = connection;
             this.namespace = namespace;
+            this.release = release;
         }
 
         @Override
@@ -128,6 +149,16 @@ public final class XerialConformanceDriver implements Driver {
             if ("close".equals(method.getName()) && method.getParameterCount() == 0) {
                 close();
                 return null;
+            }
+            if ("abort".equals(method.getName()) && method.getParameterCount() == 1) {
+                abort((Executor) args[0]);
+                return null;
+            }
+            if ("unwrap".equals(method.getName()) && method.getParameterCount() == 1) {
+                Class<?> iface = (Class<?>) args[0];
+                if (iface != null && iface.isInstance(proxy)) {
+                    return proxy;
+                }
             }
             try {
                 return method.invoke(connection, args);
@@ -143,8 +174,42 @@ public final class XerialConformanceDriver implements Driver {
             closed = true;
             try {
                 connection.close();
-            } finally {
-                XerialTestServer.releaseNamespace(namespace);
+            } catch (SQLException e) {
+                releaseWithSuppressed(e);
+                throw e;
+            } catch (RuntimeException e) {
+                releaseWithSuppressed(e);
+                throw e;
+            }
+            releaseNamespace();
+        }
+
+        private synchronized void abort(Executor executor) throws SQLException {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            try {
+                connection.abort(executor);
+            } catch (SQLException e) {
+                releaseWithSuppressed(e);
+                throw e;
+            } catch (RuntimeException e) {
+                releaseWithSuppressed(e);
+                throw e;
+            }
+            releaseNamespace();
+        }
+
+        private void releaseNamespace() {
+            release.accept(namespace);
+        }
+
+        private void releaseWithSuppressed(Throwable failure) {
+            try {
+                releaseNamespace();
+            } catch (RuntimeException cleanup) {
+                failure.addSuppressed(cleanup);
             }
         }
     }
