@@ -13,15 +13,16 @@ public class CachedRowSetTest {
 
     @Test
     public void gh_224() throws SQLException {
-        Connection connection = DriverManager.getConnection("jdbc:sqlite:");
-        try (Statement statement = connection.createStatement()) {
-            statement.execute("create table person (id INTEGER, name VARCHAR(50))");
-            statement.execute("insert into person values(1, 'leo')");
-        }
-        RowSetFactory factory = RowSetProvider.newFactory();
-        try (CachedRowSet crs = factory.createCachedRowSet()) {
-            crs.setCommand("select * from person");
-            crs.execute(connection);
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:")) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("create table person (id INTEGER, name VARCHAR(50))");
+                statement.execute("insert into person values(1, 'leo')");
+            }
+            RowSetFactory factory = RowSetProvider.newFactory();
+            try (CachedRowSet crs = factory.createCachedRowSet()) {
+                crs.setCommand("select * from person");
+                crs.execute(connection);
+            }
         }
     }
 }
