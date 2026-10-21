@@ -29,11 +29,14 @@ mise exec -- ./mvnw -version
 
 ```text
 libsql-java/
-├── libsql-hrana-codec/       # Core protocol data structures & DirectHranaJsonCodec
-├── libsql-client/            # Low-level HTTP transport, baton state management, pipeline queue
-├── libsql-jdbc/              # Standard JDBC 4.3 driver (java.sql.* implementation)
-├── libsql-itests/            # Testcontainers (sqld) and Toxiproxy integration tests
-└── vendor/                   # Upstream specifications and documentation (Hrana v3, sqld)
+├── libsql-hrana-codec/         # Core protocol data structures & DirectHranaJsonCodec
+├── libsql-client/              # Low-level HTTP transport, baton state management, pipeline queue
+├── libsql-jdbc/                # Standard JDBC 4.3 driver (java.sql.* implementation)
+├── libsql-itests/              # Testcontainers (sqld) and Toxiproxy integration tests
+├── libsql-conformance/         # Selected xerial/sqlite-jdbc tests running against libSQL
+├── tools/                      # Maintainer scripts such as export-upstream
+├── upstream-xerial_sqlite-jdbc/  # Vendored xerial/sqlite-jdbc sources for conformance tests
+└── vendor/                     # Upstream specifications and documentation (Hrana v3, sqld)
 ```
 
 ### Module Guidelines
@@ -84,6 +87,31 @@ To run a specific test:
 ```bash
 mise exec -- ./mvnw -pl libsql-itests -Dtest=HikariCpIntegrationIT test
 ```
+
+### nono Sandbox and Docker Config
+
+This environment may run inside a `nono` filesystem sandbox. The sandbox can block reads of `~/.docker/config.json` even when `docker info` works. Testcontainers then fails with:
+
+```text
+ServiceConfigurationError: ... EnvironmentAndSystemPropertyClientProviderStrategy could not be instantiated
+Caused by: java.io.FileNotFoundException: /home/<user>/.docker/config.json (Permission denied)
+```
+
+Detect the sandbox with `nono status`, or check the exact path with:
+
+```bash
+nono why --self --path ~/.docker/config.json --op read
+```
+
+Do not change file permissions or the nono profile from inside the sandbox. `libsql-conformance` uses a readable Docker config automatically. It copies `src/test/docker-config/config.json` to `target/docker-config` and sets `DOCKER_CONFIG` for the Failsafe fork. Use that empty auth config only for public images.
+
+To use a readable copy of your real Docker config, override the module property:
+
+```bash
+./mvnw -pl libsql-conformance -am -Ddocker.config.dir=/path/to/docker-config verify
+```
+
+Setting `DOCKER_CONFIG` in the shell is not enough by itself because the Failsafe fork receives its own value from `docker.config.dir`.
 
 ---
 

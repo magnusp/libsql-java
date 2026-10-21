@@ -24,6 +24,10 @@ import java.sql.SQLXML;
 import java.sql.Statement;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeParseException;
 import java.util.Calendar;
 import java.util.HashMap;
 import java.util.List;
@@ -35,17 +39,30 @@ public class LibsqlResultSet implements ResultSet {
     private final Statement statement;
     private final List<Col> cols;
     private final List<Row> rows;
+    private final String sql;
+    private final LibsqlConnection connection;
+    private final boolean closeStatementOnClose;
     private int currentRowIndex = -1;
     private boolean wasNull = false;
     private boolean closed = false;
+    private LibsqlResultSetMetaData metadata;
 
     // Mitigation for Bug 6: O(1) column label lookup
     private Map<String, Integer> columnNameToIndex;
 
     public LibsqlResultSet(Statement statement, StmtResult result) {
+        this(statement, result, null, false);
+    }
+
+    LibsqlResultSet(Statement statement, StmtResult result, String sql, boolean closeStatementOnClose) {
         this.statement = statement;
         this.cols = (result != null && result.cols() != null) ? result.cols() : List.of();
         this.rows = (result != null && result.rows() != null) ? result.rows() : List.of();
+        this.sql = sql;
+        this.connection = statement instanceof LibsqlStatement libsqlStatement
+                ? libsqlStatement.connection
+                : null;
+        this.closeStatementOnClose = closeStatementOnClose;
     }
 
     private void checkClosed() throws SQLException {
@@ -77,7 +94,15 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public void close() throws SQLException {
+        if (closed) {
+            return;
+        }
         this.closed = true;
+        if (statement != null
+                && (closeStatementOnClose
+                        || (statement instanceof LibsqlStatement s && s.isCloseOnCompletion()))) {
+            statement.close();
+        }
     }
 
     @Override
@@ -122,7 +147,20 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public int getInt(int columnIndex) throws SQLException {
-        return (int) getLong(columnIndex);
+        Value val = getCurrentValue(columnIndex);
+        return switch (val) {
+            case Value.Null n -> 0;
+            case Value.Integer i -> (int) i.value();
+            case Value.Float f -> (int) f.value();
+            case Value.Text t -> {
+                try {
+                    yield Integer.parseInt(t.value());
+                } catch (NumberFormatException e) {
+                    throw new SQLException("Bad value for type Integer: " + t.value(), e);
+                }
+            }
+            case Value.Blob b -> 0;
+        };
     }
 
     @Override
@@ -136,7 +174,7 @@ public class LibsqlResultSet implements ResultSet {
                 try {
                     yield Long.parseLong(t.value());
                 } catch (NumberFormatException e) {
-                    yield 0L;
+                    throw new SQLException("Bad value for type Long: " + t.value(), e);
                 }
             }
             case Value.Blob b -> 0L;
@@ -145,7 +183,20 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public float getFloat(int columnIndex) throws SQLException {
-        return (float) getDouble(columnIndex);
+        Value val = getCurrentValue(columnIndex);
+        return switch (val) {
+            case Value.Null n -> 0.0F;
+            case Value.Integer i -> (float) i.value();
+            case Value.Float f -> (float) f.value();
+            case Value.Text t -> {
+                try {
+                    yield Float.parseFloat(t.value());
+                } catch (NumberFormatException e) {
+                    throw new SQLException("Bad value for type Float: " + t.value(), e);
+                }
+            }
+            case Value.Blob b -> 0.0F;
+        };
     }
 
     @Override
@@ -159,7 +210,7 @@ public class LibsqlResultSet implements ResultSet {
                 try {
                     yield Double.parseDouble(t.value());
                 } catch (NumberFormatException e) {
-                    yield 0.0;
+                    throw new SQLException("Bad value for type Double: " + t.value(), e);
                 }
             }
             case Value.Blob b -> 0.0;
@@ -229,7 +280,14 @@ public class LibsqlResultSet implements ResultSet {
     @Override
     public BigDecimal getBigDecimal(int columnIndex) throws SQLException {
         String s = getString(columnIndex);
-        return s == null ? null : new BigDecimal(s);
+        if (s == null) {
+            return null;
+        }
+        try {
+            return new BigDecimal(s);
+        } catch (NumberFormatException e) {
+            throw new SQLException("Bad value for type BigDecimal: " + s, e);
+        }
     }
 
     @Override
@@ -237,7 +295,9 @@ public class LibsqlResultSet implements ResultSet {
         Value val = getCurrentValue(columnIndex);
         return switch (val) {
             case Value.Null n -> null;
-            case Value.Integer i -> i.value();
+            case Value.Integer i -> i.value() >= Integer.MIN_VALUE && i.value() <= Integer.MAX_VALUE
+                    ? (Object) (int) i.value()
+                    : (Object) i.value();
             case Value.Float f -> f.value();
             case Value.Text t -> t.value();
             case Value.Blob b -> b.bytes();
@@ -343,7 +403,10 @@ public class LibsqlResultSet implements ResultSet {
     @Override
     public ResultSetMetaData getMetaData() throws SQLException {
         checkClosed();
-        return new LibsqlResultSetMetaData(cols);
+        if (metadata == null) {
+            metadata = new LibsqlResultSetMetaData(cols, rows, sql, connection);
+        }
+        return metadata;
     }
 
     @Override
@@ -537,10 +600,109 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public <T> T getObject(int columnIndex, Class<T> type) throws SQLException {
+        if (type == null) {
+            throw new SQLException("Type must not be null");
+        }
         Object val = getObject(columnIndex);
-        if (val == null) return null;
-        if (type.isInstance(val)) return type.cast(val);
-        throw new SQLException("Cannot convert value of type " + val.getClass() + " to " + type);
+        if (val == null) {
+            return null;
+        }
+        if (type.isInstance(val)) {
+            return type.cast(val);
+        }
+        if (type == String.class) {
+            return type.cast(getString(columnIndex));
+        }
+        if (type == Boolean.class) {
+            return type.cast(getBoolean(columnIndex));
+        }
+        if (type == BigDecimal.class) {
+            return type.cast(getBigDecimal(columnIndex));
+        }
+        if (type == byte[].class) {
+            return type.cast(getBytes(columnIndex));
+        }
+        if (type == Double.class) {
+            return type.cast(getDouble(columnIndex));
+        }
+        if (type == Long.class) {
+            return type.cast(getLong(columnIndex));
+        }
+        if (type == Float.class) {
+            return type.cast(getFloat(columnIndex));
+        }
+        if (type == Integer.class) {
+            return type.cast(getInt(columnIndex));
+        }
+        if (type == Short.class) {
+            return type.cast(getShort(columnIndex));
+        }
+        if (type == Byte.class) {
+            return type.cast(getByte(columnIndex));
+        }
+        if (type == Date.class) {
+            return type.cast(getDate(columnIndex));
+        }
+        if (type == Time.class) {
+            return type.cast(getTime(columnIndex));
+        }
+        if (type == Timestamp.class) {
+            return type.cast(getTimestamp(columnIndex));
+        }
+        if (type == LocalDate.class) {
+            return type.cast(getLocalDate(columnIndex));
+        }
+        if (type == LocalTime.class) {
+            return type.cast(getLocalTime(columnIndex));
+        }
+        if (type == LocalDateTime.class) {
+            return type.cast(getLocalDateTime(columnIndex));
+        }
+        throw new SQLException(
+                "Cannot convert value of type " + val.getClass() + " to " + type.getName());
+    }
+
+    private LocalDate getLocalDate(int columnIndex) throws SQLException {
+        String s = getString(columnIndex);
+        if (s == null) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(s.length() >= 10 ? s.substring(0, 10) : s);
+        } catch (DateTimeParseException e) {
+            throw new SQLException("Bad value for type LocalDate: " + s, e);
+        }
+    }
+
+    private LocalTime getLocalTime(int columnIndex) throws SQLException {
+        String s = getString(columnIndex);
+        if (s == null) {
+            return null;
+        }
+        int separator = Math.max(s.indexOf(' '), s.indexOf('T'));
+        String value = separator >= 0 ? s.substring(separator + 1) : s;
+        try {
+            return LocalTime.parse(value);
+        } catch (DateTimeParseException e) {
+            throw new SQLException("Bad value for type LocalTime: " + s, e);
+        }
+    }
+
+    private LocalDateTime getLocalDateTime(int columnIndex) throws SQLException {
+        String s = getString(columnIndex);
+        if (s == null) {
+            return null;
+        }
+        String value = s.indexOf(' ') >= 0 ? s.replace(' ', 'T') : s;
+        try {
+            return LocalDateTime.parse(value);
+        } catch (DateTimeParseException e) {
+            try {
+                return LocalDate.parse(value).atStartOfDay();
+            } catch (DateTimeParseException e2) {
+                throw new SQLException("Bad value for type LocalDateTime: " + s, e2);
+            }
+        }
     }
 
     @Override

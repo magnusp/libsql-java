@@ -1,0 +1,2 @@
+# Keep the vendored upstream tree byte-identical; export-upstream checksums it.
+upstream-xerial_sqlite-jdbc/** -text whitespace=cr-at-eol,-blank-at-eol,-blank-at-eof

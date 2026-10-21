@@ -1,0 +1,19 @@
+# First conformance batch.
+src/test/java/org/sqlite/Utils.java
+src/test/java/org/sqlite/ResultSetTest.java
+src/test/java/org/sqlite/InsertQueryTest.java
+src/test/java/org/sqlite/FetchSizeTest.java
+src/test/java/org/sqlite/TypeMapTest.java
+src/test/java/org/sqlite/CachedRowSetTest.java
+
+# Second batch: metadata, JSON, threading, and empty result sets.
+src/test/java/org/sqlite/JSON1Test.java
+src/test/java/org/sqlite/MetadataLeakTest.java
+src/test/java/org/sqlite/PreparedStatementThreadTest.java
+src/test/java/org/sqlite/ResultSetWithoutResultsTest.java
+src/test/java/org/sqlite/RSMetaDataTest.java
+
+LICENSE
+LICENSE.zentus
+NOTICE
+VERSION
