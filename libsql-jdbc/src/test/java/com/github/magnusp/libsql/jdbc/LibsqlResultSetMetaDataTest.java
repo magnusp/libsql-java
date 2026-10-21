@@ -72,6 +72,28 @@ class LibsqlResultSetMetaDataTest {
     }
 
     @Test
+    void ignoresAutoIncrementInsideStringLiterals() throws SQLException {
+        String createSql = "CREATE TABLE People (id INTEGER PRIMARY KEY, note TEXT DEFAULT 'AUTOINCREMENT')";
+        StmtResult tableRows = new StmtResult(
+                List.of(),
+                List.of(new Row(List.of(
+                        Value.of("People"),
+                        Value.of(createSql),
+                        Value.of("id"),
+                        Value.of(0L),
+                        Value.of(1L)))),
+                0,
+                null);
+        LibsqlResultSetMetaData metadata = new LibsqlResultSetMetaData(
+                List.of(new Col("id", "INTEGER")),
+                List.of(),
+                "SELECT id FROM main.People",
+                connectionReturning(tableRows));
+
+        assertThat(metadata.isAutoIncrement(1)).isFalse();
+    }
+
+    @Test
     void usesFirstNonNullValueForIntegerTypeAndClass() throws SQLException {
         LibsqlResultSetMetaData metadata = new LibsqlResultSetMetaData(
                 List.of(new Col("wide", "INTEGER"), new Col("narrow", "INTEGER")),
