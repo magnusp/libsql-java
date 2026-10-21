@@ -148,6 +148,101 @@ class LibsqlResultSetMetaDataTest {
     }
 
     @Test
+    void usesRuntimeStorageClassForDeclaredTypes() throws SQLException {
+        StmtResult result = new StmtResult(
+                List.of(
+                        new Col("bi", "BIGINT"),
+                        new Col("bo", "BOOLEAN"),
+                        new Col("num", "NUMERIC"),
+                        new Col("dec", "DECIMAL")),
+                List.of(new Row(List.of(Value.of(1.5), Value.of("true"), Value.of(7L), Value.of(8L)))),
+                0,
+                null);
+        LibsqlResultSet resultSet = new LibsqlResultSet(null, result);
+        ResultSetMetaData metadata = resultSet.getMetaData();
+
+        assertRuntimeTypes(metadata);
+
+        assertThat(resultSet.next()).isTrue();
+        assertRuntimeTypes(metadata);
+    }
+
+    @Test
+    void usesDeclaredTypesWhenRuntimeValueIsNull() throws SQLException {
+        StmtResult result = new StmtResult(
+                List.of(
+                        new Col("bi", "BIGINT"),
+                        new Col("bo", "BOOLEAN"),
+                        new Col("num", "NUMERIC"),
+                        new Col("dec", "DECIMAL")),
+                List.of(new Row(List.of(Value.ofNull(), Value.ofNull(), Value.ofNull(), Value.ofNull()))),
+                0,
+                null);
+        LibsqlResultSet resultSet = new LibsqlResultSet(null, result);
+        ResultSetMetaData metadata = resultSet.getMetaData();
+
+        assertDeclaredTypes(metadata);
+
+        assertThat(resultSet.next()).isTrue();
+        assertDeclaredTypes(metadata);
+    }
+
+    @Test
+    void usesDeclaredTypesForEmptyResultSet() throws SQLException {
+        StmtResult result = new StmtResult(
+                List.of(
+                        new Col("bi", "BIGINT"),
+                        new Col("bo", "BOOLEAN"),
+                        new Col("num", "NUMERIC"),
+                        new Col("dec", "DECIMAL")),
+                List.of(),
+                0,
+                null);
+        LibsqlResultSet resultSet = new LibsqlResultSet(null, result);
+        ResultSetMetaData metadata = resultSet.getMetaData();
+
+        assertDeclaredTypes(metadata);
+        assertThat(resultSet.next()).isFalse();
+        assertDeclaredTypes(metadata);
+    }
+
+    @Test
+    void reflectsStorageClassChangesBetweenRows() throws SQLException {
+        StmtResult result = new StmtResult(
+                List.of(new Col("bi", "BIGINT")),
+                List.of(new Row(List.of(Value.of(1.5))), new Row(List.of(Value.of(2L)))),
+                0,
+                null);
+        LibsqlResultSet resultSet = new LibsqlResultSet(null, result);
+        ResultSetMetaData metadata = resultSet.getMetaData();
+
+        assertThat(metadata.getColumnType(1)).isEqualTo(Types.FLOAT);
+
+        assertThat(resultSet.next()).isTrue();
+        assertThat(metadata.getColumnType(1)).isEqualTo(Types.FLOAT);
+
+        assertThat(resultSet.next()).isTrue();
+        assertThat(metadata.getColumnType(1)).isEqualTo(Types.BIGINT);
+
+        assertThat(resultSet.next()).isFalse();
+        assertThat(metadata.getColumnType(1)).isEqualTo(Types.BIGINT);
+    }
+
+    private static void assertRuntimeTypes(ResultSetMetaData metadata) throws SQLException {
+        assertThat(metadata.getColumnType(1)).isEqualTo(Types.FLOAT);
+        assertThat(metadata.getColumnType(2)).isEqualTo(Types.VARCHAR);
+        assertThat(metadata.getColumnType(3)).isEqualTo(Types.INTEGER);
+        assertThat(metadata.getColumnType(4)).isEqualTo(Types.INTEGER);
+    }
+
+    private static void assertDeclaredTypes(ResultSetMetaData metadata) throws SQLException {
+        assertThat(metadata.getColumnType(1)).isEqualTo(Types.BIGINT);
+        assertThat(metadata.getColumnType(2)).isEqualTo(Types.BOOLEAN);
+        assertThat(metadata.getColumnType(3)).isEqualTo(Types.NUMERIC);
+        assertThat(metadata.getColumnType(4)).isEqualTo(Types.DECIMAL);
+    }
+
+    @Test
     void leavesAmbiguousTableContextUnknown() throws SQLException {
         LibsqlResultSetMetaData metadata = new LibsqlResultSetMetaData(
                 List.of(new Col("id", "INTEGER")),
