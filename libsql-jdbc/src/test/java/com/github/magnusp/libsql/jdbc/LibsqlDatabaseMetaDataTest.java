@@ -1,12 +1,16 @@
 package com.github.magnusp.libsql.jdbc;
 
 import com.github.magnusp.libsql.hrana.codec.Col;
+import com.github.magnusp.libsql.hrana.codec.Row;
 import com.github.magnusp.libsql.hrana.codec.Stmt;
 import com.github.magnusp.libsql.hrana.codec.StmtResult;
+import com.github.magnusp.libsql.hrana.codec.Value;
 import org.junit.jupiter.api.Test;
 
+import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -116,8 +120,107 @@ class LibsqlDatabaseMetaDataTest {
         assertThat(connection.lastSql).contains("TABLE_NAME LIKE '%'");
     }
 
+    @Test
+    void getColumnsReportsDeclaredTypesSizesNullabilityAndAutoIncrement() throws SQLException {
+        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new StmtResultConnection(columnMetadataRows()));
+
+        try (ResultSet rs = metadata.getColumns(null, null, "c", null)) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("TABLE_NAME")).isEqualTo("c");
+            assertThat(rs.getString("COLUMN_NAME")).isEqualTo("i");
+            assertThat(rs.getInt("DATA_TYPE")).isEqualTo(Types.INTEGER);
+            assertThat(rs.getString("TYPE_NAME")).isEqualTo("INTEGER");
+            assertThat(rs.getInt("COLUMN_SIZE")).isEqualTo(2_000_000_000);
+            assertThat(rs.getInt("DECIMAL_DIGITS")).isZero();
+            assertThat(rs.getInt("NULLABLE")).isEqualTo(DatabaseMetaData.columnNullable);
+            assertThat(rs.getString("IS_NULLABLE")).isEqualTo("YES");
+            assertThat(rs.getString("IS_AUTOINCREMENT")).isEqualTo("NO");
+            assertThat(rs.getInt("ORDINAL_POSITION")).isEqualTo(1);
+
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("COLUMN_NAME")).isEqualTo("d");
+            assertThat(rs.getInt("DATA_TYPE")).isEqualTo(Types.FLOAT);
+            assertThat(rs.getString("TYPE_NAME")).isEqualTo("DECIMAL");
+            assertThat(rs.getInt("COLUMN_SIZE")).isEqualTo(15);
+            assertThat(rs.getInt("DECIMAL_DIGITS")).isEqualTo(5);
+            assertThat(rs.getInt("ORDINAL_POSITION")).isEqualTo(2);
+
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("COLUMN_NAME")).isEqualTo("k");
+            assertThat(rs.getInt("DATA_TYPE")).isEqualTo(Types.INTEGER);
+            assertThat(rs.getString("IS_AUTOINCREMENT")).isEqualTo("YES");
+
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("COLUMN_NAME")).isEqualTo("n");
+            assertThat(rs.getInt("NULLABLE")).isEqualTo(DatabaseMetaData.columnNoNulls);
+            assertThat(rs.getString("IS_NULLABLE")).isEqualTo("NO");
+            assertThat(rs.getString("IS_AUTOINCREMENT")).isEqualTo("NO");
+
+            assertThat(rs.next()).isFalse();
+        }
+    }
+
+    private static StmtResult columnMetadataRows() {
+        String createSql =
+                "CREATE TABLE c (i INTEGER, d DECIMAL(10,5), k INTEGER PRIMARY KEY AUTOINCREMENT, n TEXT NOT NULL)";
+        return new StmtResult(
+                List.of(
+                        new Col("TABLE_NAME", "TEXT"),
+                        new Col("CREATE_SQL", "TEXT"),
+                        new Col("CID", "INTEGER"),
+                        new Col("COLUMN_NAME", "TEXT"),
+                        new Col("DECLARED_TYPE", "TEXT"),
+                        new Col("NOT_NULL", "INTEGER"),
+                        new Col("COLUMN_DEF", "TEXT"),
+                        new Col("PK", "INTEGER"),
+                        new Col("HIDDEN", "INTEGER")),
+                List.of(
+                        columnRow("c", createSql, 0, "i", "INTEGER", 0, null, 0, 0),
+                        columnRow("c", createSql, 1, "d", "DECIMAL(10,5)", 0, null, 0, 0),
+                        columnRow("c", createSql, 2, "k", "INTEGER", 0, null, 1, 0),
+                        columnRow("c", createSql, 3, "n", "TEXT", 1, null, 0, 0)),
+                0,
+                null);
+    }
+
+    private static Row columnRow(
+            String table,
+            String createSql,
+            int cid,
+            String column,
+            String declaredType,
+            int notNull,
+            String columnDefault,
+            int primaryKey,
+            int hidden) {
+        return new Row(List.of(
+                Value.of(table),
+                Value.of(createSql),
+                Value.of(cid),
+                Value.of(column),
+                Value.of(declaredType),
+                Value.of(notNull),
+                Value.of(columnDefault),
+                Value.of(primaryKey),
+                Value.of(hidden)));
+    }
+
     private static StmtResult emptyResult() {
         return new StmtResult(List.of(new Col("TABLE_NAME", "TEXT")), List.of(), 0, null);
+    }
+
+    private static final class StmtResultConnection extends LibsqlConnection {
+        private final StmtResult result;
+
+        private StmtResultConnection(StmtResult result) {
+            super(null, null);
+            this.result = result;
+        }
+
+        @Override
+        public StmtResult executeStatement(Stmt stmt) {
+            return result;
+        }
     }
 
     private static final class RecordingConnection extends LibsqlConnection {
