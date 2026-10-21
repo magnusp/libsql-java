@@ -199,6 +199,70 @@ public class LibsqlResultSet implements ResultSet {
         };
     }
 
+    private static int toStrictInt(Value val) throws SQLException {
+        return switch (val) {
+            case Value.Null n -> 0;
+            case Value.Integer i -> (int) i.value();
+            case Value.Float f -> (int) f.value();
+            case Value.Text t -> {
+                try {
+                    yield Integer.parseInt(t.value());
+                } catch (NumberFormatException e) {
+                    throw new SQLException("Bad value for type Integer: " + t.value(), e);
+                }
+            }
+            case Value.Blob b -> 0;
+        };
+    }
+
+    private static long toStrictLong(Value val) throws SQLException {
+        return switch (val) {
+            case Value.Null n -> 0L;
+            case Value.Integer i -> i.value();
+            case Value.Float f -> (long) f.value();
+            case Value.Text t -> {
+                try {
+                    yield Long.parseLong(t.value());
+                } catch (NumberFormatException e) {
+                    throw new SQLException("Bad value for type Long: " + t.value(), e);
+                }
+            }
+            case Value.Blob b -> 0L;
+        };
+    }
+
+    private static float toStrictFloat(Value val) throws SQLException {
+        return switch (val) {
+            case Value.Null n -> 0.0F;
+            case Value.Integer i -> (float) i.value();
+            case Value.Float f -> (float) f.value();
+            case Value.Text t -> {
+                try {
+                    yield Float.parseFloat(t.value());
+                } catch (NumberFormatException e) {
+                    throw new SQLException("Bad value for type Float: " + t.value(), e);
+                }
+            }
+            case Value.Blob b -> 0.0F;
+        };
+    }
+
+    private static double toStrictDouble(Value val) throws SQLException {
+        return switch (val) {
+            case Value.Null n -> 0.0;
+            case Value.Integer i -> (double) i.value();
+            case Value.Float f -> f.value();
+            case Value.Text t -> {
+                try {
+                    yield Double.parseDouble(t.value());
+                } catch (NumberFormatException e) {
+                    throw new SQLException("Bad value for type Double: " + t.value(), e);
+                }
+            }
+            case Value.Blob b -> 0.0;
+        };
+    }
+
     private static String blobAsText(Value.Blob b) {
         return new String(b.bytes(), java.nio.charset.StandardCharsets.UTF_8);
     }
@@ -694,6 +758,7 @@ public class LibsqlResultSet implements ResultSet {
         if (val == null) {
             return null;
         }
+        Value stored = getCurrentValue(columnIndex);
         if (type.isInstance(val)) {
             return type.cast(val);
         }
@@ -710,22 +775,22 @@ public class LibsqlResultSet implements ResultSet {
             return type.cast(getBytes(columnIndex));
         }
         if (type == Double.class) {
-            return type.cast(getDouble(columnIndex));
+            return type.cast(toStrictDouble(stored));
         }
         if (type == Long.class) {
-            return type.cast(getLong(columnIndex));
+            return type.cast(toStrictLong(stored));
         }
         if (type == Float.class) {
-            return type.cast(getFloat(columnIndex));
+            return type.cast(toStrictFloat(stored));
         }
         if (type == Integer.class) {
-            return type.cast(getInt(columnIndex));
+            return type.cast(toStrictInt(stored));
         }
         if (type == Short.class) {
-            return type.cast(getShort(columnIndex));
+            return type.cast(Short.valueOf((short) toStrictLong(stored)));
         }
         if (type == Byte.class) {
-            return type.cast(getByte(columnIndex));
+            return type.cast(Byte.valueOf((byte) toStrictLong(stored)));
         }
         if (type == Date.class) {
             return type.cast(getDate(columnIndex));
