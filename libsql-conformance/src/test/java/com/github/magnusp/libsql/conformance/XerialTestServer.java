@@ -55,8 +55,7 @@ public final class XerialTestServer {
                         .waitingFor(
                                 Wait.forHttp("/v2/pipeline")
                                         .forPort(HTTP_PORT)
-                                        .forStatusCodeMatching(
-                                                status -> status >= 200 && status < 500)
+                                        .forStatusCodeMatching(XerialTestServer::isReadyStatus)
                                         .withStartupTimeout(Duration.ofSeconds(120)));
 
         started.start();
@@ -93,27 +92,23 @@ public final class XerialTestServer {
         return "jdbc:sqlite:" + httpBaseUrl + "/dev/" + namespace;
     }
 
-    public static void releaseNamespace(String namespace) {
-        String baseUrl;
-        synchronized (XerialTestServer.class) {
-            int active = NAMESPACES.getOrDefault(namespace, 0);
-            if (active == 0) {
-                return;
-            }
-            if (active > 1) {
-                NAMESPACES.put(namespace, active - 1);
-                return;
-            }
-            NAMESPACES.remove(namespace);
-            if (container == null) {
-                return;
-            }
-            baseUrl = adminBaseUrl;
+    public static synchronized void releaseNamespace(String namespace) {
+        int active = NAMESPACES.getOrDefault(namespace, 0);
+        if (active == 0) {
+            return;
+        }
+        if (active > 1) {
+            NAMESPACES.put(namespace, active - 1);
+            return;
+        }
+        NAMESPACES.remove(namespace);
+        if (container == null) {
+            return;
         }
 
         HttpRequest request =
                 HttpRequest.newBuilder()
-                        .uri(URI.create(baseUrl + "/v1/namespaces/" + namespace))
+                        .uri(URI.create(adminBaseUrl + "/v1/namespaces/" + namespace))
                         .timeout(REQUEST_TIMEOUT)
                         .DELETE()
                         .build();
@@ -125,6 +120,10 @@ public final class XerialTestServer {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    static boolean isReadyStatus(int status) {
+        return status == 405 || (status >= 200 && status < 300);
     }
 
     private static synchronized void ensureNamespace(String namespace) {
