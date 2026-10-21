@@ -85,6 +85,19 @@ public class LibsqlResultSet implements ResultSet {
         return val;
     }
 
+    Value valueForMetadata(int columnIndex) {
+        int rowIndex = currentRowIndex < 0 ? 0 : currentRowIndex;
+        if (rowIndex >= rows.size()) {
+            return null;
+        }
+        Row row = rows.get(rowIndex);
+        List<Value> values = row.values();
+        if (values == null || columnIndex < 1 || columnIndex > values.size()) {
+            return null;
+        }
+        return values.get(columnIndex - 1);
+    }
+
     @Override
     public boolean next() throws SQLException {
         checkClosed();
@@ -554,7 +567,7 @@ public class LibsqlResultSet implements ResultSet {
     public ResultSetMetaData getMetaData() throws SQLException {
         checkClosed();
         if (metadata == null) {
-            metadata = new LibsqlResultSetMetaData(cols, rows, sql, connection);
+            metadata = new LibsqlResultSetMetaData(cols, rows, sql, connection, this);
         }
         return metadata;
     }

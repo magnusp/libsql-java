@@ -27,19 +27,26 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
     private final List<Row> rows;
     private final String sql;
     private final LibsqlConnection connection;
+    private final LibsqlResultSet resultSet;
 
     private boolean tableContextResolved;
     private TableInfo tableContext;
 
     public LibsqlResultSetMetaData(List<Col> cols) {
-        this(cols, List.of(), null, null);
+        this(cols, List.of(), null, null, null);
     }
 
     LibsqlResultSetMetaData(List<Col> cols, List<Row> rows, String sql, LibsqlConnection connection) {
+        this(cols, rows, sql, connection, null);
+    }
+
+    LibsqlResultSetMetaData(
+            List<Col> cols, List<Row> rows, String sql, LibsqlConnection connection, LibsqlResultSet resultSet) {
         this.cols = cols != null ? cols : List.of();
         this.rows = rows != null ? rows : List.of();
         this.sql = sql;
         this.connection = connection;
+        this.resultSet = resultSet;
     }
 
     @Override
@@ -204,28 +211,92 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
     public int getColumnType(int column) throws SQLException {
         getCol(column);
         String typeName = getColumnTypeName(column);
-        Value sample = sampleValue(column);
+        Value value = runtimeValue(column);
+        SampleType valueType = storageType(value);
 
-        return switch (typeName) {
-            case "BOOLEAN" -> Types.BOOLEAN;
-            case "TINYINT" -> Types.TINYINT;
-            case "SMALLINT", "INT2" -> Types.SMALLINT;
-            case "BIGINT", "INT8", "UNSIGNED BIG INT" -> Types.BIGINT;
-            case "DATE" -> Types.DATE;
-            case "DATETIME", "TIMESTAMP" -> Types.TIMESTAMP;
-            case "INT", "INTEGER", "MEDIUMINT" -> integerType(column);
-            case "DECIMAL" -> Types.DECIMAL;
-            case "DOUBLE", "DOUBLE PRECISION" -> Types.DOUBLE;
-            case "NUMERIC" -> Types.NUMERIC;
-            case "REAL" -> Types.REAL;
-            case "FLOAT" -> Types.FLOAT;
-            case "CHARACTER", "NCHAR", "NATIVE CHARACTER", "CHAR" -> Types.CHAR;
-            case "CLOB" -> Types.CLOB;
-            case "VARCHAR", "VARYING CHARACTER", "NVARCHAR", "TEXT" -> Types.VARCHAR;
-            case "BINARY" -> Types.BINARY;
-            case "BLOB" -> Types.BLOB;
-            default -> inferTypeFromValue(sample);
-        };
+        if (valueType == SampleType.INTEGER || valueType == SampleType.NULL) {
+            if ("BOOLEAN".equals(typeName)) {
+                return Types.BOOLEAN;
+            }
+            if ("TINYINT".equals(typeName)) {
+                return Types.TINYINT;
+            }
+            if ("SMALLINT".equals(typeName) || "INT2".equals(typeName)) {
+                return Types.SMALLINT;
+            }
+            if ("BIGINT".equals(typeName)
+                    || "INT8".equals(typeName)
+                    || "UNSIGNED BIG INT".equals(typeName)) {
+                return Types.BIGINT;
+            }
+            if ("DATE".equals(typeName)) {
+                return Types.DATE;
+            }
+            if ("DATETIME".equals(typeName) || "TIMESTAMP".equals(typeName)) {
+                return Types.TIMESTAMP;
+            }
+            if (valueType == SampleType.INTEGER
+                    || "INT".equals(typeName)
+                    || "INTEGER".equals(typeName)
+                    || "MEDIUMINT".equals(typeName)) {
+                long val = integer(value);
+                return val > Integer.MAX_VALUE || val < Integer.MIN_VALUE ? Types.BIGINT : Types.INTEGER;
+            }
+        }
+
+        if (valueType == SampleType.FLOAT || valueType == SampleType.NULL) {
+            if ("DECIMAL".equals(typeName)) {
+                return Types.DECIMAL;
+            }
+            if ("DOUBLE".equals(typeName) || "DOUBLE PRECISION".equals(typeName)) {
+                return Types.DOUBLE;
+            }
+            if ("NUMERIC".equals(typeName)) {
+                return Types.NUMERIC;
+            }
+            if ("REAL".equals(typeName)) {
+                return Types.REAL;
+            }
+            if (valueType == SampleType.FLOAT || "FLOAT".equals(typeName)) {
+                return Types.FLOAT;
+            }
+        }
+
+        if (valueType == SampleType.TEXT || valueType == SampleType.NULL) {
+            if ("CHARACTER".equals(typeName)
+                    || "NCHAR".equals(typeName)
+                    || "NATIVE CHARACTER".equals(typeName)
+                    || "CHAR".equals(typeName)) {
+                return Types.CHAR;
+            }
+            if ("CLOB".equals(typeName)) {
+                return Types.CLOB;
+            }
+            if ("DATE".equals(typeName)) {
+                return Types.DATE;
+            }
+            if ("DATETIME".equals(typeName) || "TIMESTAMP".equals(typeName)) {
+                return Types.TIMESTAMP;
+            }
+            if (valueType == SampleType.TEXT
+                    || "VARCHAR".equals(typeName)
+                    || "VARYING CHARACTER".equals(typeName)
+                    || "NVARCHAR".equals(typeName)
+                    || "TEXT".equals(typeName)) {
+                return Types.VARCHAR;
+            }
+        }
+
+        if (valueType == SampleType.BLOB || valueType == SampleType.NULL) {
+            if ("BINARY".equals(typeName)) {
+                return Types.BINARY;
+            }
+            if (valueType == SampleType.BLOB || "BLOB".equals(typeName)) {
+                return Types.BLOB;
+            }
+        }
+
+        return Types.NUMERIC;
     }
 
     @Override
@@ -346,6 +417,13 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         return name != null ? name.toLowerCase(Locale.ROOT) : "";
     }
 
+    private Value runtimeValue(int column) {
+        if (resultSet != null) {
+            return resultSet.valueForMetadata(column);
+        }
+        return sampleValue(column);
+    }
+
     private Value sampleValue(int column) {
         for (Row row : rows) {
             List<Value> values = row.values();
@@ -361,17 +439,20 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
     }
 
     private SampleType sampleType(int column) {
-        Value sample = sampleValue(column);
-        if (sample instanceof Value.Integer) {
+        return storageType(sampleValue(column));
+    }
+
+    private static SampleType storageType(Value value) {
+        if (value instanceof Value.Integer) {
             return SampleType.INTEGER;
         }
-        if (sample instanceof Value.Float) {
+        if (value instanceof Value.Float) {
             return SampleType.FLOAT;
         }
-        if (sample instanceof Value.Blob) {
+        if (value instanceof Value.Blob) {
             return SampleType.BLOB;
         }
-        if (sample instanceof Value.Text) {
+        if (value instanceof Value.Text) {
             return SampleType.TEXT;
         }
         return SampleType.NULL;
@@ -381,50 +462,6 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         return value instanceof Value.Integer i
                 && i.value() >= Integer.MIN_VALUE
                 && i.value() <= Integer.MAX_VALUE;
-    }
-
-    private int integerType(int column) {
-        Value firstNonInteger = null;
-        boolean outsideIntRange = false;
-        for (Row row : rows) {
-            List<Value> values = row.values();
-            if (values == null || column < 1 || column > values.size()) {
-                continue;
-            }
-            Value value = values.get(column - 1);
-            if (value == null || value instanceof Value.Null) {
-                continue;
-            }
-            if (value instanceof Value.Integer) {
-                if (!isIntInRange(value)) {
-                    outsideIntRange = true;
-                }
-            } else if (firstNonInteger == null) {
-                firstNonInteger = value;
-            }
-        }
-        if (firstNonInteger != null) {
-            return inferTypeFromValue(firstNonInteger);
-        }
-        return outsideIntRange ? Types.BIGINT : Types.INTEGER;
-    }
-
-    private static int inferTypeFromValue(Value sample) {
-        if (sample instanceof Value.Integer i) {
-            return i.value() >= Integer.MIN_VALUE && i.value() <= Integer.MAX_VALUE
-                    ? Types.INTEGER
-                    : Types.BIGINT;
-        }
-        if (sample instanceof Value.Float) {
-            return Types.FLOAT;
-        }
-        if (sample instanceof Value.Text) {
-            return Types.VARCHAR;
-        }
-        if (sample instanceof Value.Blob) {
-            return Types.BLOB;
-        }
-        return Types.NUMERIC;
     }
 
     private TableInfo resolveTableContext() throws SQLException {
