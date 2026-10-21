@@ -61,7 +61,9 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         return info != null
                 && info.primaryKey()
                 && table.createSql() != null
-                && stripSqlComments(table.createSql()).toUpperCase(Locale.ENGLISH).contains("AUTOINCREMENT");
+                && stripSqlCommentsAndLiterals(table.createSql())
+                        .toUpperCase(Locale.ENGLISH)
+                        .contains("AUTOINCREMENT");
     }
 
     @Override
@@ -513,31 +515,11 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         return new TableInfo(tableName != null ? tableName : fallbackName, createSql, columns);
     }
 
-    private static String stripSqlComments(String sql) {
+    private static String stripSqlCommentsAndLiterals(String sql) {
         StringBuilder result = new StringBuilder(sql.length());
         int i = 0;
-        boolean inQuote = false;
         while (i < sql.length()) {
             char c = sql.charAt(i);
-            if (inQuote) {
-                result.append(c);
-                if (c == '\'') {
-                    if (i + 1 < sql.length() && sql.charAt(i + 1) == '\'') {
-                        result.append('\'');
-                        i += 2;
-                        continue;
-                    }
-                    inQuote = false;
-                }
-                i++;
-                continue;
-            }
-            if (c == '\'') {
-                inQuote = true;
-                result.append(c);
-                i++;
-                continue;
-            }
             if (c == '-' && i + 1 < sql.length() && sql.charAt(i + 1) == '-') {
                 i += 2;
                 while (i < sql.length() && sql.charAt(i) != '\n' && sql.charAt(i) != '\r') {
@@ -555,10 +537,43 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
                 i = end + 2;
                 continue;
             }
+            if (c == '\'' || c == '"' || c == '`') {
+                int end = skipQuoted(sql, i, c);
+                if (end < 0) {
+                    break;
+                }
+                result.append(' ');
+                i = end;
+                continue;
+            }
+            if (c == '[') {
+                int end = sql.indexOf(']', i + 1);
+                if (end < 0) {
+                    break;
+                }
+                result.append(' ');
+                i = end + 1;
+                continue;
+            }
             result.append(c);
             i++;
         }
         return result.toString();
+    }
+
+    private static int skipQuoted(String sql, int start, char quote) {
+        int i = start + 1;
+        while (i < sql.length()) {
+            if (sql.charAt(i) == quote) {
+                if (i + 1 < sql.length() && sql.charAt(i + 1) == quote) {
+                    i += 2;
+                    continue;
+                }
+                return i + 1;
+            }
+            i++;
+        }
+        return -1;
     }
 
     private static String text(Value value) {
