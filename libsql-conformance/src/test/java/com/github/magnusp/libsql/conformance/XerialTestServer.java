@@ -10,6 +10,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class XerialTestServer {
@@ -32,6 +33,7 @@ public final class XerialTestServer {
                 return new AdminResponse(response.statusCode(), response.body());
             };
     private static final Map<String, Integer> NAMESPACES = new ConcurrentHashMap<>();
+    private static final Set<String> RETAINED_NAMESPACES = ConcurrentHashMap.newKeySet();
     private static final Map<String, RuntimeException> FAILED_NAMESPACES =
             new ConcurrentHashMap<>();
 
@@ -86,25 +88,73 @@ public final class XerialTestServer {
         if (container == null) {
             return;
         }
+        RuntimeException failure = reapRetainedNamespaces();
         try {
             container.stop();
+        } catch (RuntimeException stopFailure) {
+            if (failure == null) {
+                failure = stopFailure;
+            } else {
+                failure.addSuppressed(stopFailure);
+            }
         } finally {
             container = null;
             httpBaseUrl = null;
             adminBaseUrl = null;
             NAMESPACES.clear();
+            RETAINED_NAMESPACES.clear();
             FAILED_NAMESPACES.clear();
+        }
+        if (failure != null) {
+            throw failure;
         }
     }
 
+    private static RuntimeException reapRetainedNamespaces() {
+        RuntimeException failure = null;
+        for (String namespace : RETAINED_NAMESPACES) {
+            try {
+                deleteNamespace(namespace, adminBaseUrl, DEFAULT_ADMIN);
+            } catch (RuntimeException e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        RETAINED_NAMESPACES.clear();
+        return failure;
+    }
+
     public static String jdbcUrl(String namespace) {
+        return jdbcUrl(namespace, false);
+    }
+
+    static String jdbcUrl(String namespace, boolean retained) {
         start();
-        ensureNamespace(namespace);
+        ensureNamespace(namespace, retained, adminBaseUrl, DEFAULT_ADMIN);
         return "jdbc:sqlite:" + httpBaseUrl + "/dev/" + namespace;
     }
 
     public static synchronized void releaseNamespace(String namespace) {
         releaseNamespace(namespace, adminBaseUrl, DEFAULT_ADMIN);
+    }
+
+    public static synchronized void releaseRetainedConnection(String namespace) {
+        releaseConnection(namespace);
+    }
+
+    static synchronized void releaseConnection(String namespace) {
+        int active = NAMESPACES.getOrDefault(namespace, 0);
+        if (active == 0) {
+            return;
+        }
+        if (active > 1) {
+            NAMESPACES.put(namespace, active - 1);
+            return;
+        }
+        NAMESPACES.remove(namespace);
     }
 
     static synchronized void releaseNamespace(
@@ -140,6 +190,11 @@ public final class XerialTestServer {
 
     static synchronized void ensureNamespace(
             String namespace, String adminUrl, AdminClient admin) {
+        ensureNamespace(namespace, false, adminUrl, admin);
+    }
+
+    static synchronized void ensureNamespace(
+            String namespace, boolean retained, String adminUrl, AdminClient admin) {
         RuntimeException failed = FAILED_NAMESPACES.get(namespace);
         if (failed != null) {
             throw new IllegalStateException(
@@ -152,6 +207,14 @@ public final class XerialTestServer {
         int active = NAMESPACES.getOrDefault(namespace, 0);
         if (active > 0) {
             NAMESPACES.put(namespace, active + 1);
+            if (retained) {
+                RETAINED_NAMESPACES.add(namespace);
+            }
+            return;
+        }
+
+        if (retained && RETAINED_NAMESPACES.contains(namespace)) {
+            NAMESPACES.put(namespace, 1);
             return;
         }
 
@@ -183,6 +246,9 @@ public final class XerialTestServer {
         int status = response.status();
         if (status >= 200 && status < 300) {
             NAMESPACES.put(namespace, 1);
+            if (retained) {
+                RETAINED_NAMESPACES.add(namespace);
+            }
             return;
         }
 

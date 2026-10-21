@@ -7,6 +7,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.Driver;
 import java.sql.DriverManager;
@@ -19,6 +20,16 @@ import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 
+/**
+ * Maps the {@code jdbc:sqlite:} URLs used by the xerial test sources onto sqld namespaces.
+ *
+ * <p>An empty path and {@code :memory:} map to a fresh namespace per connection. Every other path
+ * is resolved against the process working directory, normalized, and hashed to a namespace that is
+ * retained until the suite shuts down, so closing every connection and reopening the same path
+ * observes the same data. A relative path and the equivalent absolute path therefore address the
+ * same namespace. Query strings are ignored when deriving the namespace, so URL pragmas have no
+ * effect on the conformance server.
+ */
 public final class XerialConformanceDriver implements Driver {
 
     private static final String PREFIX = "jdbc:sqlite:";
@@ -45,11 +56,11 @@ public final class XerialConformanceDriver implements Driver {
         try {
             connection = delegate.connect(target.url(), info);
         } catch (SQLException e) {
-            releaseAfterConnectFailure(target.namespace(), e);
+            releaseAfterConnectFailure(target, e);
             throw e;
         }
         if (connection == null) {
-            XerialTestServer.releaseNamespace(target.namespace());
+            release(target);
             return null;
         }
         try {
@@ -57,10 +68,11 @@ public final class XerialConformanceDriver implements Driver {
                     Proxy.newProxyInstance(
                             XerialConformanceDriver.class.getClassLoader(),
                             new Class<?>[] {Connection.class},
-                            new NamespaceClosingHandler(connection, target.namespace()));
+                            new NamespaceClosingHandler(
+                                    connection, target.namespace(), releaser(target)));
         } catch (RuntimeException e) {
             try {
-                XerialTestServer.releaseNamespace(target.namespace());
+                release(target);
             } catch (RuntimeException cleanup) {
                 e.addSuppressed(cleanup);
             }
@@ -101,30 +113,46 @@ public final class XerialConformanceDriver implements Driver {
         return delegate.getParentLogger();
     }
 
-    private static void releaseAfterConnectFailure(String namespace, SQLException failure) {
+    private static void releaseAfterConnectFailure(Target target, SQLException failure) {
         try {
-            XerialTestServer.releaseNamespace(namespace);
+            release(target);
         } catch (RuntimeException cleanup) {
             failure.addSuppressed(cleanup);
         }
     }
 
-    private static Target rewrite(String url) {
-        String target = url.substring(PREFIX.length());
-        String namespace;
-        if (target.isEmpty() || ":memory:".equals(target)) {
-            namespace = "mem_" + UUID.randomUUID().toString().replace("-", "");
-        } else {
-            namespace =
-                    "file_"
-                            + UUID.nameUUIDFromBytes(target.getBytes(StandardCharsets.UTF_8))
-                                    .toString()
-                                    .replace("-", "");
-        }
-        return new Target(XerialTestServer.jdbcUrl(namespace), namespace);
+    private static void release(Target target) {
+        releaser(target).accept(target.namespace());
     }
 
-    private record Target(String url, String namespace) {}
+    private static Consumer<String> releaser(Target target) {
+        return target.retained()
+                ? XerialTestServer::releaseRetainedConnection
+                : XerialTestServer::releaseNamespace;
+    }
+
+    private static Target rewrite(String url) {
+        String target = url.substring(PREFIX.length());
+        String path = stripQuery(target);
+        if (path.isEmpty() || ":memory:".equals(path)) {
+            String namespace = "mem_" + UUID.randomUUID().toString().replace("-", "");
+            return new Target(XerialTestServer.jdbcUrl(namespace, false), namespace, false);
+        }
+        String normalized = Path.of(path).toAbsolutePath().normalize().toString();
+        String namespace =
+                "file_"
+                        + UUID.nameUUIDFromBytes(normalized.getBytes(StandardCharsets.UTF_8))
+                                .toString()
+                                .replace("-", "");
+        return new Target(XerialTestServer.jdbcUrl(namespace, true), namespace, true);
+    }
+
+    private static String stripQuery(String target) {
+        int query = target.indexOf('?');
+        return query < 0 ? target : target.substring(0, query);
+    }
+
+    private record Target(String url, String namespace, boolean retained) {}
 
     static final class NamespaceClosingHandler implements InvocationHandler {
 
