@@ -149,6 +149,17 @@ class SqlTableReferenceTest {
     }
 
     @Test
+    void resolvesViewsToBaseTables() throws SQLException {
+        SqlTableReference.Resolution resolution = resolve("SELECT a, b FROM v");
+
+        assertThat(resolution.labels()).containsExactly("a", "b");
+        assertThat(resolution.tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "w"), new SqlTableReference.TableRef(null, "w"));
+        assertThat(resolve("SELECT b AS bb FROM v").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "w"));
+    }
+
+    @Test
     void leavesExpressionsAndLiteralsUnresolved() throws SQLException {
         SqlTableReference.Resolution expression = resolve("SELECT a + 1 FROM w");
         SqlTableReference.Resolution literal = resolve("SELECT 1 AS one");
