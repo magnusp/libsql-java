@@ -152,6 +152,58 @@ public class LibsqlResultSet implements ResultSet {
             case Value.Null n -> 0;
             case Value.Integer i -> (int) i.value();
             case Value.Float f -> (int) f.value();
+            case Value.Text t -> (int) parseSqliteLong(t.value());
+            case Value.Blob b -> (int) parseSqliteLong(blobAsText(b));
+        };
+    }
+
+    @Override
+    public long getLong(int columnIndex) throws SQLException {
+        return toLong(getCurrentValue(columnIndex));
+    }
+
+    @Override
+    public float getFloat(int columnIndex) throws SQLException {
+        Value val = getCurrentValue(columnIndex);
+        return switch (val) {
+            case Value.Null n -> 0.0F;
+            case Value.Integer i -> (float) i.value();
+            case Value.Float f -> (float) f.value();
+            case Value.Text t -> (float) parseSqliteDouble(t.value());
+            case Value.Blob b -> (float) parseSqliteDouble(blobAsText(b));
+        };
+    }
+
+    @Override
+    public double getDouble(int columnIndex) throws SQLException {
+        return toDouble(getCurrentValue(columnIndex));
+    }
+
+    private static long toLong(Value val) {
+        return switch (val) {
+            case Value.Null n -> 0L;
+            case Value.Integer i -> i.value();
+            case Value.Float f -> (long) f.value();
+            case Value.Text t -> parseSqliteLong(t.value());
+            case Value.Blob b -> parseSqliteLong(blobAsText(b));
+        };
+    }
+
+    private static double toDouble(Value val) {
+        return switch (val) {
+            case Value.Null n -> 0.0;
+            case Value.Integer i -> (double) i.value();
+            case Value.Float f -> f.value();
+            case Value.Text t -> parseSqliteDouble(t.value());
+            case Value.Blob b -> parseSqliteDouble(blobAsText(b));
+        };
+    }
+
+    private static int toStrictInt(Value val) throws SQLException {
+        return switch (val) {
+            case Value.Null n -> 0;
+            case Value.Integer i -> (int) i.value();
+            case Value.Float f -> (int) f.value();
             case Value.Text t -> {
                 try {
                     yield Integer.parseInt(t.value());
@@ -163,9 +215,7 @@ public class LibsqlResultSet implements ResultSet {
         };
     }
 
-    @Override
-    public long getLong(int columnIndex) throws SQLException {
-        Value val = getCurrentValue(columnIndex);
+    private static long toStrictLong(Value val) throws SQLException {
         return switch (val) {
             case Value.Null n -> 0L;
             case Value.Integer i -> i.value();
@@ -181,9 +231,7 @@ public class LibsqlResultSet implements ResultSet {
         };
     }
 
-    @Override
-    public float getFloat(int columnIndex) throws SQLException {
-        Value val = getCurrentValue(columnIndex);
+    private static float toStrictFloat(Value val) throws SQLException {
         return switch (val) {
             case Value.Null n -> 0.0F;
             case Value.Integer i -> (float) i.value();
@@ -199,9 +247,7 @@ public class LibsqlResultSet implements ResultSet {
         };
     }
 
-    @Override
-    public double getDouble(int columnIndex) throws SQLException {
-        Value val = getCurrentValue(columnIndex);
+    private static double toStrictDouble(Value val) throws SQLException {
         return switch (val) {
             case Value.Null n -> 0.0;
             case Value.Integer i -> (double) i.value();
@@ -215,6 +261,111 @@ public class LibsqlResultSet implements ResultSet {
             }
             case Value.Blob b -> 0.0;
         };
+    }
+
+    private static String blobAsText(Value.Blob b) {
+        return new String(b.bytes(), java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private static long parseSqliteLong(String text) {
+        int length = text.length();
+        int index = skipSqliteWhitespace(text, 0);
+        boolean negative = false;
+        if (index < length && (text.charAt(index) == '+' || text.charAt(index) == '-')) {
+            negative = text.charAt(index) == '-';
+            index++;
+        }
+
+        int digitsStart = index;
+        long value = 0L;
+        boolean overflow = false;
+        while (index < length) {
+            char c = text.charAt(index);
+            if (c < '0' || c > '9') {
+                break;
+            }
+            if (!overflow) {
+                int digit = c - '0';
+                if (value > (Long.MAX_VALUE - digit) / 10) {
+                    overflow = true;
+                } else {
+                    value = value * 10 + digit;
+                }
+            }
+            index++;
+        }
+
+        if (index == digitsStart) {
+            return 0L;
+        }
+        if (overflow) {
+            return negative ? Long.MIN_VALUE : Long.MAX_VALUE;
+        }
+        return negative ? -value : value;
+    }
+
+    private static double parseSqliteDouble(String text) {
+        int length = text.length();
+        int index = skipSqliteWhitespace(text, 0);
+        int start = index;
+        if (index < length && (text.charAt(index) == '+' || text.charAt(index) == '-')) {
+            index++;
+        }
+
+        int digits = 0;
+        while (index < length && isAsciiDigit(text.charAt(index))) {
+            index++;
+            digits++;
+        }
+        if (index < length && text.charAt(index) == '.') {
+            index++;
+            while (index < length && isAsciiDigit(text.charAt(index))) {
+                index++;
+                digits++;
+            }
+        }
+
+        if (digits == 0) {
+            return 0.0;
+        }
+
+        int end = index;
+        if (index < length && (text.charAt(index) == 'e' || text.charAt(index) == 'E')) {
+            int exponentIndex = index + 1;
+            if (exponentIndex < length
+                    && (text.charAt(exponentIndex) == '+' || text.charAt(exponentIndex) == '-')) {
+                exponentIndex++;
+            }
+            int exponentDigits = 0;
+            while (exponentIndex < length && isAsciiDigit(text.charAt(exponentIndex))) {
+                exponentIndex++;
+                exponentDigits++;
+            }
+            if (exponentDigits > 0) {
+                end = exponentIndex;
+            }
+        }
+
+        try {
+            return Double.parseDouble(text.substring(start, end));
+        } catch (NumberFormatException e) {
+            return 0.0;
+        }
+    }
+
+    private static int skipSqliteWhitespace(String text, int index) {
+        while (index < text.length() && isSqliteWhitespace(text.charAt(index))) {
+            index++;
+        }
+        return index;
+    }
+
+    private static boolean isSqliteWhitespace(char c) {
+        return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\u000b' || c == '\f';
+    }
+
+    private static boolean isAsciiDigit(char c) {
+        return c >= '0' && c <= '9';
     }
 
     @Override
@@ -607,6 +758,7 @@ public class LibsqlResultSet implements ResultSet {
         if (val == null) {
             return null;
         }
+        Value stored = getCurrentValue(columnIndex);
         if (type.isInstance(val)) {
             return type.cast(val);
         }
@@ -623,22 +775,22 @@ public class LibsqlResultSet implements ResultSet {
             return type.cast(getBytes(columnIndex));
         }
         if (type == Double.class) {
-            return type.cast(getDouble(columnIndex));
+            return type.cast(toStrictDouble(stored));
         }
         if (type == Long.class) {
-            return type.cast(getLong(columnIndex));
+            return type.cast(toStrictLong(stored));
         }
         if (type == Float.class) {
-            return type.cast(getFloat(columnIndex));
+            return type.cast(toStrictFloat(stored));
         }
         if (type == Integer.class) {
-            return type.cast(getInt(columnIndex));
+            return type.cast(toStrictInt(stored));
         }
         if (type == Short.class) {
-            return type.cast(getShort(columnIndex));
+            return type.cast(Short.valueOf((short) toStrictLong(stored)));
         }
         if (type == Byte.class) {
-            return type.cast(getByte(columnIndex));
+            return type.cast(Byte.valueOf((byte) toStrictLong(stored)));
         }
         if (type == Date.class) {
             return type.cast(getDate(columnIndex));
