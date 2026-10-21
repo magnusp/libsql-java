@@ -17,6 +17,7 @@ import java.util.Locale;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class LibsqlResultSetMetaDataTest {
 
@@ -208,6 +209,87 @@ class LibsqlResultSetMetaDataTest {
         assertDeclaredTypes(metadata);
         assertThat(resultSet.next()).isFalse();
         assertDeclaredTypes(metadata);
+    }
+
+    @Test
+    void isSignedMatchesXerialNarrowTypeNameSet() throws SQLException {
+        LibsqlResultSetMetaData metadata = new LibsqlResultSetMetaData(
+                List.of(
+                        new Col("bi", "BIGINT"),
+                        new Col("sm", "SMALLINT"),
+                        new Col("dec", "DECIMAL(10,5)"),
+                        new Col("f", "FLOAT"),
+                        new Col("d", "DOUBLE"),
+                        new Col("num", "NUMERIC"),
+                        new Col("i", "INTEGER"),
+                        new Col("r", "REAL")),
+                List.of(),
+                "SELECT 1",
+                null);
+
+        assertThat(metadata.isSigned(1)).as("BIGINT").isFalse();
+        assertThat(metadata.isSigned(2)).as("SMALLINT").isFalse();
+        assertThat(metadata.isSigned(3)).as("DECIMAL(10,5)").isFalse();
+        assertThat(metadata.isSigned(4)).as("FLOAT").isFalse();
+        assertThat(metadata.isSigned(5)).as("DOUBLE").isFalse();
+        assertThat(metadata.isSigned(6)).as("NUMERIC").isTrue();
+        assertThat(metadata.isSigned(7)).as("INTEGER").isTrue();
+        assertThat(metadata.isSigned(8)).as("REAL").isTrue();
+    }
+
+    @Test
+    void matchesCastOnlyInLowerCase() throws SQLException {
+        LibsqlResultSetMetaData metadata = new LibsqlResultSetMetaData(
+                List.of(new Col("CAST(1 AS BOOLEAN)", null), new Col("cast(1 as BOOLEAN)", null)),
+                List.of(new Row(List.of(Value.of(1L), Value.of(1L)))),
+                "SELECT CAST(1 AS BOOLEAN), cast(1 as BOOLEAN)",
+                null);
+
+        assertThat(metadata.getColumnTypeName(1)).as("uppercase CAST").isEqualTo("INTEGER");
+        assertThat(metadata.getColumnType(1)).as("uppercase CAST").isEqualTo(Types.INTEGER);
+        assertThat(metadata.isSigned(1)).as("uppercase CAST").isTrue();
+
+        assertThat(metadata.getColumnTypeName(2)).as("lowercase cast").isEqualTo("BOOLEAN");
+        assertThat(metadata.getColumnType(2)).as("lowercase cast").isEqualTo(Types.BOOLEAN);
+        assertThat(metadata.isSigned(2)).as("lowercase cast").isFalse();
+    }
+
+    @Test
+    void preservesWhitespaceInDeclaredTypeNames() throws SQLException {
+        LibsqlResultSetMetaData metadata = new LibsqlResultSetMetaData(
+                List.of(new Col("c", "BIG INT"), new Col("g", "  NUMERIC  ")),
+                List.of(new Row(List.of(Value.of(1L), Value.of(1L)))),
+                "SELECT c, g FROM q",
+                null);
+
+        assertThat(metadata.getColumnTypeName(1)).isEqualTo("BIG INT");
+        assertThat(metadata.getColumnType(1)).isEqualTo(Types.INTEGER);
+        assertThat(metadata.isSigned(1)).isFalse();
+
+        assertThat(metadata.getColumnTypeName(2)).isEqualTo("  NUMERIC  ");
+        assertThat(metadata.getColumnType(2)).isEqualTo(Types.INTEGER);
+        assertThat(metadata.isSigned(2)).isFalse();
+    }
+
+    @Test
+    void throwsNumberFormatExceptionForMalformedPrecision() throws SQLException {
+        LibsqlResultSetMetaData metadata = new LibsqlResultSetMetaData(
+                List.of(new Col("e", "DECIMAL(abc)")), List.of(), "SELECT e FROM q", null);
+
+        assertThat(metadata.getColumnTypeName(1)).isEqualTo("DECIMAL");
+        assertThatThrownBy(() -> metadata.getPrecision(1))
+                .isInstanceOf(NumberFormatException.class)
+                .hasMessageContaining("abc");
+        assertThat(metadata.getScale(1)).isZero();
+    }
+
+    @Test
+    void reportsPrecisionAndScaleFromParenthesizedType() throws SQLException {
+        LibsqlResultSetMetaData metadata = new LibsqlResultSetMetaData(
+                List.of(new Col("d", "DECIMAL(10,5)")), List.of(), "SELECT d FROM m", null);
+
+        assertThat(metadata.getPrecision(1)).isEqualTo(10);
+        assertThat(metadata.getScale(1)).isEqualTo(5);
     }
 
     @Test
