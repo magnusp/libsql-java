@@ -57,6 +57,34 @@ class LibsqlGeneratedKeysTest {
     }
 
     @Test
+    void cteInsertReturnsGeneratedKey() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(insertResult(13L));
+
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate(
+                    "with cte as (select lower('INSERT') as v) insert into k (v) select v from cte");
+
+            try (ResultSet keys = statement.getGeneratedKeys()) {
+                assertThat(keys.next()).isTrue();
+                assertThat(keys.getLong(1)).isEqualTo(13L);
+            }
+        }
+    }
+
+    @Test
+    void cteSelectReturnsEmptyGeneratedKeys() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(updateResult(1, 99L));
+
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("with cte as (select 'insert' as v) select v from cte");
+
+            try (ResultSet keys = statement.getGeneratedKeys()) {
+                assertThat(keys.next()).isFalse();
+            }
+        }
+    }
+
+    @Test
     void preparedStatementInsertReturnsGeneratedKey() throws SQLException {
         RecordingConnection connection = new RecordingConnection(insertResult(5L));
 
