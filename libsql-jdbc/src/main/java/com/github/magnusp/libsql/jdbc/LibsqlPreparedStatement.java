@@ -26,16 +26,19 @@ import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.List;
+import java.util.Locale;
 
 public class LibsqlPreparedStatement extends LibsqlStatement implements PreparedStatement {
 
     private final String sql;
+    private final boolean returnsResultSet;
     // Mitigation for Bug 7: Sequential ArrayList instead of Map to eliminate Integer autoboxing overhead
     private final List<Value> parameters = new ArrayList<>();
 
     public LibsqlPreparedStatement(LibsqlConnection connection, String sql) {
         super(connection);
         this.sql = sql;
+        this.returnsResultSet = returnsResultSet(sql);
     }
 
     private void setParam(int parameterIndex, Value value) throws SQLException {
@@ -53,18 +56,162 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
 
     @Override
     public ResultSet executeQuery() throws SQLException {
+        checkClosed();
+        if (!returnsResultSet) {
+            throw new SQLException("Query does not return results");
+        }
         execute();
         if (currentResultSet == null) {
-            throw new SQLException("PreparedStatement did not produce a ResultSet: " + sql);
+            throw new SQLException("Query does not return results");
         }
         return currentResultSet;
     }
 
     @Override
     public int executeUpdate() throws SQLException {
+        checkClosed();
+        if (returnsResultSet) {
+            throw new SQLException("Query returns results");
+        }
         execute();
         return (int) updateCount;
     }
+
+    private static boolean returnsResultSet(String sql) {
+        List<Token> tokens = tokenize(sql);
+        if (tokens.isEmpty()) {
+            return false;
+        }
+        return switch (tokens.get(0).word()) {
+            case "SELECT", "VALUES", "EXPLAIN" -> true;
+            case "PRAGMA" -> pragmaReturnsResultSet(tokens);
+            case "INSERT", "UPDATE", "DELETE", "REPLACE" -> hasTopLevelReturning(tokens, 1);
+            case "WITH" -> withReturnsResultSet(tokens);
+            default -> false;
+        };
+    }
+
+    private static boolean pragmaReturnsResultSet(List<Token> tokens) {
+        for (int i = 1; i < tokens.size(); i++) {
+            Token token = tokens.get(i);
+            if (token.depth() == 0 && token.word().equals("=")) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean withReturnsResultSet(List<Token> tokens) {
+        for (int i = 1; i < tokens.size(); i++) {
+            Token token = tokens.get(i);
+            if (token.depth() != 0) {
+                continue;
+            }
+            switch (token.word()) {
+                case "SELECT", "VALUES" -> {
+                    return true;
+                }
+                case "INSERT", "UPDATE", "DELETE", "REPLACE" -> {
+                    return hasTopLevelReturning(tokens, i + 1);
+                }
+                default -> {
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasTopLevelReturning(List<Token> tokens, int from) {
+        for (int i = from; i < tokens.size(); i++) {
+            Token token = tokens.get(i);
+            if (token.depth() == 0 && token.word().equals("RETURNING")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<Token> tokenize(String sql) {
+        List<Token> tokens = new ArrayList<>();
+        if (sql == null) {
+            return tokens;
+        }
+        int depth = 0;
+        int i = 0;
+        int n = sql.length();
+        while (i < n) {
+            char c = sql.charAt(i);
+            if (Character.isWhitespace(c)) {
+                i++;
+            } else if (c == '-' && i + 1 < n && sql.charAt(i + 1) == '-') {
+                i += 2;
+                while (i < n && sql.charAt(i) != '\n') {
+                    i++;
+                }
+            } else if (c == '/' && i + 1 < n && sql.charAt(i + 1) == '*') {
+                i += 2;
+                while (i + 1 < n && !(sql.charAt(i) == '*' && sql.charAt(i + 1) == '/')) {
+                    i++;
+                }
+                i = Math.min(n, i + 2);
+            } else if (c == '\'' || c == '"' || c == '`') {
+                i = skipQuoted(sql, i, c);
+            } else if (c == '[') {
+                i++;
+                while (i < n && sql.charAt(i) != ']') {
+                    i++;
+                }
+                if (i < n) {
+                    i++;
+                }
+            } else if (c == '(') {
+                depth++;
+                i++;
+            } else if (c == ')') {
+                depth = Math.max(0, depth - 1);
+                i++;
+            } else if (c == '=') {
+                tokens.add(new Token("=", depth));
+                i++;
+            } else if (isWordStart(c)) {
+                int start = i;
+                i++;
+                while (i < n && isWordPart(sql.charAt(i))) {
+                    i++;
+                }
+                tokens.add(new Token(sql.substring(start, i).toUpperCase(Locale.ROOT), depth));
+            } else {
+                i++;
+            }
+        }
+        return tokens;
+    }
+
+    private static int skipQuoted(String sql, int start, char quote) {
+        int i = start + 1;
+        int n = sql.length();
+        while (i < n) {
+            if (sql.charAt(i) == quote) {
+                if (i + 1 < n && sql.charAt(i + 1) == quote) {
+                    i += 2;
+                    continue;
+                }
+                return i + 1;
+            }
+            i++;
+        }
+        return n;
+    }
+
+    private static boolean isWordStart(char c) {
+        return Character.isLetter(c) || c == '_';
+    }
+
+    private static boolean isWordPart(char c) {
+        return Character.isLetterOrDigit(c) || c == '_' || c == '$';
+    }
+
+    private record Token(String word, int depth) {}
 
     @Override
     public boolean execute() throws SQLException {
