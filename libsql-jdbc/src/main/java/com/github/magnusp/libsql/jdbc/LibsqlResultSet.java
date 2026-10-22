@@ -26,10 +26,13 @@ import java.sql.SQLXML;
 import java.sql.Statement;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.time.DateTimeException;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.time.format.DateTimeParseException;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.Calendar;
 import java.util.HashMap;
 import java.util.List;
@@ -632,43 +635,20 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public Date getDate(int columnIndex) throws SQLException {
-        String s = getString(columnIndex);
-        if (s == null) return null;
-        try {
-            return Date.valueOf(s);
-        } catch (IllegalArgumentException e) {
-            try {
-                return new Date(Long.parseLong(s));
-            } catch (NumberFormatException nfe) {
-                return null;
-            }
-        }
+        LocalDateTime value = dateTimeValue(columnIndex, "Date");
+        return value == null ? null : Date.valueOf(value.toLocalDate());
     }
 
     @Override
     public Time getTime(int columnIndex) throws SQLException {
-        String s = getString(columnIndex);
-        if (s == null) return null;
-        try {
-            return Time.valueOf(s);
-        } catch (IllegalArgumentException e) {
-            return null;
-        }
+        LocalDateTime value = dateTimeValue(columnIndex, "Time");
+        return value == null ? null : Time.valueOf(value.toLocalTime());
     }
 
     @Override
     public Timestamp getTimestamp(int columnIndex) throws SQLException {
-        String s = getString(columnIndex);
-        if (s == null) return null;
-        try {
-            return Timestamp.valueOf(s);
-        } catch (IllegalArgumentException e) {
-            try {
-                return new Timestamp(Long.parseLong(s));
-            } catch (NumberFormatException nfe) {
-                return null;
-            }
-        }
+        LocalDateTime value = dateTimeValue(columnIndex, "Timestamp");
+        return value == null ? null : Timestamp.valueOf(value);
     }
 
     @Override
@@ -1001,9 +981,11 @@ public class LibsqlResultSet implements ResultSet {
     /**
      * Returns a column value converted to the requested Java type.
      *
-     * <p>The conversion matrix matches sqlite-jdbc 3.53.4.0. Numeric wrapper targets are gated on
-     * the current value's SQLite storage class; any other storage class raises {@code Bad value
-     * for type Integer} (or the corresponding target type name):
+     * <p>The numeric and text conversions match sqlite-jdbc 3.53.4.0. Date and time conversions
+     * follow the SQLite storage-class conventions instead of parsing the value's text form.
+     * Numeric wrapper targets are gated on the current value's SQLite storage class; any other
+     * storage class raises {@code Bad value for type Integer} (or the corresponding target type
+     * name):
      *
      * <table>
      * <caption>Target type by source storage class</caption>
@@ -1037,7 +1019,7 @@ public class LibsqlResultSet implements ResultSet {
      * <tr>
      *   <td>{@code Date}, {@code Time}, {@code Timestamp}, {@code LocalDate}, {@code LocalTime},
      *   {@code LocalDateTime}</td>
-     *   <td>text parse</td><td>text parse</td><td>text parse</td><td>text parse</td>
+     *   <td>epoch millis</td><td>Julian day</td><td>date/time text</td><td>bad value</td>
      *   <td>{@code null}</td>
      * </tr>
      * <tr>
@@ -1046,11 +1028,19 @@ public class LibsqlResultSet implements ResultSet {
      * </tr>
      * </table>
      *
+     * <p>INTEGER date and time values are milliseconds since the Unix epoch, FLOAT values are
+     * Julian days, and TEXT values use the SQLite date and time formats, including a bare date and
+     * a bare time. A bare time uses SQLite's 2000-01-01 default date. The SQLite TEXT format is
+     * {@code yyyy-MM-dd HH:mm:ss.SSS}, with optional fractional digits and an optional time zone
+     * suffix. All six date and time targets are built from the same storage-class value, so
+     * {@code getObject(column, LocalDate.class)} and {@code getDate(column)} agree.
+     *
      * <p>{@code Short} and {@code Byte} are rejected rather than narrowed from the numeric
      * targets, preserving the sqlite-jdbc 3.53.4.0 contract.
      *
      * @throws SQLException if {@code type} is {@code null}, a numeric target reads a value from
-     *     any storage class other than INTEGER or FLOAT, or the value cannot be converted
+     *     any storage class other than INTEGER or FLOAT, a date or time target reads a BLOB or
+     *     unparseable TEXT, or the value cannot be converted
      * @throws SQLFeatureNotSupportedException if {@code type} is not a supported target type
      */
     @Override
@@ -1120,46 +1110,124 @@ public class LibsqlResultSet implements ResultSet {
     }
 
     private LocalDate getLocalDate(int columnIndex) throws SQLException {
-        String s = getString(columnIndex);
-        if (s == null) {
-            return null;
-        }
-        try {
-            return LocalDate.parse(s.length() >= 10 ? s.substring(0, 10) : s);
-        } catch (DateTimeParseException e) {
-            throw new SQLException("Bad value for type LocalDate: " + s, e);
-        }
+        LocalDateTime value = dateTimeValue(columnIndex, "LocalDate");
+        return value == null ? null : value.toLocalDate();
     }
 
     private LocalTime getLocalTime(int columnIndex) throws SQLException {
-        String s = getString(columnIndex);
-        if (s == null) {
-            return null;
-        }
-        int separator = Math.max(s.indexOf(' '), s.indexOf('T'));
-        String value = separator >= 0 ? s.substring(separator + 1) : s;
-        try {
-            return LocalTime.parse(value);
-        } catch (DateTimeParseException e) {
-            throw new SQLException("Bad value for type LocalTime: " + s, e);
-        }
+        LocalDateTime value = dateTimeValue(columnIndex, "LocalTime");
+        return value == null ? null : value.toLocalTime();
     }
 
     private LocalDateTime getLocalDateTime(int columnIndex) throws SQLException {
-        String s = getString(columnIndex);
-        if (s == null) {
-            return null;
-        }
-        String value = s.indexOf(' ') >= 0 ? s.replace(' ', 'T') : s;
+        return dateTimeValue(columnIndex, "LocalDateTime");
+    }
+
+    /**
+     * Reads a column as a local date and time using SQLite storage-class conventions: INTEGER is
+     * epoch milliseconds, FLOAT is a Julian day, and TEXT is a SQLite date/time string.
+     */
+    private LocalDateTime dateTimeValue(int columnIndex, String targetType) throws SQLException {
+        Value value = getCurrentValue(columnIndex);
+        return switch (value) {
+            case Value.Null n -> null;
+            case Value.Integer i -> epochMillisToLocalDateTime(i.value(), targetType);
+            case Value.Float f ->
+                    epochMillisToLocalDateTime(julianDayToEpochMillis(f.value()), targetType);
+            case Value.Text t -> parseSqliteDateTime(t.value(), targetType);
+            case Value.Blob b -> throw new SQLException("Bad value for type " + targetType);
+        };
+    }
+
+    private static LocalDateTime epochMillisToLocalDateTime(long epochMillis, String targetType)
+            throws SQLException {
         try {
-            return LocalDateTime.parse(value);
-        } catch (DateTimeParseException e) {
-            try {
-                return LocalDate.parse(value).atStartOfDay();
-            } catch (DateTimeParseException e2) {
-                throw new SQLException("Bad value for type LocalDateTime: " + s, e2);
+            return LocalDateTime.ofInstant(
+                    Instant.ofEpochMilli(epochMillis), ZoneId.systemDefault());
+        } catch (DateTimeException e) {
+            throw new SQLException("Bad value for type " + targetType, e);
+        }
+    }
+
+    private static long julianDayToEpochMillis(double julianDay) {
+        return Math.round((julianDay - 2440587.5) * 86_400_000.0);
+    }
+
+    private static LocalDateTime parseSqliteDateTime(String text, String targetType)
+            throws SQLException {
+        String value = text.trim();
+        ZoneOffset offset = null;
+        if (value.endsWith("Z") || value.endsWith("z")) {
+            offset = ZoneOffset.UTC;
+            value = value.substring(0, value.length() - 1);
+        } else if (value.length() > 10) {
+            int sign = Math.max(value.lastIndexOf('+'), value.lastIndexOf('-'));
+            if (sign > 9) {
+                try {
+                    offset = ZoneOffset.of(value.substring(sign));
+                } catch (DateTimeException e) {
+                    throw new SQLException("Bad value for type " + targetType + ": " + text, e);
+                }
+                value = value.substring(0, sign);
             }
         }
+
+        try {
+            int separator = -1;
+            for (int i = 0; i < value.length(); i++) {
+                char c = value.charAt(i);
+                if (c == ' ' || c == 'T') {
+                    separator = i;
+                    break;
+                }
+            }
+
+            LocalDate date;
+            LocalTime time;
+            if (separator >= 0) {
+                date = LocalDate.parse(value.substring(0, separator));
+                time = parseSqliteTime(value.substring(separator + 1));
+            } else if (value.length() >= 10 && value.charAt(4) == '-') {
+                date = LocalDate.parse(value);
+                time = LocalTime.MIDNIGHT;
+            } else {
+                // SQLite uses 2000-01-01 when a time string carries no date.
+                date = LocalDate.of(2000, 1, 1);
+                time = parseSqliteTime(value);
+            }
+
+            LocalDateTime local = LocalDateTime.of(date, time);
+            return offset == null
+                    ? local
+                    : local.atOffset(offset)
+                            .atZoneSameInstant(ZoneId.systemDefault())
+                            .toLocalDateTime();
+        } catch (DateTimeException | NumberFormatException e) {
+            throw new SQLException("Bad value for type " + targetType + ": " + text, e);
+        }
+    }
+
+    private static LocalTime parseSqliteTime(String text) {
+        int dot = text.indexOf('.');
+        String clock = dot >= 0 ? text.substring(0, dot) : text;
+        String[] parts = clock.split(":", -1);
+        if (parts.length < 2 || parts.length > 3) {
+            throw new DateTimeException("Bad time: " + text);
+        }
+        int hour = Integer.parseInt(parts[0]);
+        int minute = Integer.parseInt(parts[1]);
+        int second = parts.length == 3 ? Integer.parseInt(parts[2]) : 0;
+
+        int nanos = 0;
+        if (dot >= 0) {
+            String fraction = text.substring(dot + 1);
+            String digits = fraction.length() > 9 ? fraction.substring(0, 9) : fraction;
+            nanos = Integer.parseInt(digits);
+            for (int i = digits.length(); i < 9; i++) {
+                nanos *= 10;
+            }
+        }
+        return LocalTime.of(hour, minute, second, nanos);
     }
 
     @Override
