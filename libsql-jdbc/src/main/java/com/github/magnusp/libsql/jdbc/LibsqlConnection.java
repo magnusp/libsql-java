@@ -483,18 +483,30 @@ public class LibsqlConnection implements Connection {
 
     @Override
     public Map<String, Class<?>> getTypeMap() throws SQLException {
-        return Map.of();
+        throw new SQLFeatureNotSupportedException("Type maps are not supported");
     }
 
     @Override
-    public void setTypeMap(Map<String, Class<?>> map) throws SQLException {}
+    public void setTypeMap(Map<String, Class<?>> map) throws SQLException {
+        throw new SQLFeatureNotSupportedException("Type maps are not supported");
+    }
 
     @Override
-    public void setHoldability(int holdability) throws SQLException {}
+    public void setHoldability(int holdability) throws SQLException {
+        checkClosed();
+        checkHoldability(holdability);
+    }
 
     @Override
     public int getHoldability() throws SQLException {
-        return 1; // HOLD_CURSORS_OVER_COMMIT
+        checkClosed();
+        return ResultSet.CLOSE_CURSORS_AT_COMMIT;
+    }
+
+    private static void checkHoldability(int holdability) throws SQLException {
+        if (holdability != ResultSet.CLOSE_CURSORS_AT_COMMIT) {
+            throw new SQLException("SQLite only supports CLOSE_CURSORS_AT_COMMIT");
+        }
     }
 
     @Override
@@ -519,16 +531,22 @@ public class LibsqlConnection implements Connection {
 
     @Override
     public Statement createStatement(int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException {
+        checkClosed();
+        checkHoldability(resultSetHoldability);
         return createStatement();
     }
 
     @Override
     public PreparedStatement prepareStatement(String sql, int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException {
+        checkClosed();
+        checkHoldability(resultSetHoldability);
         return prepareStatement(sql);
     }
 
     @Override
     public CallableStatement prepareCall(String sql, int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException {
+        checkClosed();
+        checkHoldability(resultSetHoldability);
         return prepareCall(sql);
     }
 
