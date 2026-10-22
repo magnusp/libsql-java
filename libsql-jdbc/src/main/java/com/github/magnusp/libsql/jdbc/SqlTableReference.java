@@ -121,7 +121,8 @@ final class SqlTableReference {
         }
     }
 
-    private static final Pattern UNQUOTED_IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_$]*");
+    private static final Pattern UNQUOTED_IDENTIFIER =
+            Pattern.compile("[A-Za-z_\\x80-\\uFFFF][A-Za-z0-9_$\\x80-\\uFFFF]*");
 
     private static final Set<String> FROM_END = Set.of(
             "WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "OFFSET", "WINDOW", "RETURNING",
@@ -1273,6 +1274,11 @@ final class SqlTableReference {
     }
 
     private static boolean isWordChar(char c) {
-        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '$';
+        return c >= 0x80
+                || (c >= 'a' && c <= 'z')
+                || (c >= 'A' && c <= 'Z')
+                || (c >= '0' && c <= '9')
+                || c == '_'
+                || c == '$';
     }
 }
