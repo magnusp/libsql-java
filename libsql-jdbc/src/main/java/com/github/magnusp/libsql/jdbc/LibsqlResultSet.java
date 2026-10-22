@@ -59,6 +59,7 @@ public class LibsqlResultSet implements ResultSet {
     private int currentRowIndex = -1;
     private int lastColumnIndex = 0;
     private boolean closed = false;
+    private int fetchSize = 0;
     private LibsqlResultSetMetaData metadata;
 
     // Mitigation for Bug 6: O(1) column label lookup
@@ -867,8 +868,14 @@ public class LibsqlResultSet implements ResultSet {
     @Override public boolean previous() throws SQLException { throw new SQLException("Forward only"); }
     @Override public void setFetchDirection(int direction) throws SQLException {}
     @Override public int getFetchDirection() throws SQLException { return FETCH_FORWARD; }
-    @Override public void setFetchSize(int rows) throws SQLException {}
-    @Override public int getFetchSize() throws SQLException { return 0; }
+    @Override
+    public void setFetchSize(int rows) throws SQLException {
+        if (rows < 0) {
+            throw new SQLException("fetch size " + rows + " out of bounds 0");
+        }
+        fetchSize = rows;
+    }
+    @Override public int getFetchSize() throws SQLException { return fetchSize; }
     @Override public boolean rowUpdated() throws SQLException { return false; }
     @Override public boolean rowInserted() throws SQLException { return false; }
     @Override public boolean rowDeleted() throws SQLException { return false; }
@@ -947,7 +954,7 @@ public class LibsqlResultSet implements ResultSet {
     @Override public RowId getRowId(String columnLabel) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public void updateRowId(int columnIndex, RowId x) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public void updateRowId(String columnLabel, RowId x) throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public int getHoldability() throws SQLException { return HOLD_CURSORS_OVER_COMMIT; }
+    @Override public int getHoldability() throws SQLException { return CLOSE_CURSORS_AT_COMMIT; }
     @Override public void updateNString(int columnIndex, String nString) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public void updateNString(String columnLabel, String nString) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public void updateNClob(int columnIndex, NClob nClob) throws SQLException { throw new UnsupportedOperationException(); }

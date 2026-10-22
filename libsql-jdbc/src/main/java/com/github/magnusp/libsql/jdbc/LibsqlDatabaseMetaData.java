@@ -565,8 +565,8 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     @Override public ResultSet getSuperTypes(String catalog, String schemaPattern, String typeNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public ResultSet getSuperTables(String catalog, String schemaPattern, String tableNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public ResultSet getAttributes(String catalog, String schemaPattern, String typeNamePattern, String attributeNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public boolean supportsResultSetHoldability(int holdability) throws SQLException { return holdability == ResultSet.HOLD_CURSORS_OVER_COMMIT; }
-    @Override public int getResultSetHoldability() throws SQLException { return ResultSet.HOLD_CURSORS_OVER_COMMIT; }
+    @Override public boolean supportsResultSetHoldability(int holdability) throws SQLException { return holdability == ResultSet.CLOSE_CURSORS_AT_COMMIT; }
+    @Override public int getResultSetHoldability() throws SQLException { return ResultSet.CLOSE_CURSORS_AT_COMMIT; }
     @Override public int getDatabaseMajorVersion() throws SQLException {
         String[] parts = resolveDatabaseProductVersion().split("\\.");
         try { return Integer.parseInt(parts[0]); } catch (NumberFormatException e) { return 3; }
