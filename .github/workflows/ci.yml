@@ -40,3 +40,23 @@ jobs:
 
       - name: Run Tests and Verifications
         run: mvn --batch-mode clean verify
+
+  xerial-control:
+    # Reference probe, not a parity gate: the same vendored tests run against the pinned
+    # xerial driver. A failure means the vendored test is not a valid reference or the
+    # driver diverges without a recorded reason, not that libSQL must match xerial.
+    name: Xerial Control (reference probe)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Amazon Corretto 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'corretto'
+          java-version: '25'
+          cache: 'maven'
+
+      - name: Run the xerial control profile
+        run: mvn --batch-mode -pl libsql-conformance -am -Pxerial-control verify
