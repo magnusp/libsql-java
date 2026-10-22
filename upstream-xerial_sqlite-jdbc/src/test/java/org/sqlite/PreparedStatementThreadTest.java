@@ -42,7 +42,7 @@ public class PreparedStatementThreadTest {
      * behavior
      */
     @Test
-    public void testPreparedStmtConcurrentCloseSegFault() throws SQLException {
+    public void testPreparedStmtConcurrentCloseSegFault() throws SQLException, ExecutionException {
         connect();
         try {
             for (int i = 0; i < 100; i++) {
@@ -59,7 +59,8 @@ public class PreparedStatementThreadTest {
      * undefined C behavior
      */
     @Test
-    public void testPreparedStmtConcurrentCloseConnSegFault() throws SQLException {
+    public void testPreparedStmtConcurrentCloseConnSegFault() throws SQLException,
+            ExecutionException {
         for (int i = 0; i < 100; i++) {
             connect();
             testRace(executorService, conn::close);
@@ -76,7 +77,7 @@ public class PreparedStatementThreadTest {
     }
 
     private void testRace(ExecutorService executorService, CloseCallback closeCallback)
-            throws SQLException {
+            throws SQLException, ExecutionException {
         AtomicInteger countdown = new AtomicInteger(2);
         stat = conn.prepareStatement("select 1,2,3,4,5");
 
@@ -98,18 +99,32 @@ public class PreparedStatementThreadTest {
                             closeCallback.close();
                             return true;
                         });
+        ExecutionException queryFailure = null;
+        ExecutionException closeFailure = null;
         try {
             assertThat(queryThread.get()).isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            fail("", e);
+        } catch (ExecutionException e) {
+            queryFailure = e;
+        }
+        // Await the close future even when the query failed, so neither side hides the other.
+        try {
             assertThat(closeThread.get()).isTrue();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             fail("", e);
         } catch (ExecutionException e) {
-            // A checked SQLException from the close race is expected. Assertion failures are
-            // not: ExecutionException wraps them, so rethrow them or the test cannot fail.
-            if (e.getCause() instanceof AssertionError assertionError) {
-                throw assertionError;
-            }
+            closeFailure = e;
+        }
+        // A checked SQLException from the close race is expected. Any other cause is the Java
+        // equivalent of the native crash this test guards, so it must fail the test.
+        if (queryFailure != null && !(queryFailure.getCause() instanceof SQLException)) {
+            throw queryFailure;
+        }
+        if (closeFailure != null && !(closeFailure.getCause() instanceof SQLException)) {
+            throw closeFailure;
         }
     }
 

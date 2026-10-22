@@ -21,7 +21,7 @@ ae4568fd773f158f04e89df8e0fe2326381b6af7ed1316193830d38f7cadbae5  ./src/test/jav
 # upstream 242bb51330240174bab5f443aa4d8de1049e6d947374e080a636c4aa4d0049ee ./src/test/java/org/sqlite/MetadataLeakTest.java
 242bb51330240174bab5f443aa4d8de1049e6d947374e080a636c4aa4d0049ee  ./src/test/java/org/sqlite/MetadataLeakTest.java
 # upstream 7af8ae0999a0bf26a20c96ab23131505bd79827e6af17742771e36e9d8d985f4 ./src/test/java/org/sqlite/PreparedStatementThreadTest.java
-bc6d868d2069dcc5db54a7720e7ecd9f725c83dbf910ec8ec61222b98f6198c1  ./src/test/java/org/sqlite/PreparedStatementThreadTest.java
+8e63f29bec87782e5705ebff748389cb9f5fe3a68d755c730a2beaccde9712a4  ./src/test/java/org/sqlite/PreparedStatementThreadTest.java
 # upstream d787e71bdf2b8d12a2669eb06c432cf2a39ac77f678a92459e3dd9b6c4519a43 ./src/test/java/org/sqlite/RSMetaDataTest.java
 d787e71bdf2b8d12a2669eb06c432cf2a39ac77f678a92459e3dd9b6c4519a43  ./src/test/java/org/sqlite/RSMetaDataTest.java
 # upstream 6065d284933c8462cc13217992820a9261075c0e9ee126df6cbe9961d90303f9 ./src/test/java/org/sqlite/ResultSetTest.java
