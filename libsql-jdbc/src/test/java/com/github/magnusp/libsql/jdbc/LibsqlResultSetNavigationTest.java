@@ -119,6 +119,41 @@ class LibsqlResultSetNavigationTest {
     }
 
     @Test
+    void isFirstIsTrueOnlyOnTheFirstRow() throws SQLException {
+        LibsqlResultSet resultSet = resultSet(TWO_ROWS);
+
+        assertThat(resultSet.isFirst()).isFalse();
+        assertThat(resultSet.next()).isTrue();
+        assertThat(resultSet.isFirst()).isTrue();
+        assertThat(resultSet.next()).isTrue();
+        assertThat(resultSet.isFirst()).isFalse();
+        assertThat(resultSet.next()).isFalse();
+        assertThat(resultSet.isFirst()).isFalse();
+        assertThat(resultSet.next()).isFalse();
+        assertThat(resultSet.isFirst()).isFalse();
+    }
+
+    @Test
+    void isFirstIsTrueOnTheSingleRowAndFalseAfterTheEnd() throws SQLException {
+        LibsqlResultSet resultSet = resultSet(DUPLICATE_LABELS);
+
+        assertThat(resultSet.isFirst()).isFalse();
+        assertThat(resultSet.next()).isTrue();
+        assertThat(resultSet.isFirst()).isTrue();
+        assertThat(resultSet.next()).isFalse();
+        assertThat(resultSet.isFirst()).isFalse();
+    }
+
+    @Test
+    void isFirstIsFalseForAnEmptyResultSet() throws SQLException {
+        LibsqlResultSet resultSet = resultSet(NO_ROWS);
+
+        assertThat(resultSet.isFirst()).isFalse();
+        assertThat(resultSet.next()).isFalse();
+        assertThat(resultSet.isFirst()).isFalse();
+    }
+
+    @Test
     void wasNullThrowsBeforeAnyGetterAndAfterTheEndWithoutAGetter() throws SQLException {
         LibsqlResultSet beforeFirst = resultSet(DUPLICATE_LABELS);
         assertThatThrownBy(beforeFirst::wasNull)
