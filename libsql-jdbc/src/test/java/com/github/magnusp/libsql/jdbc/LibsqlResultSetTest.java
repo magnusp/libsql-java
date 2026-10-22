@@ -8,6 +8,11 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.stream.IntStream;
 
@@ -216,6 +221,48 @@ class LibsqlResultSetTest {
         assertThatThrownBy(() -> rs.getObject(1, Integer.class))
                 .isInstanceOf(SQLException.class)
                 .hasMessage("Bad value for type Integer");
+    }
+
+    @Test
+    void textDateTimeFeedsEveryDateAndTimeGetter() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Text("2024-01-02 10:00:00"));
+        assertThat(rs.next()).isTrue();
+
+        long epochMillis = LocalDateTime.of(2024, 1, 2, 10, 0)
+                .atZone(ZoneId.systemDefault())
+                .toInstant()
+                .toEpochMilli();
+        assertDateTimeGetters(rs, epochMillis);
+    }
+
+    @Test
+    void integerEpochMillisFeedsEveryDateAndTimeGetter() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Integer(1_700_000_000_000L));
+        assertThat(rs.next()).isTrue();
+
+        assertDateTimeGetters(rs, 1_700_000_000_000L);
+    }
+
+    @Test
+    void realJulianDayFeedsEveryDateAndTimeGetter() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Float(2460311.5));
+        assertThat(rs.next()).isTrue();
+
+        assertDateTimeGetters(rs, 1_704_153_600_000L);
+    }
+
+    private static void assertDateTimeGetters(LibsqlResultSet rs, long epochMillis) throws SQLException {
+        LocalDateTime expected = LocalDateTime.ofInstant(Instant.ofEpochMilli(epochMillis), ZoneId.systemDefault());
+
+        assertThat(rs.getDate(1)).isNotNull();
+        assertThat(rs.getDate(1).toLocalDate()).isEqualTo(expected.toLocalDate());
+        assertThat(rs.getTime(1)).isNotNull();
+        assertThat(rs.getTime(1).toLocalTime()).isEqualTo(expected.toLocalTime());
+        assertThat(rs.getTimestamp(1)).isNotNull();
+        assertThat(rs.getTimestamp(1).getTime()).isEqualTo(epochMillis);
+        assertThat(rs.getObject(1, LocalDate.class)).isEqualTo(expected.toLocalDate());
+        assertThat(rs.getObject(1, LocalTime.class)).isEqualTo(expected.toLocalTime());
+        assertThat(rs.getObject(1, LocalDateTime.class)).isEqualTo(expected);
     }
 
     private static void assertNumeric(LibsqlResultSet rs, int column, int expectedInt, long expectedLong,
