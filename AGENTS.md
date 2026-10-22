@@ -88,6 +88,8 @@ To run a specific test:
 mise exec -- ./mvnw -pl libsql-itests -Dtest=HikariCpIntegrationIT test
 ```
 
+Under nono, set `DOCKER_CONFIG` before the command, as described in the workaround below.
+
 ### nono Sandbox and Docker Config
 
 This environment may run inside a `nono` filesystem sandbox. The sandbox can block reads of `~/.docker/config.json` even when `docker info` works. Testcontainers then fails with:
@@ -97,21 +99,39 @@ ServiceConfigurationError: ... EnvironmentAndSystemPropertyClientProviderStrateg
 Caused by: java.io.FileNotFoundException: /home/<user>/.docker/config.json (Permission denied)
 ```
 
-Detect the sandbox with `nono status`, or check the exact path with:
+Check the exact path with:
 
 ```bash
 nono why --self --path ~/.docker/config.json --op read
 ```
 
-Do not change file permissions or the nono profile from inside the sandbox. `libsql-conformance` uses a readable Docker config automatically. It copies `src/test/docker-config/config.json` to `target/docker-config` and sets `DOCKER_CONFIG` for the Failsafe fork. Use that empty auth config only for public images.
+Do not change file permissions or the nono profile from inside the sandbox.
 
-To use a readable copy of your real Docker config, override the module property:
+The repository ships one shared readable Docker config at `libsql-conformance/src/test/docker-config/config.json`. It is an empty auth config, so it works only for public images such as the `sqld` and Toxiproxy images that the integration tests use. Both modules can use it.
+
+`libsql-conformance` uses the config automatically. It copies `src/test/docker-config/config.json` to `target/docker-config` and sets `DOCKER_CONFIG` for the Failsafe fork. To use a readable copy of your real Docker config instead, override the module property:
 
 ```bash
 ./mvnw -pl libsql-conformance -am -Ddocker.config.dir=/path/to/docker-config verify
 ```
 
-Setting `DOCKER_CONFIG` in the shell is not enough by itself because the Failsafe fork receives its own value from `docker.config.dir`.
+Setting `DOCKER_CONFIG` in the shell is not enough for `libsql-conformance`, because its Failsafe fork receives its own value from `docker.config.dir`.
+
+`libsql-itests` has no copy step. Point `DOCKER_CONFIG` at the shared config directory in the shell, and the Failsafe fork inherits it:
+
+```bash
+DOCKER_CONFIG="$PWD/libsql-conformance/src/test/docker-config" \
+  ./mvnw -pl libsql-itests -am verify
+```
+
+The same override works for a single integration test:
+
+```bash
+DOCKER_CONFIG="$PWD/libsql-conformance/src/test/docker-config" \
+  ./mvnw -pl libsql-itests -am -Dit.test=HikariCpIntegrationIT verify
+```
+
+Use the absolute path shown. A relative `DOCKER_CONFIG` is resolved against the fork's working directory, not the shell's.
 
 ---
 
