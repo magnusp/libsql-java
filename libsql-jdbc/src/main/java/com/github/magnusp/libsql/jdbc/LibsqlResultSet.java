@@ -626,7 +626,7 @@ public class LibsqlResultSet implements ResultSet {
             case Value.Blob b -> b.bytes();
             case Value.Text t -> t.value().getBytes(java.nio.charset.StandardCharsets.UTF_8);
             case Value.Integer i -> Long.toString(i.value()).getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            case Value.Float f -> Double.toString(f.value()).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            case Value.Float f -> sqliteRealText(f.value()).getBytes(java.nio.charset.StandardCharsets.UTF_8);
         };
     }
 
