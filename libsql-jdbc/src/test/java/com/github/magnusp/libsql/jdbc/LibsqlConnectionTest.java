@@ -52,85 +52,213 @@ class LibsqlConnectionTest {
     }
 
     @Test
-    void disablingAutoCommitBeginsTransactionImmediately() throws SQLException {
+    void disablingAutoCommitDefersTheBeginUntilTheNextStatement() throws SQLException {
         ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
         LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
 
         connection.setAutoCommit(false);
 
-        assertThat(client.executedStatements()).containsExactly("BEGIN");
+        assertThat(client.requests).isEmpty();
+
+        connection.executeStatement(new Stmt("SELECT 1"));
+
+        assertThat(client.executedStatements()).containsExactly("BEGIN", "SELECT 1");
+        assertThat(client.requests).hasSize(2);
         assertThat(client.requests.get(0).baton()).isNull();
+        assertThat(client.requests.get(1).baton()).isEqualTo(BATON);
     }
 
     @ParameterizedTest
     @EnumSource(value = LibsqlConnection.TransactionMode.class, names = {"IMMEDIATE", "EXCLUSIVE"})
-    void disablingAutoCommitUsesConfiguredTransactionMode(LibsqlConnection.TransactionMode mode)
+    void theDeferredBeginUsesTheConfiguredTransactionMode(LibsqlConnection.TransactionMode mode)
             throws SQLException {
         ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
         LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
         connection.setTransactionMode(mode);
 
         connection.setAutoCommit(false);
+        connection.executeStatement(new Stmt("SELECT 1"));
 
         String expected = switch (mode) {
             case IMMEDIATE -> "BEGIN IMMEDIATE";
             case EXCLUSIVE -> "BEGIN EXCLUSIVE";
             case DEFERRED -> "BEGIN";
         };
-        assertThat(client.executedStatements()).containsExactly(expected);
+        assertThat(client.executedStatements()).containsExactly(expected, "SELECT 1");
     }
 
     @Test
-    void commitReBeginsInConfiguredTransactionMode() throws SQLException {
+    void commitDoesNotReBeginAndTheNextStatementUsesTheConfiguredMode() throws SQLException {
         ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
         LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
         connection.setTransactionMode("immediate");
         connection.setAutoCommit(false);
+        connection.executeStatement(new Stmt("SELECT 1"));
 
         connection.commit();
+        connection.executeStatement(new Stmt("SELECT 2"));
 
         assertThat(client.executedStatements())
-                .containsExactly("BEGIN IMMEDIATE", "COMMIT", "BEGIN IMMEDIATE");
+                .containsExactly("BEGIN IMMEDIATE", "SELECT 1", "COMMIT", "BEGIN IMMEDIATE", "SELECT 2");
         assertThat(connection.getTransactionMode())
                 .isEqualTo(LibsqlConnection.TransactionMode.IMMEDIATE);
     }
 
     @Test
-    void commitBeginsNextTransactionOnTheSameStream() throws SQLException {
+    void commitClosesTheStreamAndTheNextStatementBeginsOnANewStream() throws SQLException {
+        ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.setAutoCommit(false);
+        connection.executeStatement(new Stmt("SELECT 1"));
+
+        connection.commit();
+
+        assertThat(client.executedStatements()).containsExactly("BEGIN", "SELECT 1", "COMMIT");
+        assertThat(client.requests).hasSize(4);
+        assertThat(client.requests.get(2).baton()).isNotNull();
+        assertThat(client.requests.get(3).requests()).containsExactly(StreamRequest.Close.INSTANCE);
+
+        connection.executeStatement(new Stmt("SELECT 2"));
+
+        assertThat(client.requests.get(4).baton()).isNull();
+        assertThat(client.requests.get(4).requests())
+                .as("BEGIN must be checked on its own before the statement can run")
+                .hasSize(1);
+        assertThat(client.requests.get(5).baton()).isNotNull();
+    }
+
+    @Test
+    void rollbackClosesTheStreamAndTheNextStatementBeginsOnANewStream() throws SQLException {
+        ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.setAutoCommit(false);
+        connection.executeStatement(new Stmt("SELECT 1"));
+
+        connection.rollback();
+
+        assertThat(client.executedStatements()).containsExactly("BEGIN", "SELECT 1", "ROLLBACK");
+        assertThat(client.requests).hasSize(4);
+        assertThat(client.requests.get(3).requests()).containsExactly(StreamRequest.Close.INSTANCE);
+
+        connection.executeStatement(new Stmt("SELECT 2"));
+
+        assertThat(client.requests.get(4).baton()).isNull();
+    }
+
+    @Test
+    void commitWithNoWorkSendsNoRequestAndTheNextStatementCostsTwoRoundTrips() throws SQLException {
         ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
         LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
         connection.setAutoCommit(false);
 
         connection.commit();
 
-        assertThat(client.executedStatements()).containsExactly("BEGIN", "COMMIT", "BEGIN");
+        assertThat(client.requests).as("commit of a pending begin sends nothing").isEmpty();
+        assertThat(connection.getAutoCommit()).isFalse();
+
+        connection.executeStatement(new Stmt("SELECT 1"));
+
+        assertThat(client.executedStatements()).containsExactly("BEGIN", "SELECT 1");
         assertThat(client.requests).hasSize(2);
-        assertThat(client.requests.get(1).baton()).isEqualTo(BATON);
     }
 
     @Test
-    void rollbackBeginsNextTransactionOnTheSameStream() throws SQLException {
+    void rollbackWithNoWorkSendsNoRequestAndTheNextStatementStillWorks() throws SQLException {
         ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
         LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
         connection.setAutoCommit(false);
 
         connection.rollback();
 
-        assertThat(client.executedStatements()).containsExactly("BEGIN", "ROLLBACK", "BEGIN");
-        assertThat(client.requests).hasSize(2);
-        assertThat(client.requests.get(1).baton()).isEqualTo(BATON);
+        assertThat(client.requests).isEmpty();
+        assertThat(connection.getAutoCommit()).isFalse();
+
+        connection.executeStatement(new Stmt("SELECT 1"));
+
+        assertThat(client.executedStatements()).containsExactly("BEGIN", "SELECT 1");
     }
 
     @Test
-    void enablingAutoCommitCommitsAndClosesTheOpenTransaction() throws SQLException {
+    void aFailedBeginLeavesTheBeginPendingAndNoStatementRuns() throws SQLException {
+        AtomicInteger begins = new AtomicInteger();
+        ScriptedClient client = new ScriptedClient((request, index) -> {
+            if ("BEGIN".equals(executedSql(request)) && begins.incrementAndGet() == 1) {
+                return errorResponse(new HranaError(SERVER_ERROR, "SQLITE_ERROR"));
+            }
+            return successResponse(request);
+        });
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.setAutoCommit(false);
+
+        assertThatThrownBy(() -> connection.executeStatement(new Stmt("SELECT 1")))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining(SERVER_ERROR);
+
+        assertThat(client.requests).hasSize(2);
+        assertThat(client.requests.get(0).requests())
+                .as("BEGIN is not pipelined with the statement, so the statement cannot run if it fails")
+                .hasSize(1);
+        assertThat(client.executedStatements()).containsExactly("BEGIN");
+
+        connection.executeStatement(new Stmt("SELECT 1"));
+
+        assertThat(client.executedStatements()).containsExactly("BEGIN", "BEGIN", "SELECT 1");
+        assertThat(client.requests.get(1).requests())
+                .as("the failed begin releases its stream")
+                .containsExactly(StreamRequest.Close.INSTANCE);
+        assertThat(client.requests.get(2).baton()).isNull();
+    }
+
+    @Test
+    void enablingAutoCommitAfterWorkCommitsAndClosesTheOpenTransaction() throws SQLException {
+        ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.setAutoCommit(false);
+        connection.executeStatement(new Stmt("INSERT INTO sample VALUES (1)"));
+
+        connection.setAutoCommit(true);
+
+        assertThat(client.executedStatements())
+                .containsExactly("BEGIN", "INSERT INTO sample VALUES (1)", "COMMIT");
+        assertThat(client.requests.get(2).baton()).isNotNull();
+        assertThat(client.requests).hasSize(4);
+        assertThat(client.requests.get(3).requests()).containsExactly(StreamRequest.Close.INSTANCE);
+        assertThat(connection.getAutoCommit()).isTrue();
+    }
+
+    @Test
+    void enablingAutoCommitFromAPendingBeginSendsNoRequest() throws SQLException {
         ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
         LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
         connection.setAutoCommit(false);
 
         connection.setAutoCommit(true);
 
-        assertThat(client.executedStatements()).containsExactly("BEGIN", "COMMIT");
-        assertThat(client.requests.get(1).baton()).isEqualTo(BATON);
+        assertThat(client.requests).isEmpty();
+        assertThat(connection.getAutoCommit()).isTrue();
+    }
+
+    @Test
+    void closeFromAPendingBeginSendsNoRequest() throws SQLException {
+        ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.setAutoCommit(false);
+
+        connection.close();
+
+        assertThat(client.requests).isEmpty();
+        assertThat(connection.isClosed()).isTrue();
+    }
+
+    @Test
+    void closeAfterWorkClosesTheOpenStream() throws SQLException {
+        ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.setAutoCommit(false);
+        connection.executeStatement(new Stmt("SELECT 1"));
+
+        connection.close();
+
         assertThat(client.requests).hasSize(3);
         assertThat(client.requests.get(2).requests()).containsExactly(StreamRequest.Close.INSTANCE);
     }
@@ -157,10 +285,12 @@ class LibsqlConnectionTest {
                 "BEGIN",
                 "INSERT INTO sample VALUES (1)",
                 "COMMIT",
-                "BEGIN",
                 "ROLLBACK",
                 "BEGIN",
                 "INSERT INTO sample VALUES (2)");
+        assertThat(client.requests.get(3).baton())
+                .as("rollback after a failed commit retries on the same stream")
+                .isNotNull();
     }
 
     @ParameterizedTest

@@ -198,9 +198,18 @@ public class LibsqlConnection implements Connection {
     }
 
     private void ensureTransactionStarted() throws SQLException {
-        if (baton == null) {
+        if (beginPending()) {
             beginTransaction();
         }
+    }
+
+    /**
+     * The begin-pending state is derived rather than stored: auto-commit is off and no stream is
+     * open, so the next statement must begin the transaction. A separate boolean would be a second
+     * source of truth for a fact the baton already carries.
+     */
+    private boolean beginPending() {
+        return !autoCommit && baton == null;
     }
 
     private void beginTransaction() throws SQLException {
@@ -273,17 +282,23 @@ public class LibsqlConnection implements Connection {
     }
 
     /**
-     * Matches xerial sqlite-jdbc 3.53.4.0:
+     * Matches the observable JDBC behaviour of xerial sqlite-jdbc 3.53.4.0 while keeping the
+     * transaction begin lazy:
      *
      * <ul>
-     *   <li>Disabling auto-commit immediately begins a transaction in the configured
-     *       {@link TransactionMode}. The default is {@link TransactionMode#DEFERRED}, so an idle
-     *       non-auto-commit connection holds no lock until its first statement.
-     *   <li>{@link #commit()} and {@link #rollback()} end the current transaction and immediately
-     *       begin the next one, so a non-auto-commit connection always has a transaction open.
+     *   <li>Disabling auto-commit only records that the next statement must begin a transaction in
+     *       the configured {@link TransactionMode}. No request is sent, so an idle non-auto-commit
+     *       connection holds no Hrana stream and cannot hit sqld's idle stream expiry.
+     *   <li>{@link #commit()} and {@link #rollback()} end the open transaction and close its stream
+     *       without beginning the next one. A commit or rollback with no work sent nothing to the
+     *       server, as in xerial.
      *   <li>Re-enabling auto-commit commits the open transaction and ends the Hrana transaction
      *       stream.
      * </ul>
+     *
+     * <p>This diverges from xerial only in when the server sees the begin: an {@code IMMEDIATE} or
+     * {@code EXCLUSIVE} transaction no longer takes its write lock until the next statement. The
+     * protocol requires it, because Hrana over HTTP expires idle streams.
      *
      * <p>Use {@link #setTransactionMode(TransactionMode)} to select {@code IMMEDIATE} or {@code
      * EXCLUSIVE}, which acquire the write lock when the transaction begins.
@@ -293,11 +308,10 @@ public class LibsqlConnection implements Connection {
         checkClosed();
         if (this.autoCommit == autoCommit) return;
         if (autoCommit) {
-            endTransaction("COMMIT", false);
+            endTransaction("COMMIT");
             this.autoCommit = true;
         } else {
             this.autoCommit = false;
-            beginTransaction();
         }
     }
 
@@ -313,7 +327,7 @@ public class LibsqlConnection implements Connection {
         if (autoCommit) {
             throw new SQLException("Cannot commit when in autoCommit mode");
         }
-        endTransaction("COMMIT", true);
+        endTransaction("COMMIT");
     }
 
     @Override
@@ -322,26 +336,20 @@ public class LibsqlConnection implements Connection {
         if (autoCommit) {
             throw new SQLException("Cannot rollback when in autoCommit mode");
         }
-        endTransaction("ROLLBACK", true);
+        endTransaction("ROLLBACK");
     }
 
-    private void endTransaction(String sql, boolean rebegin) throws SQLException {
-        if (baton == null) {
-            if (rebegin) {
-                throw new SQLException("No transaction is active");
-            }
+    private void endTransaction(String sql) throws SQLException {
+        if (beginPending()) {
+            // No transaction has started, so there is nothing to send and nothing to close.
             return;
-        }
-
-        List<StreamRequest> requests = new ArrayList<>(2);
-        requests.add(new StreamRequest.Execute(new Stmt(sql)));
-        if (rebegin) {
-            requests.add(new StreamRequest.Execute(new Stmt(transactionMode.beginSql())));
         }
 
         PipelineRespBody resp;
         try {
-            resp = client.sendPipeline(new PipelineReqBody(baton, requests), baseUrl);
+            PipelineReqBody req = new PipelineReqBody(baton,
+                    List.of(new StreamRequest.Execute(new Stmt(sql))));
+            resp = client.sendPipeline(req, baseUrl);
         } catch (LibsqlException e) {
             throw LibsqlErrorMapper.toSQLException(e);
         }
@@ -359,25 +367,10 @@ public class LibsqlConnection implements Connection {
             throw new SQLException("Unexpected response: " + result);
         }
 
-        if (!rebegin) {
-            closeStreamSilently();
-            return;
-        }
-
-        if (resp.results().size() < 2) {
-            closeStreamSilently();
-            throw new SQLException("Missing response for transaction begin");
-        }
-        StreamResult begin = resp.results().get(1);
-        if (begin instanceof StreamResult.Error error) {
-            closeStreamSilently();
-            throw new SQLException(error.error().message());
-        }
-        if (!(begin instanceof StreamResult.Ok beginOk)
-                || !(beginOk.response() instanceof StreamResponse.Execute)) {
-            closeStreamSilently();
-            throw new SQLException("Unexpected response: " + begin);
-        }
+        // The server committed or rolled back, so the stream has no state left worth holding.
+        // Closing it lets an idle connection drop its server-side stream. On an error above the
+        // baton stays, so the caller can retry or roll back on the same stream.
+        closeStreamSilently();
     }
 
     @Override
