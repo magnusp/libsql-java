@@ -16,6 +16,10 @@
     <properties>
         <docker.config.dir>${project.build.directory}/docker-config</docker.config.dir>
         <xerial.version>3.53.4.0</xerial.version>
+        <!-- Set only by the xerial-control profile; the guard below rejects a hand-set
+             conformance.control.driver, because the control run must stay a reference
+             probe selected by the profile rather than a per-build driver switch. -->
+        <xerial.control.profile.active>false</xerial.control.profile.active>
     </properties>
 
     <dependencies>
@@ -82,6 +86,30 @@
                 <artifactId>maven-antrun-plugin</artifactId>
                 <version>3.2.0</version>
                 <executions>
+                    <execution>
+                        <id>guard-control-driver</id>
+                        <phase>generate-test-sources</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <condition property="conformance.control.misconfigured">
+                                    <and>
+                                        <isset property="conformance.control.driver" />
+                                        <not>
+                                            <equals
+                                                arg1="${xerial.control.profile.active}"
+                                                arg2="true" />
+                                        </not>
+                                    </and>
+                                </condition>
+                                <fail
+                                    if="conformance.control.misconfigured"
+                                    message="conformance.control.driver is only set by the xerial-control profile. Run with -Pxerial-control instead of passing -Dconformance.control.driver, so the control run stays a reference probe." />
+                            </target>
+                        </configuration>
+                    </execution>
                     <execution>
                         <id>verify-vendored-upstream</id>
                         <phase>generate-test-sources</phase>
@@ -164,6 +192,9 @@
         -->
         <profile>
             <id>xerial-control</id>
+            <properties>
+                <xerial.control.profile.active>true</xerial.control.profile.active>
+            </properties>
             <dependencies>
                 <dependency>
                     <groupId>org.xerial</groupId>
