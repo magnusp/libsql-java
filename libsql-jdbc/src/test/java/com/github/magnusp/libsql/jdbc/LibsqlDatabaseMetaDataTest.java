@@ -139,6 +139,43 @@ class LibsqlDatabaseMetaDataTest {
     }
 
     @Test
+    void eachMetadataMethodClosesTheStatementThatProducedItsResultSet() throws SQLException {
+        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new RecordingConnection(emptyResult()));
+        List<MetadataQuery> queries = List.of(
+                new MetadataQuery("getSchemas", metadata::getSchemas),
+                new MetadataQuery("getSchemas(catalog, pattern)", () -> metadata.getSchemas(null, null)),
+                new MetadataQuery("getCatalogs", metadata::getCatalogs),
+                new MetadataQuery("getTypeInfo", metadata::getTypeInfo),
+                new MetadataQuery("getImportedKeys", () -> metadata.getImportedKeys(null, null, "t")),
+                new MetadataQuery("getExportedKeys", () -> metadata.getExportedKeys(null, null, "t")),
+                new MetadataQuery(
+                        "getCrossReference",
+                        () -> metadata.getCrossReference(null, null, "parent", null, null, "child")),
+                new MetadataQuery(
+                        "getIndexInfo", () -> metadata.getIndexInfo(null, null, "t", false, false)));
+
+        List<String> leakedMethods = new ArrayList<>();
+        for (MetadataQuery query : queries) {
+            ResultSet resultSet = query.action().execute();
+            LibsqlStatement statement = (LibsqlStatement) resultSet.getStatement();
+            resultSet.close();
+            if (!statement.isClosed()) {
+                leakedMethods.add(query.name());
+            }
+            statement.close();
+        }
+
+        assertThat(leakedMethods).isEmpty();
+    }
+
+    @FunctionalInterface
+    private interface MetadataCall {
+        ResultSet execute() throws SQLException;
+    }
+
+    private record MetadataQuery(String name, MetadataCall action) {}
+
+    @Test
     void getColumnsReportsDeclaredTypesSizesNullabilityAndAutoIncrement() throws SQLException {
         LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new StmtResultConnection(columnMetadataRows()));
 

@@ -500,8 +500,8 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
 
     @Override public ResultSet getProcedures(String catalog, String schemaPattern, String procedureNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public ResultSet getProcedureColumns(String catalog, String schemaPattern, String procedureNamePattern, String columnNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public ResultSet getSchemas() throws SQLException { return connection.createStatement().executeQuery("SELECT NULL AS TABLE_SCHEM, NULL AS TABLE_CATALOG WHERE 0"); }
-    @Override public ResultSet getCatalogs() throws SQLException { return connection.createStatement().executeQuery("SELECT NULL AS TABLE_CAT WHERE 0"); }
+    @Override public ResultSet getSchemas() throws SQLException { return executeMetadataQuery("SELECT NULL AS TABLE_SCHEM, NULL AS TABLE_CATALOG WHERE 0"); }
+    @Override public ResultSet getCatalogs() throws SQLException { return executeMetadataQuery("SELECT NULL AS TABLE_CAT WHERE 0"); }
     @Override public ResultSet getColumnPrivileges(String catalog, String schema, String table, String columnNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public ResultSet getTablePrivileges(String catalog, String schemaPattern, String tableNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public ResultSet getBestRowIdentifier(String catalog, String schema, String table, int scope, boolean nullable) throws SQLException { throw new UnsupportedOperationException(); }
@@ -510,26 +510,26 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
         String sql = "SELECT NULL AS PKTABLE_CAT, NULL AS PKTABLE_SCHEM, NULL AS PKTABLE_NAME, NULL AS PKCOLUMN_NAME, " +
                 "NULL AS FKTABLE_CAT, NULL AS FKTABLE_SCHEM, NULL AS FKTABLE_NAME, NULL AS FKCOLUMN_NAME, " +
                 "0 AS KEY_SEQ, 0 AS UPDATE_RULE, 0 AS DELETE_RULE, NULL AS FK_NAME, NULL AS PK_NAME, 0 AS DEFERRABILITY WHERE 0";
-        return connection.createStatement().executeQuery(sql);
+        return executeMetadataQuery(sql);
     }
     @Override public ResultSet getExportedKeys(String catalog, String schema, String table) throws SQLException {
         String sql = "SELECT NULL AS PKTABLE_CAT, NULL AS PKTABLE_SCHEM, NULL AS PKTABLE_NAME, NULL AS PKCOLUMN_NAME, " +
                 "NULL AS FKTABLE_CAT, NULL AS FKTABLE_SCHEM, NULL AS FKTABLE_NAME, NULL AS FKCOLUMN_NAME, " +
                 "0 AS KEY_SEQ, 0 AS UPDATE_RULE, 0 AS DELETE_RULE, NULL AS FK_NAME, NULL AS PK_NAME, 0 AS DEFERRABILITY WHERE 0";
-        return connection.createStatement().executeQuery(sql);
+        return executeMetadataQuery(sql);
     }
     @Override public ResultSet getCrossReference(String parentCatalog, String parentSchema, String parentTable, String foreignCatalog, String foreignSchema, String foreignTable) throws SQLException {
         String sql = "SELECT NULL AS PKTABLE_CAT, NULL AS PKTABLE_SCHEM, NULL AS PKTABLE_NAME, NULL AS PKCOLUMN_NAME, " +
                 "NULL AS FKTABLE_CAT, NULL AS FKTABLE_SCHEM, NULL AS FKTABLE_NAME, NULL AS FKCOLUMN_NAME, " +
                 "0 AS KEY_SEQ, 0 AS UPDATE_RULE, 0 AS DELETE_RULE, NULL AS FK_NAME, NULL AS PK_NAME, 0 AS DEFERRABILITY WHERE 0";
-        return connection.createStatement().executeQuery(sql);
+        return executeMetadataQuery(sql);
     }
     @Override public ResultSet getTypeInfo() throws SQLException {
         String sql = "SELECT 'VARCHAR' AS TYPE_NAME, " + java.sql.Types.VARCHAR + " AS DATA_TYPE, 0 AS PRECISION, " +
                 "NULL AS LITERAL_PREFIX, NULL AS LITERAL_SUFFIX, NULL AS CREATE_PARAMS, 1 AS NULLABLE, 1 AS CASE_SENSITIVE, " +
                 "3 AS SEARCHABLE, 0 AS UNSIGNED_ATTRIBUTE, 0 AS FIXED_PREC_SCALE, 0 AS AUTO_INCREMENT, " +
                 "NULL AS LOCAL_TYPE_NAME, 0 AS MINIMUM_SCALE, 0 AS MAXIMUM_SCALE, 0 AS SQL_DATA_TYPE, 0 AS SQL_DATETIME_SUB, 10 AS NUM_PREC_RADIX WHERE 0";
-        return connection.createStatement().executeQuery(sql);
+        return executeMetadataQuery(sql);
     }
     @Override public ResultSet getIndexInfo(String catalog, String schema, String table, boolean unique, boolean approximate) throws SQLException {
         String sql = "SELECT NULL AS TABLE_CAT, NULL AS TABLE_SCHEM, '" + table + "' AS TABLE_NAME, " +
@@ -542,7 +542,7 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
             sql += " WHERE il.\"unique\" = 1";
         }
         sql += " ORDER BY NON_UNIQUE, TYPE, INDEX_NAME, ORDINAL_POSITION";
-        return connection.createStatement().executeQuery(sql);
+        return executeMetadataQuery(sql);
     }
     @Override public boolean supportsResultSetType(int type) throws SQLException { return type == ResultSet.TYPE_FORWARD_ONLY; }
     @Override public boolean supportsResultSetConcurrency(int type, int concurrency) throws SQLException { return type == ResultSet.TYPE_FORWARD_ONLY && concurrency == ResultSet.CONCUR_READ_ONLY; }
