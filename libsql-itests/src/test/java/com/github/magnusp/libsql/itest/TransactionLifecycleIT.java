@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.concurrent.ExecutorService;
@@ -14,6 +15,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 public class TransactionLifecycleIT extends SqldContainerBase {
 
@@ -68,6 +70,40 @@ public class TransactionLifecycleIT extends SqldContainerBase {
             lockHolder.commit();
 
             assertWriteIsBlockedUntilReleased(url, lockHolder, "commit_rebegin", 1);
+        }
+    }
+
+    @Test
+    void failedCommitCanBeRolledBackAndTheConnectionStaysUsable() throws Exception {
+        String url = getDriverJdbcUrl();
+        try (Connection connection = DriverManager.getConnection(url)) {
+            connection.setAutoCommit(false);
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("PRAGMA foreign_keys = ON");
+                statement.execute("CREATE TABLE p (id INTEGER PRIMARY KEY)");
+                statement.execute("CREATE TABLE c (pid INTEGER REFERENCES p(id)"
+                        + " DEFERRABLE INITIALLY DEFERRED)");
+                statement.executeUpdate("INSERT INTO c (pid) VALUES (1)");
+            }
+
+            assertThatThrownBy(connection::commit)
+                    .isInstanceOf(SQLException.class)
+                    .hasMessageContaining("FOREIGN KEY");
+
+            connection.rollback();
+
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("CREATE TABLE usable (id INTEGER PRIMARY KEY)");
+                assertThat(statement.executeUpdate("INSERT INTO usable (id) VALUES (1)"))
+                        .isEqualTo(1);
+            }
+            connection.commit();
+
+            try (Statement statement = connection.createStatement();
+                 ResultSet rows = statement.executeQuery("SELECT COUNT(*) FROM usable")) {
+                assertThat(rows.next()).isTrue();
+                assertThat(rows.getInt(1)).isEqualTo(1);
+            }
         }
     }
 

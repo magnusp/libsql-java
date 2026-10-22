@@ -123,6 +123,36 @@ class LibsqlConnectionTest {
 
         assertThat(client.executedStatements()).containsExactly("BEGIN", "COMMIT");
         assertThat(client.requests.get(1).baton()).isEqualTo(BATON);
+        assertThat(client.requests).hasSize(3);
+        assertThat(client.requests.get(2).requests()).containsExactly(StreamRequest.Close.INSTANCE);
+    }
+
+    @Test
+    void failedCommitCanBeRolledBackAndTheConnectionStaysUsable() throws SQLException {
+        AtomicInteger commits = new AtomicInteger();
+        ScriptedClient client = new ScriptedClient((request, index) -> {
+            if ("COMMIT".equals(executedSql(request)) && commits.incrementAndGet() == 1) {
+                return errorResponse(new HranaError(SERVER_ERROR, "SQLITE_CONSTRAINT_FOREIGNKEY"));
+            }
+            return successResponse(request);
+        });
+        LibsqlConnection connection = connectionInTransaction(client);
+
+        assertThatThrownBy(connection::commit)
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining(SERVER_ERROR);
+
+        connection.rollback();
+        connection.executeStatement(new Stmt("INSERT INTO sample VALUES (2)"));
+
+        assertThat(client.executedStatements()).containsExactly(
+                "BEGIN",
+                "INSERT INTO sample VALUES (1)",
+                "COMMIT",
+                "BEGIN",
+                "ROLLBACK",
+                "BEGIN",
+                "INSERT INTO sample VALUES (2)");
     }
 
     @ParameterizedTest
@@ -131,8 +161,7 @@ class LibsqlConnectionTest {
         AtomicInteger attempts = new AtomicInteger();
         ScriptedClient client = new ScriptedClient((request, index) -> {
             if (command.equals(executedSql(request)) && attempts.incrementAndGet() == 1) {
-                return new PipelineRespBody(request.baton(), null,
-                        List.of(new StreamResult.Error(new HranaError(SERVER_ERROR, "SQLITE_ERROR"))));
+                return errorResponse(new HranaError(SERVER_ERROR, "SQLITE_ERROR"));
             }
             return successResponse(request);
         });
@@ -174,7 +203,7 @@ class LibsqlConnectionTest {
                 .toList();
         assertThat(commandRequests).hasSize(2);
         assertThat(commandRequests).allSatisfy(
-                request -> assertThat(request.baton()).isEqualTo(BATON));
+                request -> assertThat(request.baton()).isNotNull());
     }
 
     private static LibsqlConnection connectionInTransaction(ScriptedClient client) throws SQLException {
@@ -202,7 +231,11 @@ class LibsqlConnectionTest {
                         new StreamResponse.Execute(new StmtResult(List.of(), List.of(), 0, null))));
             }
         }
-        return new PipelineRespBody(BATON, null, results);
+        return new PipelineRespBody(null, null, results);
+    }
+
+    private static PipelineRespBody errorResponse(HranaError error) {
+        return new PipelineRespBody(null, null, List.of(new StreamResult.Error(error)));
     }
 
     private static String executedSql(PipelineReqBody request) {
@@ -222,6 +255,8 @@ class LibsqlConnectionTest {
 
         private final Handler handler;
         private final List<PipelineReqBody> requests = new ArrayList<>();
+        private String issuedBaton = null;
+        private int batonCount = 0;
 
         private ScriptedClient(Handler handler) {
             super(CONFIG);
@@ -231,7 +266,12 @@ class LibsqlConnectionTest {
         @Override
         public PipelineRespBody sendPipeline(PipelineReqBody request, URI targetUri) {
             requests.add(request);
-            return handler.handle(request, requests.size() - 1);
+            if (request.baton() != null && !request.baton().equals(issuedBaton)) {
+                throw new LibsqlException("stale baton " + request.baton(), "STALE_BATON", 400);
+            }
+            PipelineRespBody response = handler.handle(request, requests.size() - 1);
+            issuedBaton = "baton-" + (++batonCount);
+            return new PipelineRespBody(issuedBaton, response.baseUrl(), response.results());
         }
 
         private List<String> executedStatements() {
