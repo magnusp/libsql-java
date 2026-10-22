@@ -19,12 +19,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 public class TransactionLifecycleIT extends SqldContainerBase {
 
+    /** sqld expires an idle Hrana stream after ten seconds. */
+    private static final long STREAM_IDLE_TIMEOUT_MILLIS = 12_000;
+
     private String getDriverJdbcUrl() {
         return "jdbc:libsql:" + getHttpUrl();
     }
 
     @Test
-    void deferredTransactionBeginsEagerlyWithoutHoldingAWriteLock() throws Exception {
+    void deferredTransactionDoesNotHoldAWriteLock() throws Exception {
         String url = getDriverJdbcUrl();
         try (Connection lockHolder = DriverManager.getConnection(url);
              Connection writer = DriverManager.getConnection(url)) {
@@ -43,21 +46,23 @@ public class TransactionLifecycleIT extends SqldContainerBase {
     }
 
     @Test
-    void immediateTransactionBeginsEagerlyAndHoldsTheWriteLock() throws Exception {
+    void immediateTransactionHoldsTheWriteLockFromTheFirstStatement() throws Exception {
         String url = getDriverJdbcUrl();
-        try (Connection lockHolder = DriverManager.getConnection(url)) {
+        try (Connection lockHolder = DriverManager.getConnection(url);
+             Statement statement = lockHolder.createStatement()) {
             createTable(lockHolder, "immediate_lock");
             LibsqlConnection libsql = lockHolder.unwrap(LibsqlConnection.class);
             libsql.setTransactionMode(LibsqlConnection.TransactionMode.IMMEDIATE);
 
             lockHolder.setAutoCommit(false);
+            statement.executeUpdate("INSERT INTO immediate_lock (id) VALUES (100)");
 
             assertWriteIsBlockedUntilReleased(url, lockHolder, "immediate_lock", 1);
         }
     }
 
     @Test
-    void commitBeginsTheNextTransactionAndKeepsTheConfiguredLock() throws Exception {
+    void commitEndsTheTransactionAndTheNextStatementReacquiresTheConfiguredLock() throws Exception {
         String url = getDriverJdbcUrl();
         try (Connection lockHolder = DriverManager.getConnection(url);
              Statement statement = lockHolder.createStatement()) {
@@ -69,7 +74,65 @@ public class TransactionLifecycleIT extends SqldContainerBase {
 
             lockHolder.commit();
 
+            // The next transaction, and its IMMEDIATE lock, begins on the next statement.
+            statement.executeUpdate("INSERT INTO commit_rebegin (id) VALUES (101)");
+
             assertWriteIsBlockedUntilReleased(url, lockHolder, "commit_rebegin", 1);
+        }
+    }
+
+    @Test
+    void aStatementAndCommitAfterAnIdlePeriodLongerThanTheStreamTimeoutSucceed() throws Exception {
+        String url = getDriverJdbcUrl();
+        try (Connection connection = DriverManager.getConnection(url)) {
+            createTable(connection, "idle_pending_begin");
+
+            connection.setAutoCommit(false);
+            connection.commit();
+            Thread.sleep(STREAM_IDLE_TIMEOUT_MILLIS);
+
+            try (Statement statement = connection.createStatement()) {
+                assertThat(statement.executeUpdate("INSERT INTO idle_pending_begin (id) VALUES (1)"))
+                        .isEqualTo(1);
+            }
+            connection.commit();
+
+            try (Statement statement = connection.createStatement();
+                 ResultSet rows = statement.executeQuery("SELECT COUNT(*) FROM idle_pending_begin")) {
+                assertThat(rows.next()).isTrue();
+                assertThat(rows.getInt(1)).isEqualTo(1);
+            }
+        }
+    }
+
+    @Test
+    void anIdleConnectionHoldsNoStreamAfterCommit() throws Exception {
+        String url = getDriverJdbcUrl();
+        try (Connection connection = DriverManager.getConnection(url)) {
+            createTable(connection, "idle_after_commit");
+
+            connection.setAutoCommit(false);
+            try (Statement statement = connection.createStatement()) {
+                statement.executeUpdate("INSERT INTO idle_after_commit (id) VALUES (1)");
+            }
+            connection.commit();
+
+            Thread.sleep(STREAM_IDLE_TIMEOUT_MILLIS);
+
+            try (Statement statement = connection.createStatement()) {
+                assertThat(statement.executeUpdate("INSERT INTO idle_after_commit (id) VALUES (2)"))
+                        .isEqualTo(1);
+                assertThat(statement.executeUpdate("INSERT INTO idle_after_commit (id) VALUES (3)"))
+                        .isEqualTo(1);
+            }
+            connection.rollback();
+            connection.commit();
+
+            try (Statement statement = connection.createStatement();
+                 ResultSet rows = statement.executeQuery("SELECT COUNT(*) FROM idle_after_commit")) {
+                assertThat(rows.next()).isTrue();
+                assertThat(rows.getInt(1)).isEqualTo(1);
+            }
         }
     }
 
