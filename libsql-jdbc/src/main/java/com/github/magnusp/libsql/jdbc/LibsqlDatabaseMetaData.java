@@ -35,7 +35,8 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
 
     private String resolveDatabaseProductVersion() throws SQLException {
         if (cachedDatabaseProductVersion == null) {
-            try (var rs = connection.createStatement().executeQuery("SELECT sqlite_version()")) {
+            try (var statement = connection.createStatement();
+                    var rs = statement.executeQuery("SELECT sqlite_version()")) {
                 cachedDatabaseProductVersion = rs.next() ? rs.getString(1) : "3.0";
             } catch (SQLException e) {
                 cachedDatabaseProductVersion = "3.0";
