@@ -65,7 +65,7 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
             throw new SQLException("Query does not return results");
         }
         LibsqlResultSet resultSet = new LibsqlResultSet(this, result, sql, false);
-        assignResultSet(resultSet, false);
+        assignResultSet(resultSet, true);
         return resultSet;
     }
 

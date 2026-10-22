@@ -38,6 +38,22 @@ class LibsqlStatementLifecycleTest {
     }
 
     @Test
+    void preparedGetResultSetAfterExecuteQueryThrowsResultSetAlreadyRequested()
+            throws SQLException {
+        RecordingConnection connection = new RecordingConnection(ROWS);
+        LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "select value from t");
+
+        try (statement) {
+            statement.executeQuery();
+
+            assertThatThrownBy(statement::getResultSet)
+                    .isInstanceOf(SQLException.class)
+                    .hasMessage("ResultSet already requested");
+        }
+    }
+
+    @Test
     void getResultSetAfterExecuteReturnsTheResultOnceThenThrows() throws SQLException {
         RecordingConnection connection = new RecordingConnection(ROWS);
 
