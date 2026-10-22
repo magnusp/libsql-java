@@ -34,12 +34,14 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     }
 
     private String resolveDatabaseProductVersion() throws SQLException {
+        connection.checkClosed();
         if (cachedDatabaseProductVersion == null) {
             try (var statement = connection.createStatement();
                     var rs = statement.executeQuery("SELECT sqlite_version()")) {
-                cachedDatabaseProductVersion = rs.next() ? rs.getString(1) : "3.0";
-            } catch (SQLException e) {
-                cachedDatabaseProductVersion = "3.0";
+                if (!rs.next()) {
+                    throw new SQLException("SELECT sqlite_version() returned no row");
+                }
+                cachedDatabaseProductVersion = rs.getString(1);
             }
         }
         return cachedDatabaseProductVersion;

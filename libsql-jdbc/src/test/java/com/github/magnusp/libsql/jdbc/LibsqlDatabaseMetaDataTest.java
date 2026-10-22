@@ -22,6 +22,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 class LibsqlDatabaseMetaDataTest {
@@ -62,6 +63,37 @@ class LibsqlDatabaseMetaDataTest {
         assertThat(connection.statements)
                 .as("the second product-version lookup must hit the cache and open nothing")
                 .hasSize(1);
+    }
+
+    @Test
+    void getDatabaseProductVersionRetriesAfterAFailedLookup() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(versionResult("3.45.1"));
+        connection.failuresRemaining = 1;
+        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(connection);
+
+        assertThatThrownBy(metadata::getDatabaseProductVersion)
+                .as("the first lookup must surface the failure instead of caching a fallback")
+                .isInstanceOf(SQLException.class);
+        assertThat(metadata.getDatabaseProductVersion())
+                .as("the second lookup must retry and return the server version")
+                .isEqualTo("3.45.1");
+        assertThat(metadata.getDatabaseMajorVersion()).isEqualTo(3);
+        assertThat(metadata.getDatabaseMinorVersion()).isEqualTo(45);
+    }
+
+    @Test
+    void getDatabaseProductVersionThrowsOnClosedConnection() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(versionResult("3.45.1"));
+        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(connection);
+        assertThat(metadata.getDatabaseProductVersion()).isEqualTo("3.45.1");
+        connection.close();
+
+        assertThatThrownBy(metadata::getDatabaseProductVersion)
+                .as("an already cached version must not outlive the connection")
+                .isInstanceOf(SQLException.class);
+        assertThatThrownBy(() -> new LibsqlDatabaseMetaData(connection).getDatabaseProductVersion())
+                .as("an uncached lookup on a closed connection must not return a fallback")
+                .isInstanceOf(SQLException.class);
     }
 
     @Test
@@ -429,6 +461,7 @@ class LibsqlDatabaseMetaDataTest {
         private final StmtResult result;
         private final List<LibsqlStatement> statements = new ArrayList<>();
         private String lastSql;
+        private int failuresRemaining;
 
         private RecordingConnection(StmtResult result) {
             super(null, null);
@@ -445,6 +478,10 @@ class LibsqlDatabaseMetaDataTest {
         @Override
         public StmtResult executeStatement(Stmt stmt) throws SQLException {
             lastSql = stmt.sql();
+            if (failuresRemaining > 0) {
+                failuresRemaining--;
+                throw new SQLException("simulated product-version lookup failure");
+            }
             return result;
         }
     }
