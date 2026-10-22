@@ -10,6 +10,7 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.stream.Stream;
@@ -93,6 +94,17 @@ class LibsqlResultSetRealTextTest {
         assertThat(rs.next()).isTrue();
 
         assertThat(rs.getString(1)).isEqualTo(expected);
+    }
+
+    @ParameterizedTest(name = "{0} -> {1}")
+    @MethodSource("canonicalText")
+    void realBytesMatchCanonicalText(String sqliteValue, String expected) throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Float(Double.parseDouble(sqliteValue)));
+        assertThat(rs.next()).isTrue();
+
+        assertThat(rs.getBytes(1)).isEqualTo(expected.getBytes(StandardCharsets.UTF_8));
+        assertThat(rs.getBytes(1))
+                .isEqualTo(rs.getString(1).getBytes(StandardCharsets.UTF_8));
     }
 
     private static LibsqlResultSet resultSet(Value... values) {
