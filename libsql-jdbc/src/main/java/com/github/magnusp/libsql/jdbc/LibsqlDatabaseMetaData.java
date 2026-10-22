@@ -532,12 +532,13 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
         return executeMetadataQuery(sql);
     }
     @Override public ResultSet getIndexInfo(String catalog, String schema, String table, boolean unique, boolean approximate) throws SQLException {
-        String sql = "SELECT NULL AS TABLE_CAT, NULL AS TABLE_SCHEM, '" + table + "' AS TABLE_NAME, " +
+        String escapedTable = escapeLiteral(table == null ? "" : table);
+        String sql = "SELECT NULL AS TABLE_CAT, NULL AS TABLE_SCHEM, '" + escapedTable + "' AS TABLE_NAME, " +
                 "CASE il.\"unique\" WHEN 1 THEN 0 ELSE 1 END AS NON_UNIQUE, " +
                 "NULL AS INDEX_QUALIFIER, il.name AS INDEX_NAME, 3 AS TYPE, " +
                 "ii.seqno + 1 AS ORDINAL_POSITION, ii.name AS COLUMN_NAME, " +
                 "'A' AS ASC_OR_DESC, 0 AS CARDINALITY, 0 AS PAGES, NULL AS FILTER_CONDITION " +
-                "FROM pragma_index_list('" + table + "') il, pragma_index_info(il.name) ii";
+                "FROM pragma_index_list('" + escapedTable + "') il, pragma_index_info(il.name) ii";
         if (unique) {
             sql += " WHERE il.\"unique\" = 1";
         }

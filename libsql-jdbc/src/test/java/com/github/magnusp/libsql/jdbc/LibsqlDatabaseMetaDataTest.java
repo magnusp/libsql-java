@@ -55,6 +55,18 @@ class LibsqlDatabaseMetaDataTest {
     }
 
     @Test
+    void getIndexInfoRoundTripsQuotedTableName() throws SQLException {
+        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new IndexInfoConnection());
+
+        try (ResultSet resultSet = metadata.getIndexInfo(null, null, "t'x", false, false)) {
+            assertThat(resultSet.next()).isTrue();
+            assertThat(resultSet.getString("TABLE_NAME")).isEqualTo("t'x");
+            assertThat(resultSet.getString("INDEX_NAME")).isEqualTo("idx_t");
+            assertThat(resultSet.getString("COLUMN_NAME")).isEqualTo("col");
+        }
+    }
+
+    @Test
     void getTablesWithNullTypesReturnsOnlyTablesViewsAndSystemAndTemporaryRows() throws SQLException {
         RecordingConnection connection = new RecordingConnection(emptyResult());
 
@@ -293,6 +305,83 @@ class LibsqlDatabaseMetaDataTest {
                 rows.add(new Row(List.of(Value.of(matcher.group(1)))));
             }
             return new StmtResult(List.of(new Col("TABLE_TYPE", "TEXT")), rows, 0, null);
+        }
+    }
+
+    private static final class IndexInfoConnection extends LibsqlConnection {
+        private IndexInfoConnection() {
+            super(null, null);
+        }
+
+        @Override
+        public StmtResult executeStatement(Stmt stmt) throws SQLException {
+            String sql = stmt.sql();
+            String selectedTable = literalAfter(sql, "NULL AS TABLE_SCHEM, ", " AS TABLE_NAME");
+            String pragmaTable = literalAfter(sql, "pragma_index_list(", ") il");
+            if (!selectedTable.equals(pragmaTable)) {
+                throw new SQLException("TABLE_NAME literal does not match the pragma table name");
+            }
+            return new StmtResult(
+                    List.of(
+                            new Col("TABLE_CAT", "TEXT"),
+                            new Col("TABLE_SCHEM", "TEXT"),
+                            new Col("TABLE_NAME", "TEXT"),
+                            new Col("NON_UNIQUE", "INTEGER"),
+                            new Col("INDEX_QUALIFIER", "TEXT"),
+                            new Col("INDEX_NAME", "TEXT"),
+                            new Col("TYPE", "INTEGER"),
+                            new Col("ORDINAL_POSITION", "INTEGER"),
+                            new Col("COLUMN_NAME", "TEXT"),
+                            new Col("ASC_OR_DESC", "TEXT"),
+                            new Col("CARDINALITY", "INTEGER"),
+                            new Col("PAGES", "INTEGER"),
+                            new Col("FILTER_CONDITION", "TEXT")),
+                    List.of(new Row(List.of(
+                            Value.ofNull(),
+                            Value.ofNull(),
+                            Value.of(selectedTable),
+                            Value.of(1),
+                            Value.ofNull(),
+                            Value.of("idx_t"),
+                            Value.of(3),
+                            Value.of(1),
+                            Value.of("col"),
+                            Value.of("A"),
+                            Value.of(0),
+                            Value.of(0),
+                            Value.ofNull()))),
+                    0,
+                    null);
+        }
+
+        private static String literalAfter(String sql, String prefix, String suffix) throws SQLException {
+            int prefixIndex = sql.indexOf(prefix);
+            if (prefixIndex < 0) {
+                throw new SQLException("missing " + prefix);
+            }
+            int quote = prefixIndex + prefix.length();
+            if (quote >= sql.length() || sql.charAt(quote) != '\'') {
+                throw new SQLException("expected a quoted literal after " + prefix);
+            }
+            StringBuilder literal = new StringBuilder();
+            int i = quote + 1;
+            while (i < sql.length()) {
+                char c = sql.charAt(i);
+                if (c == '\'') {
+                    if (i + 1 < sql.length() && sql.charAt(i + 1) == '\'') {
+                        literal.append('\'');
+                        i += 2;
+                        continue;
+                    }
+                    if (!sql.startsWith(suffix, i + 1)) {
+                        throw new SQLException("syntax error after table-name literal");
+                    }
+                    return literal.toString();
+                }
+                literal.append(c);
+                i++;
+            }
+            throw new SQLException("unterminated table-name literal");
         }
     }
 
