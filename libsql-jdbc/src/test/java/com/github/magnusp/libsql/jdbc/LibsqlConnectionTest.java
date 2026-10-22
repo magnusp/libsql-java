@@ -33,6 +33,17 @@ class LibsqlConnectionTest {
     private static final String TRANSPORT_ERROR = "Connection reset by peer";
 
     @Test
+    void getMetaDataIsCachedPerConnection() throws SQLException {
+        LibsqlConnection connection = new LibsqlConnection(
+                CONFIG, new ScriptedClient((request, index) -> successResponse(request)));
+        LibsqlConnection other = new LibsqlConnection(
+                CONFIG, new ScriptedClient((request, index) -> successResponse(request)));
+
+        assertThat(connection.getMetaData()).isSameAs(connection.getMetaData());
+        assertThat(other.getMetaData()).isNotSameAs(connection.getMetaData());
+    }
+
+    @Test
     void disablingAutoCommitBeginsTransactionImmediately() throws SQLException {
         ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
         LibsqlConnection connection = new LibsqlConnection(CONFIG, client);

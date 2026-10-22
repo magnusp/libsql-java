@@ -47,6 +47,7 @@ public class LibsqlConnection implements Connection {
     private int transactionIsolation = TRANSACTION_SERIALIZABLE;
     private boolean closed = false;
     private TransactionMode transactionMode = TransactionMode.DEFERRED;
+    private LibsqlDatabaseMetaData meta;
 
     /**
      * Transaction begin mode, matching xerial sqlite-jdbc's
@@ -389,10 +390,19 @@ public class LibsqlConnection implements Connection {
         return closed;
     }
 
+    /**
+     * Returns the metadata for this connection, creating it on first use and reusing it afterwards,
+     * matching xerial sqlite-jdbc 3.53.4.0. The instance is cached for the lifetime of the
+     * connection, so repeated calls return the same object and separate connections get separate
+     * instances. Calling this on a closed connection throws.
+     */
     @Override
     public DatabaseMetaData getMetaData() throws SQLException {
         checkClosed();
-        return new LibsqlDatabaseMetaData(this);
+        if (meta == null) {
+            meta = new LibsqlDatabaseMetaData(this);
+        }
+        return meta;
     }
 
     @Override
