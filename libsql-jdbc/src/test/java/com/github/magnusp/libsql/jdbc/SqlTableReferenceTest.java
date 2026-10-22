@@ -19,7 +19,17 @@ class SqlTableReferenceTest {
             "v",
             new SqlTableReference.TableDefinition("CREATE VIEW v AS SELECT a, b FROM w", List.of("a", "b")),
             "my table",
-            new SqlTableReference.TableDefinition("CREATE TABLE [my table] (c TEXT)", List.of("c")));
+            new SqlTableReference.TableDefinition("CREATE TABLE [my table] (c TEXT)", List.of("c")),
+            "a",
+            new SqlTableReference.TableDefinition(
+                    "CREATE TABLE a (id INTEGER NOT NULL, x TEXT)", List.of("id", "x")),
+            "b",
+            new SqlTableReference.TableDefinition("CREATE TABLE b (id INTEGER, y TEXT)", List.of("id", "y")),
+            "c",
+            new SqlTableReference.TableDefinition("CREATE TABLE c (z TEXT)", List.of("z")),
+            "g",
+            new SqlTableReference.TableDefinition(
+                    "CREATE TABLE g (p INTEGER, q AS (p+1), r TEXT NOT NULL)", List.of("p", "q", "r")));
 
     private static final SqlTableReference.Schema SCHEMA = reference -> {
         if (reference.table() == null) {
@@ -95,6 +105,50 @@ class SqlTableReferenceTest {
                         new SqlTableReference.TableRef(null, "z"));
         assertThat(resolve("SELECT w.* FROM w JOIN z ON w.a = z.a").tables())
                 .containsExactly(new SqlTableReference.TableRef(null, "w"), new SqlTableReference.TableRef(null, "w"));
+    }
+
+    @Test
+    void dropsTheDuplicateUsingColumnWhenExpandingStar() throws SQLException {
+        SqlTableReference.Resolution resolution = resolve("SELECT * FROM a JOIN b USING(id) JOIN c", 4);
+
+        assertThat(resolution.labels()).containsExactly("id", "x", "y", "z");
+        assertThat(resolution.tables())
+                .containsExactly(
+                        new SqlTableReference.TableRef(null, "a"),
+                        new SqlTableReference.TableRef(null, "a"),
+                        new SqlTableReference.TableRef(null, "b"),
+                        new SqlTableReference.TableRef(null, "c"));
+    }
+
+    @Test
+    void dropsTheDuplicateNaturalColumnWhenExpandingStar() throws SQLException {
+        SqlTableReference.Resolution resolution = resolve("SELECT * FROM a NATURAL JOIN b", 3);
+
+        assertThat(resolution.labels()).containsExactly("id", "x", "y");
+        assertThat(resolution.tables())
+                .containsExactly(
+                        new SqlTableReference.TableRef(null, "a"),
+                        new SqlTableReference.TableRef(null, "a"),
+                        new SqlTableReference.TableRef(null, "b"));
+    }
+
+    @Test
+    void expandsGeneratedColumnsInStar() throws SQLException {
+        SqlTableReference.Resolution resolution = resolve("SELECT * FROM g JOIN c ON 1", 4);
+
+        assertThat(resolution.labels()).containsExactly("p", "q", "r", "z");
+        assertThat(resolution.tables())
+                .containsExactly(
+                        new SqlTableReference.TableRef(null, "g"),
+                        new SqlTableReference.TableRef(null, "g"),
+                        new SqlTableReference.TableRef(null, "g"),
+                        new SqlTableReference.TableRef(null, "c"));
+    }
+
+    @Test
+    void discardsTheResolutionWhenTheStarWidthDiffers() throws SQLException {
+        assertThat(resolve("SELECT * FROM (VALUES(1)) v, c", 2)).isNull();
+        assertThat(resolve("SELECT * FROM unknown_source, c", 2)).isNull();
     }
 
     @Test
@@ -186,5 +240,13 @@ class SqlTableReferenceTest {
 
     private static SqlTableReference.Resolution resolve(String sql) throws SQLException {
         return SqlTableReference.resolve(sql, SCHEMA);
+    }
+
+    private static SqlTableReference.Resolution resolve(String sql, int columnCount) throws SQLException {
+        SqlTableReference.Resolution resolution = SqlTableReference.resolve(sql, SCHEMA, columnCount);
+        assertThat(resolution == null || resolution.labels().size() == columnCount)
+                .as("resolved column count equals the result column count")
+                .isTrue();
+        return resolution;
     }
 }
