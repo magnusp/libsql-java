@@ -8,7 +8,14 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -36,6 +43,7 @@ public final class XerialTestServer {
     private static final Set<String> RETAINED_NAMESPACES = ConcurrentHashMap.newKeySet();
     private static final Map<String, RuntimeException> FAILED_NAMESPACES =
             new ConcurrentHashMap<>();
+    private static final Map<String, Set<Connection>> CONNECTIONS = new ConcurrentHashMap<>();
 
     private static GenericContainer<?> container;
     private static String httpBaseUrl;
@@ -88,43 +96,162 @@ public final class XerialTestServer {
         if (container == null) {
             return;
         }
-        RuntimeException failure = reapRetainedNamespaces();
+        RuntimeException failure = openConnectionFailure();
+        failure = merge(failure, failedNamespacesFailure());
+        failure = merge(failure, reapRetainedNamespaces());
         try {
             container.stop();
         } catch (RuntimeException stopFailure) {
-            if (failure == null) {
-                failure = stopFailure;
-            } else {
-                failure.addSuppressed(stopFailure);
-            }
+            failure = merge(failure, stopFailure);
         } finally {
-            container = null;
-            httpBaseUrl = null;
-            adminBaseUrl = null;
-            NAMESPACES.clear();
-            RETAINED_NAMESPACES.clear();
-            FAILED_NAMESPACES.clear();
+            resetState();
         }
         if (failure != null) {
             throw failure;
         }
     }
 
+    static synchronized void stopForTest() {
+        RuntimeException failure = openConnectionFailure();
+        failure = merge(failure, failedNamespacesFailure());
+        NAMESPACES.clear();
+        FAILED_NAMESPACES.clear();
+        CONNECTIONS.clear();
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    private static RuntimeException merge(RuntimeException failure, RuntimeException next) {
+        if (next == null) {
+            return failure;
+        }
+        if (failure == null) {
+            return next;
+        }
+        failure.addSuppressed(next);
+        return failure;
+    }
+
+    private static void resetState() {
+        container = null;
+        httpBaseUrl = null;
+        adminBaseUrl = null;
+        resetNamespaces();
+    }
+
+    private static void resetNamespaces() {
+        NAMESPACES.clear();
+        RETAINED_NAMESPACES.clear();
+        FAILED_NAMESPACES.clear();
+        CONNECTIONS.clear();
+    }
+
+    private static RuntimeException openConnectionFailure() {
+        List<String> open = new ArrayList<>();
+        RuntimeException cleanupFailure = null;
+        for (String namespace : new ArrayList<>(CONNECTIONS.keySet())) {
+            Set<Connection> connections = CONNECTIONS.get(namespace);
+            if (connections == null) {
+                continue;
+            }
+            boolean stillOpen = false;
+            for (Connection connection : new ArrayList<>(connections)) {
+                try {
+                    if (connection.isClosed()) {
+                        unregisterConnection(connection);
+                        try {
+                            releaseTrackedConnection(namespace);
+                        } catch (RuntimeException e) {
+                            cleanupFailure = merge(cleanupFailure, e);
+                        }
+                    } else {
+                        stillOpen = true;
+                    }
+                } catch (SQLException | RuntimeException e) {
+                    stillOpen = true;
+                }
+            }
+            if (stillOpen) {
+                open.add(namespace);
+            }
+        }
+        for (String namespace : new ArrayList<>(NAMESPACES.keySet())) {
+            Integer active = NAMESPACES.get(namespace);
+            if (active != null && active > 0 && !open.contains(namespace)) {
+                open.add(namespace);
+            }
+        }
+        if (open.isEmpty()) {
+            return cleanupFailure;
+        }
+        IllegalStateException failure =
+                new IllegalStateException(
+                        "Conformance session stopped with "
+                                + open.size()
+                                + " namespace(s) still open: "
+                                + open);
+        if (cleanupFailure != null) {
+            failure.addSuppressed(cleanupFailure);
+        }
+        return failure;
+    }
+
+    private static void releaseTrackedConnection(String namespace) {
+        if (RETAINED_NAMESPACES.contains(namespace)) {
+            releaseConnection(namespace);
+        } else {
+            releaseNamespace(namespace);
+        }
+    }
+
+    private static RuntimeException failedNamespacesFailure() {
+        if (FAILED_NAMESPACES.isEmpty()) {
+            return null;
+        }
+        IllegalStateException failure =
+                new IllegalStateException(
+                        "Namespace cleanup failed for: " + FAILED_NAMESPACES.keySet());
+        FAILED_NAMESPACES.values().forEach(failure::addSuppressed);
+        return failure;
+    }
+
     private static RuntimeException reapRetainedNamespaces() {
+        return reapRetainedNamespaces(adminBaseUrl, DEFAULT_ADMIN);
+    }
+
+    private static RuntimeException reapRetainedNamespaces(
+            String adminUrl, AdminClient admin) {
         RuntimeException failure = null;
         for (String namespace : RETAINED_NAMESPACES) {
             try {
-                deleteNamespace(namespace, adminBaseUrl, DEFAULT_ADMIN);
+                deleteNamespace(namespace, adminUrl, admin);
             } catch (RuntimeException e) {
-                if (failure == null) {
-                    failure = e;
-                } else {
-                    failure.addSuppressed(e);
-                }
+                failure = merge(failure, e);
             }
         }
         RETAINED_NAMESPACES.clear();
         return failure;
+    }
+
+    static synchronized void registerConnection(String namespace, Connection connection) {
+        CONNECTIONS
+                .computeIfAbsent(
+                        namespace,
+                        ignored -> Collections.newSetFromMap(new IdentityHashMap<>()))
+                .add(connection);
+    }
+
+    static synchronized void unregisterConnection(Connection connection) {
+        Iterator<Map.Entry<String, Set<Connection>>> iterator =
+                CONNECTIONS.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<String, Set<Connection>> entry = iterator.next();
+            entry.getValue().remove(connection);
+            if (entry.getValue().isEmpty()) {
+                iterator.remove();
+            }
+        }
     }
 
     public static String jdbcUrl(String namespace) {
