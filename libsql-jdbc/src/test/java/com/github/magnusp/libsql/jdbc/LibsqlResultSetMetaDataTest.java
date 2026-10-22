@@ -55,6 +55,30 @@ class LibsqlResultSetMetaDataTest {
     }
 
     @Test
+    void resolvesNonAsciiTableName() throws SQLException {
+        LibsqlResultSetMetaData metadata = new LibsqlResultSetMetaData(
+                List.of(new Col("namn_ö", "TEXT")),
+                List.of(),
+                "SELECT namn_ö FROM användare",
+                connectionForSwedishTables());
+
+        assertThat(metadata.getTableName(1)).isEqualTo("användare");
+        assertThat(metadata.isNullable(1)).isEqualTo(ResultSetMetaData.columnNullable);
+    }
+
+    @Test
+    void prefersNonAsciiTableOverItsAsciiPrefix() throws SQLException {
+        LibsqlResultSetMetaData metadata = new LibsqlResultSetMetaData(
+                List.of(new Col("namn_ö", "TEXT")),
+                List.of(),
+                "SELECT namn_ö FROM användare",
+                connectionForSwedishTables());
+
+        assertThat(metadata.getTableName(1)).isEqualTo("användare");
+        assertThat(metadata.getColumnName(1)).isEqualTo("namn_ö");
+    }
+
+    @Test
     void ignoresAutoIncrementInsideSqlComments() throws SQLException {
         String createSql = "CREATE TABLE People (id INTEGER PRIMARY KEY /* AUTOINCREMENT */, name TEXT)";
         StmtResult tableRows = new StmtResult(
@@ -642,6 +666,33 @@ class LibsqlResultSetMetaDataTest {
                 .toList();
         StmtResult result = new StmtResult(List.of(), tableRows, 0, null);
         return new LibsqlResultSetMetaData(cols, List.of(), "SELECT * FROM T", connectionReturning(result));
+    }
+
+    private static LibsqlConnection connectionForSwedishTables() {
+        Map<String, String> tables = Map.of(
+                "anv", "CREATE TABLE anv (id INTEGER)",
+                "användare", "CREATE TABLE användare (id INTEGER, namn_ö TEXT)");
+        Map<String, List<String>> columns = Map.of("anv", List.of("id"), "användare", List.of("id", "namn_ö"));
+        return new LibsqlConnection(null, null) {
+            @Override
+            public StmtResult executeStatement(Stmt stmt) throws SQLException {
+                String table = argument(stmt, 0);
+                String createSql = tables.get(table);
+                if (createSql == null) {
+                    return new StmtResult(List.of(), List.of(), 0, null);
+                }
+                List<Row> rows = new ArrayList<>();
+                for (String column : columns.get(table)) {
+                    rows.add(new Row(List.of(
+                            Value.of(table),
+                            Value.of(createSql),
+                            Value.of(column),
+                            Value.of(0L),
+                            Value.of(0L))));
+                }
+                return new StmtResult(List.of(), rows, 0, null);
+            }
+        };
     }
 
     private static LibsqlConnection connectionReturning(StmtResult result) {

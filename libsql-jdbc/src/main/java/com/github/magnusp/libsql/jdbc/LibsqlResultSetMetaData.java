@@ -762,7 +762,12 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
     }
 
     private static boolean isWordChar(char c) {
-        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '$';
+        return c >= 0x80
+                || (c >= 'a' && c <= 'z')
+                || (c >= 'A' && c <= 'Z')
+                || (c >= '0' && c <= '9')
+                || c == '_'
+                || c == '$';
     }
 
     private static String text(Value value) {

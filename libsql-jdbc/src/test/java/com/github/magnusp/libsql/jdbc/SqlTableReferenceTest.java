@@ -29,7 +29,12 @@ class SqlTableReferenceTest {
             new SqlTableReference.TableDefinition("CREATE TABLE c (z TEXT)", List.of("z")),
             "g",
             new SqlTableReference.TableDefinition(
-                    "CREATE TABLE g (p INTEGER, q AS (p+1), r TEXT NOT NULL)", List.of("p", "q", "r")));
+                    "CREATE TABLE g (p INTEGER, q AS (p+1), r TEXT NOT NULL)", List.of("p", "q", "r")),
+            "anv",
+            new SqlTableReference.TableDefinition("CREATE TABLE anv (id INTEGER)", List.of("id")),
+            "användare",
+            new SqlTableReference.TableDefinition(
+                    "CREATE TABLE användare (id INTEGER, namn_ö TEXT)", List.of("id", "namn_ö")));
 
     private static final SqlTableReference.Schema SCHEMA = reference -> {
         if (reference.table() == null) {
@@ -56,6 +61,57 @@ class SqlTableReferenceTest {
                 .containsExactly(new SqlTableReference.TableRef(null, "my table"));
         assertThat(resolve("SELECT c FROM [my table]").tables())
                 .containsExactly(new SqlTableReference.TableRef(null, "my table"));
+    }
+
+    @Test
+    void resolvesNonAsciiTableAndColumn() throws SQLException {
+        SqlTableReference.Resolution resolution = resolve("SELECT namn_ö FROM användare");
+
+        assertThat(resolution.labels()).containsExactly("namn_ö");
+        assertThat(resolution.tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "användare"));
+    }
+
+    @Test
+    void resolvesNonAsciiColumnThroughTableAlias() throws SQLException {
+        assertThat(resolve("SELECT a.namn_ö FROM användare a").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "användare"));
+        assertThat(resolve("SELECT * FROM användare a").tables())
+                .containsExactly(
+                        new SqlTableReference.TableRef(null, "användare"),
+                        new SqlTableReference.TableRef(null, "användare"));
+    }
+
+    @Test
+    void resolvesNonAsciiAliases() throws SQLException {
+        assertThat(resolve("SELECT namn_ö AS namn FROM användare").labels()).containsExactly("namn");
+        assertThat(resolve("SELECT namn_ö namn FROM användare").labels()).containsExactly("namn");
+        assertThat(resolve("SELECT namn_ö AS namn FROM användare").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "användare"));
+        assertThat(resolve("SELECT å.namn_ö FROM användare AS å").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "användare"));
+    }
+
+    @Test
+    void resolvesQuotedNonAsciiNames() throws SQLException {
+        assertThat(resolve("SELECT namn_ö FROM \"användare\"").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "användare"));
+        assertThat(resolve("SELECT namn_ö FROM [användare]").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "användare"));
+        assertThat(resolve("SELECT \"namn_ö\" FROM \"användare\"").labels()).containsExactly("namn_ö");
+    }
+
+    @Test
+    void keepsNonAsciiTableWholeWhenAnAsciiPrefixTableExists() throws SQLException {
+        SqlTableReference.Resolution resolution = resolve("SELECT * FROM användare");
+
+        assertThat(resolution.labels()).containsExactly("id", "namn_ö");
+        assertThat(resolution.tables())
+                .containsExactly(
+                        new SqlTableReference.TableRef(null, "användare"),
+                        new SqlTableReference.TableRef(null, "användare"));
+        assertThat(resolve("SELECT id FROM anv").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "anv"));
     }
 
     @Test
