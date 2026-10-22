@@ -34,6 +34,8 @@ final class SqlTableReference {
 
     record TableRef(String schema, String table) {}
 
+    record Target(TableRef table, String alias) {}
+
     interface Schema {
         TableDefinition definition(TableRef table) throws SQLException;
     }
@@ -51,6 +53,7 @@ final class SqlTableReference {
     private enum Type {
         WORD,
         IDENT,
+        LITERAL,
         SYMBOL
     }
 
@@ -102,7 +105,11 @@ final class SqlTableReference {
      * The sources of a FROM clause together with the column list {@code *} expands to. The star
      * list drops the right-side duplicate of a USING or NATURAL join column, as SQLite does.
      */
-    private record FromClause(List<Source> sources, List<String> starLabels, List<TableRef> starTables) {
+    private record FromClause(
+            List<Source> sources,
+            List<String> starLabels,
+            List<TableRef> starTables,
+            List<String> mergedColumns) {
 
         static FromClause of(List<Source> sources) {
             List<String> labels = new ArrayList<>();
@@ -110,7 +117,7 @@ final class SqlTableReference {
             for (Source source : sources) {
                 appendStarColumns(source, false, labels, tables);
             }
-            return new FromClause(sources, labels, tables);
+            return new FromClause(sources, labels, tables, List.of());
         }
     }
 
@@ -126,9 +133,9 @@ final class SqlTableReference {
     private static final Set<String> SET_OPERATORS = Set.of("UNION", "INTERSECT", "EXCEPT");
 
     private static final Set<String> NOT_AN_ALIAS = Set.of(
-            "AS", "ON", "USING", "INDEXED", "NOT", "COLLATE", "IS", "LIKE", "GLOB", "REGEXP",
-            "MATCH", "ESCAPE", "BETWEEN", "IN", "CASE", "WHEN", "THEN", "ELSE", "END", "CAST",
-            "EXISTS", "AND", "OR", "NULL");
+            "AS", "ON", "USING", "INDEXED", "NOT", "COLLATE", "IS", "ISNULL", "NOTNULL", "LIKE",
+            "GLOB", "REGEXP", "MATCH", "ESCAPE", "BETWEEN", "IN", "CASE", "WHEN", "THEN", "ELSE",
+            "END", "CAST", "EXISTS", "AND", "OR", "NULL");
 
     private SqlTableReference() {}
 
@@ -240,6 +247,16 @@ final class SqlTableReference {
                                     resolution.tables(),
                                     true,
                                     null));
+                } else {
+                    List<String> opaque = columns != null ? columns : List.of();
+                    ctes.put(
+                            name.toLowerCase(Locale.ROOT),
+                            new Source(
+                                    name,
+                                    opaque,
+                                    Collections.nCopies(opaque.size(), null),
+                                    columns != null,
+                                    null));
                 }
                 index = close + 1;
                 if (isSymbolAt(index, ",", depth)) {
@@ -284,6 +301,7 @@ final class SqlTableReference {
             List<Source> sources = new ArrayList<>();
             List<String> starLabels = new ArrayList<>();
             List<TableRef> starTables = new ArrayList<>();
+            List<String> mergedColumns = new ArrayList<>();
             boolean natural = false;
             int index = start;
             while (index < end) {
@@ -299,7 +317,13 @@ final class SqlTableReference {
                 index = parsed.next();
                 index = skipIndexModifiers(index, end, depth);
                 if (isWordAt(index, depth, "USING")) {
-                    dropStarColumns(usingColumns(index, end, depth), starStart, starLabels, starTables);
+                    List<String> merged = usingColumns(index, end, depth);
+                    dropStarColumns(merged, starStart, starLabels, starTables);
+                    for (String column : merged) {
+                        if (!containsIgnoreCase(mergedColumns, column)) {
+                            mergedColumns.add(column);
+                        }
+                    }
                 }
                 index = skipJoinCondition(index, end, depth);
                 if (isSymbolAt(index, ",", depth)) {
@@ -318,7 +342,7 @@ final class SqlTableReference {
                 }
                 break;
             }
-            return new FromClause(sources, starLabels, starTables);
+            return new FromClause(sources, starLabels, starTables, mergedColumns);
         }
 
         private SourceList parseSource(int start, int end, int depth, Map<String, Source> scope)
@@ -515,31 +539,32 @@ final class SqlTableReference {
             if (returning < 0) {
                 return null;
             }
-            TableRef target = targetTable(start, returning, depth);
+            Target target = targetTable(start, returning, depth);
             if (target == null) {
                 return null;
             }
-            TableDefinition definition = schema.definition(target);
+            String qualifier = target.alias() != null ? target.alias() : target.table().table();
+            TableDefinition definition = schema.definition(target.table());
             Source source;
             if (definition == null) {
-                source = new Source(target.table(), List.of(), List.of(), false, target);
+                source = new Source(qualifier, List.of(), List.of(), false, target.table());
             } else if (isViewDefinition(definition.sql())) {
                 List<String> columns = definition.columns();
                 source = new Source(
-                        target.table(), columns, Collections.nCopies(columns.size(), null), true, null);
+                        qualifier, columns, Collections.nCopies(columns.size(), null), true, null);
             } else {
                 List<String> columns = definition.columns() != null ? definition.columns() : List.of();
                 source = new Source(
-                        target.table(),
+                        qualifier,
                         columns,
-                        Collections.nCopies(columns.size(), target),
+                        Collections.nCopies(columns.size(), target.table()),
                         true,
-                        target);
+                        target.table());
             }
             return parseSelectItems(returning + 1, end, depth, FromClause.of(List.of(source)), scope);
         }
 
-        private TableRef targetTable(int start, int end, int depth) {
+        private Target targetTable(int start, int end, int depth) {
             String keyword = wordAt(start, depth);
             if (keyword == null) {
                 return null;
@@ -585,7 +610,14 @@ final class SqlTableReference {
                 schemaName = first;
                 first = second;
             }
-            return new TableRef(schemaName, first);
+            String alias = null;
+            if (isWordAt(index, depth, "AS")) {
+                alias = identifier(index + 1);
+                if (alias == null) {
+                    return null;
+                }
+            }
+            return new Target(new TableRef(schemaName, first), alias);
         }
 
         private Resolution parseSelectItems(
@@ -662,7 +694,7 @@ final class SqlTableReference {
             ColumnRef column = simpleColumn(start, expressionEnd);
             if (column != null) {
                 labels.add(alias != null ? alias : column.column());
-                tables.add(resolveColumn(column, from.sources()));
+                tables.add(resolveColumn(column, from));
                 return;
             }
 
@@ -683,7 +715,8 @@ final class SqlTableReference {
             tables.add(null);
         }
 
-        private TableRef resolveColumn(ColumnRef column, List<Source> sources) {
+        private TableRef resolveColumn(ColumnRef column, FromClause from) {
+            List<Source> sources = from.sources();
             String qualifier = column.qualifier();
             if (qualifier != null) {
                 Source source = findSource(qualifier, sources);
@@ -709,6 +742,13 @@ final class SqlTableReference {
                 return match;
             }
             if (matches > 1) {
+                if (containsIgnoreCase(from.mergedColumns(), column.column())) {
+                    for (Source source : sources) {
+                        if (source.hasColumn(column.column())) {
+                            return source.origin(column.column());
+                        }
+                    }
+                }
                 return null;
             }
             if (sources.size() == 1 && !sources.get(0).knownColumns()) {
@@ -734,11 +774,14 @@ final class SqlTableReference {
             if (identifierOf(last) == null) {
                 return -1;
             }
+            if (last.type() == Type.WORD && NOT_AN_ALIAS.contains(upper(last.text()))) {
+                return -1;
+            }
             Token previous = tokens.get(end - 2);
             if (isSymbol(previous, ".") || isSymbol(previous, "(") || isSymbol(previous, ",")) {
                 return -1;
             }
-            if (previous.type() == Type.SYMBOL) {
+            if (previous.type() == Type.SYMBOL && !isSymbol(previous, ")")) {
                 return -1;
             }
             if (previous.type() == Type.WORD && NOT_AN_ALIAS.contains(upper(previous.text()))) {
@@ -820,7 +863,7 @@ final class SqlTableReference {
                     continue;
                 }
                 if (isWordAt(index, depth, "NOT") && isWordAt(index + 1, depth, "INDEXED")) {
-                    index += 3;
+                    index += 2;
                     continue;
                 }
                 break;
@@ -849,9 +892,17 @@ final class SqlTableReference {
                 return false;
             }
             Token token = tokens.get(index);
-            return token.depth() == depth
-                    && token.type() == Type.WORD
-                    && JOIN_START.contains(upper(token.text()));
+            if (token.depth() != depth || token.type() != Type.WORD) {
+                return false;
+            }
+            String keyword = upper(token.text());
+            if (!JOIN_START.contains(keyword)) {
+                return false;
+            }
+            if ("LEFT".equals(keyword) || "RIGHT".equals(keyword)) {
+                return isWordAt(index + 1, depth, "JOIN") || isWordAt(index + 1, depth, "OUTER");
+            }
+            return true;
         }
 
         private int skipToJoin(int start, int end, int depth) {
@@ -1136,11 +1187,14 @@ final class SqlTableReference {
                 i = end + 2;
                 continue;
             }
-            if (c == '\'') {
-                i = scanQuoted(sql, i, '\'');
-                if (i < 0) {
+            if (c == '\'' || ((c == 'x' || c == 'X') && i + 1 < sql.length() && sql.charAt(i + 1) == '\'')) {
+                int quote = c == '\'' ? i : i + 1;
+                int end = scanQuoted(sql, quote, '\'');
+                if (end < 0) {
                     return null;
                 }
+                tokens.add(new Token(Type.LITERAL, sql.substring(i, end), depth));
+                i = end;
                 continue;
             }
             if (c == '"' || c == '`') {
