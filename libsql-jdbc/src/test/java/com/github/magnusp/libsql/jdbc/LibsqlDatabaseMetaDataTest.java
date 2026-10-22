@@ -6,6 +6,9 @@ import com.github.magnusp.libsql.hrana.codec.Stmt;
 import com.github.magnusp.libsql.hrana.codec.StmtResult;
 import com.github.magnusp.libsql.hrana.codec.Value;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
@@ -15,8 +18,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 class LibsqlDatabaseMetaDataTest {
 
@@ -29,17 +34,6 @@ class LibsqlDatabaseMetaDataTest {
         statement.close();
 
         assertThat(resultSet.isClosed()).isTrue();
-    }
-
-    @Test
-    void getTablesResultSetClosesItsStatement() throws SQLException {
-        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new RecordingConnection(emptyResult()));
-
-        ResultSet resultSet = metadata.getTables(null, null, null, null);
-        LibsqlStatement statement = (LibsqlStatement) resultSet.getStatement();
-        resultSet.close();
-
-        assertThat(statement.isClosed()).isTrue();
     }
 
     @Test
@@ -150,42 +144,52 @@ class LibsqlDatabaseMetaDataTest {
                 .containsExactlyInAnyOrder("TABLE", "VIEW", "SYSTEM TABLE", "GLOBAL TEMPORARY");
     }
 
-    @Test
-    void eachMetadataMethodClosesTheStatementThatProducedItsResultSet() throws SQLException {
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("metadataQueries")
+    void closesStatementWithoutCloseOnCompletion(String method, MetadataCall call) throws SQLException {
         LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new RecordingConnection(emptyResult()));
-        List<MetadataQuery> queries = List.of(
-                new MetadataQuery("getSchemas", metadata::getSchemas),
-                new MetadataQuery("getSchemas(catalog, pattern)", () -> metadata.getSchemas(null, null)),
-                new MetadataQuery("getCatalogs", metadata::getCatalogs),
-                new MetadataQuery("getTypeInfo", metadata::getTypeInfo),
-                new MetadataQuery("getImportedKeys", () -> metadata.getImportedKeys(null, null, "t")),
-                new MetadataQuery("getExportedKeys", () -> metadata.getExportedKeys(null, null, "t")),
-                new MetadataQuery(
+
+        ResultSet resultSet = call.execute(metadata);
+        assertThat(resultSet.getStatement())
+                .as("%s must expose the statement that produced it", method)
+                .isInstanceOf(LibsqlStatement.class);
+        LibsqlStatement statement = (LibsqlStatement) resultSet.getStatement();
+        assertThat(statement.isCloseOnCompletion())
+                .as("%s must not rely on closeOnCompletion to close its statement", method)
+                .isFalse();
+
+        resultSet.close();
+
+        assertThat(statement.isClosed())
+                .as("%s must close its statement when the result set closes", method)
+                .isTrue();
+    }
+
+    static Stream<Arguments> metadataQueries() {
+        return Stream.of(
+                arguments("getTables", (MetadataCall) m -> m.getTables(null, null, null, null)),
+                arguments("getColumns", (MetadataCall) m -> m.getColumns(null, null, "t", null)),
+                arguments("getPrimaryKeys", (MetadataCall) m -> m.getPrimaryKeys(null, null, "t")),
+                arguments("getTableTypes", (MetadataCall) LibsqlDatabaseMetaData::getTableTypes),
+                arguments("getSchemas", (MetadataCall) LibsqlDatabaseMetaData::getSchemas),
+                arguments("getSchemas(catalog, schemaPattern)", (MetadataCall) m -> m.getSchemas(null, null)),
+                arguments("getCatalogs", (MetadataCall) LibsqlDatabaseMetaData::getCatalogs),
+                arguments("getTypeInfo", (MetadataCall) LibsqlDatabaseMetaData::getTypeInfo),
+                arguments("getImportedKeys", (MetadataCall) m -> m.getImportedKeys(null, null, "t")),
+                arguments("getExportedKeys", (MetadataCall) m -> m.getExportedKeys(null, null, "t")),
+                arguments(
                         "getCrossReference",
-                        () -> metadata.getCrossReference(null, null, "parent", null, null, "child")),
-                new MetadataQuery(
-                        "getIndexInfo", () -> metadata.getIndexInfo(null, null, "t", false, false)));
-
-        List<String> leakedMethods = new ArrayList<>();
-        for (MetadataQuery query : queries) {
-            ResultSet resultSet = query.action().execute();
-            LibsqlStatement statement = (LibsqlStatement) resultSet.getStatement();
-            resultSet.close();
-            if (!statement.isClosed()) {
-                leakedMethods.add(query.name());
-            }
-            statement.close();
-        }
-
-        assertThat(leakedMethods).isEmpty();
+                        (MetadataCall)
+                                m -> m.getCrossReference(null, null, "parent", null, null, "child")),
+                arguments(
+                        "getIndexInfo",
+                        (MetadataCall) m -> m.getIndexInfo(null, null, "t", false, false)));
     }
 
     @FunctionalInterface
     private interface MetadataCall {
-        ResultSet execute() throws SQLException;
+        ResultSet execute(LibsqlDatabaseMetaData metadata) throws SQLException;
     }
-
-    private record MetadataQuery(String name, MetadataCall action) {}
 
     @Test
     void getColumnsReportsDeclaredTypesSizesNullabilityAndAutoIncrement() throws SQLException {

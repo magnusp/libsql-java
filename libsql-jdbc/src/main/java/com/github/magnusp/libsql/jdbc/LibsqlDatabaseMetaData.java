@@ -15,6 +15,7 @@ import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.UnaryOperator;
 import java.util.regex.Pattern;
 
 public class LibsqlDatabaseMetaData implements DatabaseMetaData {
@@ -285,10 +286,17 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     public boolean dataDefinitionIgnoredInTransactions() throws SQLException { return false; }
 
     private ResultSet executeMetadataQuery(String sql) throws SQLException {
+        return executeMetadataQuery(sql, sql, result -> result);
+    }
+
+    private ResultSet executeMetadataQuery(
+            String sql, String originSql, UnaryOperator<StmtResult> transform) throws SQLException {
         LibsqlStatement statement = connection.createStatementInternal();
         try {
-            statement.closeOnCompletion();
-            return statement.executeQuery(sql);
+            StmtResult result = transform.apply(connection.executeStatement(new Stmt(sql)));
+            LibsqlResultSet resultSet = new LibsqlResultSet(statement, result, originSql, true);
+            statement.assignResultSet(resultSet, true);
+            return resultSet;
         } catch (SQLException e) {
             statement.close();
             throw e;
@@ -340,7 +348,9 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
                 + " AND m.name LIKE '" + escapeLiteral(tablePattern) + "' ESCAPE '\\'"
                 + " AND p.name LIKE '" + escapeLiteral(columnPattern) + "' ESCAPE '\\'"
                 + " ORDER BY m.name, p.cid";
-        return new LibsqlResultSet(null, columnsResult(connection.executeStatement(new Stmt(sql))));
+        // getColumns synthesizes its column labels, so the raw SQL must not drive column-origin
+        // resolution for the result set.
+        return executeMetadataQuery(sql, null, LibsqlDatabaseMetaData::columnsResult);
     }
 
     private static StmtResult columnsResult(StmtResult raw) {
