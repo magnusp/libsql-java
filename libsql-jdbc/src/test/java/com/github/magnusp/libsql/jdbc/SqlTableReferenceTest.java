@@ -225,6 +225,80 @@ class SqlTableReferenceTest {
     }
 
     @Test
+    void emitsLiteralTokensForStringAndBlobLiterals() throws SQLException {
+        SqlTableReference.Resolution aliased = resolve("SELECT 'lit' z FROM c");
+
+        assertThat(aliased.labels()).containsExactly("z");
+        assertThat(aliased.tables()).containsExactly((SqlTableReference.TableRef) null);
+        assertThat(resolve("SELECT x'41' AS b FROM a").tables())
+                .containsExactly((SqlTableReference.TableRef) null);
+
+        SqlTableReference.Resolution compared = resolve("SELECT x LIKE 'a%' FROM a");
+        assertThat(compared.tables()).containsExactly((SqlTableReference.TableRef) null);
+        assertThat(compared.labels()).doesNotContain("LIKE", "a%");
+    }
+
+    @Test
+    void rejectsOperatorKeywordsAsImplicitAliases() throws SQLException {
+        SqlTableReference.Resolution isnull = resolve("SELECT x ISNULL FROM a");
+        assertThat(isnull.labels()).doesNotContain("ISNULL");
+        assertThat(isnull.tables()).containsExactly((SqlTableReference.TableRef) null);
+
+        SqlTableReference.Resolution notnull = resolve("SELECT x NOTNULL FROM a");
+        assertThat(notnull.labels()).doesNotContain("NOTNULL");
+        assertThat(notnull.tables()).containsExactly((SqlTableReference.TableRef) null);
+
+        SqlTableReference.Resolution caseExpression = resolve("SELECT CASE WHEN x = 1 THEN id ELSE 2 END FROM a");
+        assertThat(caseExpression.labels()).doesNotContain("END");
+
+        SqlTableReference.Resolution counted = resolve("SELECT count(*) c FROM a");
+        assertThat(counted.labels()).containsExactly("c");
+        assertThat(counted.tables()).containsExactly((SqlTableReference.TableRef) null);
+    }
+
+    @Test
+    void keepsTheJoinThatFollowsNotIndexed() throws SQLException {
+        SqlTableReference.Resolution resolution =
+                resolve("SELECT b.y FROM a NOT INDEXED JOIN b ON a.id = b.id");
+
+        assertThat(resolution.labels()).containsExactly("y");
+        assertThat(resolution.tables()).containsExactly(new SqlTableReference.TableRef(null, "b"));
+    }
+
+    @Test
+    void doesNotReadLeftOrRightCallsAsJoinStarts() throws SQLException {
+        assertThat(resolve("SELECT c.z FROM a JOIN b ON left(a.x, 2) = b.y, c").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "c"));
+        assertThat(resolve("SELECT c.z FROM a JOIN b ON right(a.x, 2) = b.y, c").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "c"));
+    }
+
+    @Test
+    void registersUnresolvedCommonTableExpressionsAsOpaque() throws SQLException {
+        assertThat(resolve("WITH c AS (VALUES (1)) SELECT c.z FROM c").tables())
+                .containsExactly((SqlTableReference.TableRef) null);
+        assertThat(resolve("WITH c(z) AS (VALUES (1)) SELECT z FROM c").tables())
+                .containsExactly((SqlTableReference.TableRef) null);
+    }
+
+    @Test
+    void resolvesUnqualifiedUsingColumnToTheLeftTable() throws SQLException {
+        assertThat(resolve("SELECT id FROM a JOIN b USING(id)").tables())
+                .containsExactly(new SqlTableReference.TableRef(null, "a"));
+    }
+
+    @Test
+    void resolvesReturningColumnsThroughTheTargetAlias() throws SQLException {
+        SqlTableReference.Resolution resolution =
+                resolve("INSERT INTO a AS t (id, x) VALUES (1, 'v') RETURNING t.id, t.x");
+
+        assertThat(resolution.tables())
+                .containsExactly(
+                        new SqlTableReference.TableRef(null, "a"),
+                        new SqlTableReference.TableRef(null, "a"));
+    }
+
+    @Test
     void acceptsTrailingSemicolon() throws SQLException {
         assertThat(resolve("SELECT a FROM w;").tables())
                 .containsExactly(new SqlTableReference.TableRef(null, "w"));
