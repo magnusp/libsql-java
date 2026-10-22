@@ -13,6 +13,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
@@ -34,6 +35,33 @@ class LibsqlDatabaseMetaDataTest {
         statement.close();
 
         assertThat(resultSet.isClosed()).isTrue();
+    }
+
+    @Test
+    void getDatabaseProductVersionClosesItsStatement() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(versionResult("3.45.1"));
+
+        new LibsqlDatabaseMetaData(connection).getDatabaseProductVersion();
+
+        assertThat(connection.statements)
+                .as("the product-version lookup must open exactly one statement")
+                .hasSize(1);
+        assertThat(connection.statements.get(0).isClosed())
+                .as("the product-version lookup must close its statement")
+                .isTrue();
+    }
+
+    @Test
+    void getDatabaseProductVersionOpensOneStatementAcrossTwoCalls() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(versionResult("3.45.1"));
+        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(connection);
+
+        assertThat(metadata.getDatabaseProductVersion()).isEqualTo("3.45.1");
+        assertThat(metadata.getDatabaseProductVersion()).isEqualTo("3.45.1");
+
+        assertThat(connection.statements)
+                .as("the second product-version lookup must hit the cache and open nothing")
+                .hasSize(1);
     }
 
     @Test
@@ -280,6 +308,14 @@ class LibsqlDatabaseMetaDataTest {
         return new StmtResult(List.of(new Col("TABLE_NAME", "TEXT")), List.of(), 0, null);
     }
 
+    private static StmtResult versionResult(String version) {
+        return new StmtResult(
+                List.of(new Col("sqlite_version()", "TEXT")),
+                List.of(new Row(List.of(Value.of(version)))),
+                0,
+                null);
+    }
+
     private static final class StmtResultConnection extends LibsqlConnection {
         private final StmtResult result;
 
@@ -391,11 +427,19 @@ class LibsqlDatabaseMetaDataTest {
 
     private static final class RecordingConnection extends LibsqlConnection {
         private final StmtResult result;
+        private final List<LibsqlStatement> statements = new ArrayList<>();
         private String lastSql;
 
         private RecordingConnection(StmtResult result) {
             super(null, null);
             this.result = result;
+        }
+
+        @Override
+        public Statement createStatement() throws SQLException {
+            LibsqlStatement statement = (LibsqlStatement) super.createStatement();
+            statements.add(statement);
+            return statement;
         }
 
         @Override
