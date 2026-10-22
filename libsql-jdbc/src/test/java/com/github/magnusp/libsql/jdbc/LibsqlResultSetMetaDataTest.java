@@ -478,6 +478,51 @@ class LibsqlResultSetMetaDataTest {
     }
 
     @Test
+    void resolvesUsingJoinStarColumnsToTheLeftTable() throws SQLException {
+        LibsqlResultSetMetaData metadata = metadataForSql(
+                "SELECT * FROM a JOIN b USING(id) JOIN c",
+                schemaConnection(),
+                List.of(new Col("id", "INTEGER"), new Col("x", "TEXT"), new Col("y", "TEXT"), new Col("z", "TEXT")));
+
+        assertThat(metadata.getTableName(1)).isEqualTo("a");
+        assertThat(metadata.getTableName(2)).isEqualTo("a");
+        assertThat(metadata.getTableName(3)).isEqualTo("b");
+        assertThat(metadata.getTableName(4)).isEqualTo("c");
+        assertThat(metadata.isNullable(1)).isEqualTo(ResultSetMetaData.columnNoNulls);
+    }
+
+    @Test
+    void resolvesGeneratedColumnStarColumnsThroughTableXinfo() throws SQLException {
+        LibsqlResultSetMetaData metadata = metadataForSql(
+                "SELECT * FROM g JOIN c ON 1",
+                schemaConnection(),
+                List.of(
+                        new Col("p", "INTEGER"),
+                        new Col("q", "INTEGER"),
+                        new Col("r", "TEXT"),
+                        new Col("z", "TEXT")));
+
+        assertThat(metadata.getTableName(1)).isEqualTo("g");
+        assertThat(metadata.getTableName(2)).isEqualTo("g");
+        assertThat(metadata.getTableName(3)).isEqualTo("g");
+        assertThat(metadata.getTableName(4)).isEqualTo("c");
+        assertThat(metadata.isNullable(3)).isEqualTo(ResultSetMetaData.columnNoNulls);
+    }
+
+    @Test
+    void leavesEveryColumnUnknownWhenTheStarWidthDiffers() throws SQLException {
+        LibsqlResultSetMetaData metadata = metadataForSql(
+                "SELECT * FROM (VALUES(1)) v, c",
+                schemaConnection(),
+                List.of(new Col("column1", null), new Col("z", "TEXT")));
+
+        assertThat(metadata.getTableName(1)).isEmpty();
+        assertThat(metadata.getTableName(2)).isEmpty();
+        assertThat(metadata.isNullable(1)).isEqualTo(ResultSetMetaData.columnNullableUnknown);
+        assertThat(metadata.isNullable(2)).isEqualTo(ResultSetMetaData.columnNullableUnknown);
+    }
+
+    @Test
     void leavesUnsupportedShapesUnknown() throws SQLException {
         LibsqlResultSetMetaData expression = metadataForSql(
                 "SELECT a + 1 FROM w", schemaConnection(), List.of(new Col("a + 1", "INTEGER")));
@@ -516,10 +561,36 @@ class LibsqlResultSetMetaDataTest {
                         "v",
                         "CREATE VIEW v AS SELECT a, b FROM w",
                         List.of(new FakeColumn("a", false, false), new FakeColumn("b", false, false))));
+        tables.put(
+                "a",
+                new FakeTable(
+                        "a",
+                        "CREATE TABLE a (id INTEGER NOT NULL, x TEXT)",
+                        List.of(new FakeColumn("id", true, false), new FakeColumn("x", false, false))));
+        tables.put(
+                "b",
+                new FakeTable(
+                        "b",
+                        "CREATE TABLE b (id INTEGER, y TEXT)",
+                        List.of(new FakeColumn("id", false, false), new FakeColumn("y", false, false))));
+        tables.put(
+                "c",
+                new FakeTable(
+                        "c", "CREATE TABLE c (z TEXT)", List.of(new FakeColumn("z", false, false))));
+        tables.put(
+                "g",
+                new FakeTable(
+                        "g",
+                        "CREATE TABLE g (p INTEGER, q AS (p+1), r TEXT NOT NULL)",
+                        List.of(
+                                new FakeColumn("p", false, false),
+                                new FakeColumn("q", false, false, true),
+                                new FakeColumn("r", true, false))));
         return new LibsqlConnection(null, null) {
             @Override
             public StmtResult executeStatement(Stmt stmt) throws SQLException {
-                if (!stmt.sql().contains("pragma_table_info")) {
+                boolean xinfo = stmt.sql().contains("pragma_table_xinfo");
+                if (!xinfo && !stmt.sql().contains("pragma_table_info")) {
                     return new StmtResult(List.of(), List.of(), 0, null);
                 }
                 String table = argument(stmt, 0);
@@ -530,6 +601,9 @@ class LibsqlResultSetMetaDataTest {
                 }
                 List<Row> rows = new ArrayList<>();
                 for (FakeColumn column : fake.columns()) {
+                    if (column.generated() && !xinfo) {
+                        continue;
+                    }
                     rows.add(new Row(List.of(
                             Value.of(fake.name()),
                             Value.of(fake.sql()),
@@ -551,7 +625,11 @@ class LibsqlResultSetMetaDataTest {
 
     private record FakeTable(String name, String sql, List<FakeColumn> columns) {}
 
-    private record FakeColumn(String name, boolean notNull, boolean primaryKey) {}
+    private record FakeColumn(String name, boolean notNull, boolean primaryKey, boolean generated) {
+        FakeColumn(String name, boolean notNull, boolean primaryKey) {
+            this(name, notNull, primaryKey, false);
+        }
+    }
 
     private static LibsqlResultSetMetaData metadataForTable(String createSql, List<Col> cols) throws SQLException {
         List<Row> tableRows = cols.stream()

@@ -416,7 +416,7 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
                     }
                     return new SqlTableReference.TableDefinition(
                             info.createSql(), new ArrayList<>(info.columns().keySet()));
-                });
+                }, cols.size());
             }
             columnOrigins = resolved;
             tableContextResolved = true;
@@ -456,8 +456,9 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
     private TableInfo loadTableInfo(String schema, String table) throws SQLException {
         String master = schema.equals("temp") ? "sqlite_temp_master" : "sqlite_master";
         String query = "SELECT m.name, m.sql, p.name, p.\"notnull\", p.pk "
-                + "FROM " + master + " m JOIN pragma_table_info(?, ?) p "
+                + "FROM " + master + " m JOIN pragma_table_xinfo(?, ?) p "
                 + "WHERE m.type IN ('table', 'view') AND m.name COLLATE NOCASE = ? "
+                + "AND p.hidden != 1 "
                 + "ORDER BY p.cid";
         StmtResult result = connection.executeStatement(
                 new Stmt(query, List.of(Value.of(table), Value.of(schema), Value.of(table))));
@@ -471,8 +472,9 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         }
         String quotedSchema = "\"" + actualSchema.replace("\"", "\"\"") + "\"";
         String query = "SELECT m.name, m.sql, p.name, p.\"notnull\", p.pk "
-                + "FROM " + quotedSchema + ".sqlite_master m JOIN pragma_table_info(?, ?) p "
+                + "FROM " + quotedSchema + ".sqlite_master m JOIN pragma_table_xinfo(?, ?) p "
                 + "WHERE m.type IN ('table', 'view') AND m.name COLLATE NOCASE = ? "
+                + "AND p.hidden != 1 "
                 + "ORDER BY p.cid";
         StmtResult result = connection.executeStatement(new Stmt(
                 query, List.of(Value.of(table), Value.of(actualSchema), Value.of(table))));

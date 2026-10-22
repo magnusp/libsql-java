@@ -98,6 +98,22 @@ final class SqlTableReference {
 
     private record SourceList(List<Source> sources, int next) {}
 
+    /**
+     * The sources of a FROM clause together with the column list {@code *} expands to. The star
+     * list drops the right-side duplicate of a USING or NATURAL join column, as SQLite does.
+     */
+    private record FromClause(List<Source> sources, List<String> starLabels, List<TableRef> starTables) {
+
+        static FromClause of(List<Source> sources) {
+            List<String> labels = new ArrayList<>();
+            List<TableRef> tables = new ArrayList<>();
+            for (Source source : sources) {
+                appendStarColumns(source, false, labels, tables);
+            }
+            return new FromClause(sources, labels, tables);
+        }
+    }
+
     private static final Pattern UNQUOTED_IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_$]*");
 
     private static final Set<String> FROM_END = Set.of(
@@ -126,6 +142,19 @@ final class SqlTableReference {
         }
         return new Parser(tokens, schema, new HashSet<>())
                 .parseStatement(0, tokens.size(), 0, new HashMap<>());
+    }
+
+    /**
+     * Resolves column origins and discards the resolution when the parser expansion does not match
+     * the result width. The protocol column list is authoritative for width, and a shifted
+     * expansion would attribute every later column to the wrong table.
+     */
+    static Resolution resolve(String sql, Schema schema, int columnCount) throws SQLException {
+        Resolution resolution = resolve(sql, schema);
+        if (resolution == null || resolution.labels().size() != columnCount) {
+            return null;
+        }
+        return resolution;
     }
 
     private static final class Parser {
@@ -233,41 +262,53 @@ final class SqlTableReference {
             }
             int setOperator = indexOfAnyWord(index, end, depth, SET_OPERATORS);
             int selectEnd = setOperator >= 0 ? setOperator : end;
-            int from = indexOfWord(index, selectEnd, depth, "FROM");
-            int listEnd = from >= 0 ? from : selectEnd;
-            List<Source> sources = List.of();
-            if (from >= 0) {
-                int fromEnd = indexOfAnyWord(from + 1, selectEnd, depth, FROM_END);
+            int fromIndex = indexOfWord(index, selectEnd, depth, "FROM");
+            int listEnd = fromIndex >= 0 ? fromIndex : selectEnd;
+            FromClause from = FromClause.of(List.of());
+            if (fromIndex >= 0) {
+                int fromEnd = indexOfAnyWord(fromIndex + 1, selectEnd, depth, FROM_END);
                 if (fromEnd < 0) {
                     fromEnd = selectEnd;
                 }
-                List<Source> parsed = parseSources(from + 1, fromEnd, depth, scope);
-                if (parsed == null || parsed.isEmpty()) {
+                FromClause parsed = parseSources(fromIndex + 1, fromEnd, depth, scope);
+                if (parsed == null || parsed.sources().isEmpty()) {
                     return null;
                 }
-                sources = parsed;
+                from = parsed;
             }
-            return parseSelectItems(index, listEnd, depth, sources, scope);
+            return parseSelectItems(index, listEnd, depth, from, scope);
         }
 
-        private List<Source> parseSources(int start, int end, int depth, Map<String, Source> scope)
+        private FromClause parseSources(int start, int end, int depth, Map<String, Source> scope)
                 throws SQLException {
             List<Source> sources = new ArrayList<>();
+            List<String> starLabels = new ArrayList<>();
+            List<TableRef> starTables = new ArrayList<>();
+            boolean natural = false;
             int index = start;
             while (index < end) {
                 SourceList parsed = parseSource(index, end, depth, scope);
                 if (parsed == null) {
                     return null;
                 }
-                sources.addAll(parsed.sources());
+                int starStart = starLabels.size();
+                for (Source source : parsed.sources()) {
+                    sources.add(source);
+                    appendStarColumns(source, natural, starLabels, starTables);
+                }
                 index = parsed.next();
                 index = skipIndexModifiers(index, end, depth);
+                if (isWordAt(index, depth, "USING")) {
+                    dropStarColumns(usingColumns(index, end, depth), starStart, starLabels, starTables);
+                }
                 index = skipJoinCondition(index, end, depth);
                 if (isSymbolAt(index, ",", depth)) {
+                    natural = false;
                     index++;
                     continue;
                 }
                 if (index < end && isJoinStart(index, end, depth)) {
+                    natural = isWordAt(index, depth, "NATURAL");
                     index = skipToJoin(index, end, depth);
                     if (index < 0) {
                         break;
@@ -277,7 +318,7 @@ final class SqlTableReference {
                 }
                 break;
             }
-            return sources;
+            return new FromClause(sources, starLabels, starTables);
         }
 
         private SourceList parseSource(int start, int end, int depth, Map<String, Source> scope)
@@ -323,7 +364,7 @@ final class SqlTableReference {
                     return new SourceList(
                             List.of(new Source(alias, labels, inner.tables(), true, null)), index);
                 }
-                List<Source> grouped = parseSources(index + 1, close, innerDepth, scope);
+                FromClause grouped = parseSources(index + 1, close, innerDepth, scope);
                 if (grouped == null) {
                     return null;
                 }
@@ -341,18 +382,11 @@ final class SqlTableReference {
                     index++;
                 }
                 if (alias == null) {
-                    return new SourceList(grouped, index);
-                }
-                List<String> labels = new ArrayList<>();
-                List<TableRef> tables = new ArrayList<>();
-                for (Source source : grouped) {
-                    if (source.knownColumns()) {
-                        labels.addAll(source.columns());
-                        tables.addAll(source.tables());
-                    }
+                    return new SourceList(grouped.sources(), index);
                 }
                 return new SourceList(
-                        List.of(new Source(alias, labels, tables, true, null)), index);
+                        List.of(new Source(alias, grouped.starLabels(), grouped.starTables(), true, null)),
+                        index);
             }
 
             String first = identifier(index);
@@ -502,7 +536,7 @@ final class SqlTableReference {
                         true,
                         target);
             }
-            return parseSelectItems(returning + 1, end, depth, List.of(source), scope);
+            return parseSelectItems(returning + 1, end, depth, FromClause.of(List.of(source)), scope);
         }
 
         private TableRef targetTable(int start, int end, int depth) {
@@ -555,7 +589,7 @@ final class SqlTableReference {
         }
 
         private Resolution parseSelectItems(
-                int start, int end, int depth, List<Source> sources, Map<String, Source> scope)
+                int start, int end, int depth, FromClause from, Map<String, Source> scope)
                 throws SQLException {
             List<String> labels = new ArrayList<>();
             List<TableRef> tables = new ArrayList<>();
@@ -563,7 +597,7 @@ final class SqlTableReference {
             while (index < end) {
                 int comma = indexOfSymbol(index, end, depth, ",");
                 int itemEnd = comma < 0 ? end : comma;
-                parseItem(index, itemEnd, depth, sources, scope, labels, tables);
+                parseItem(index, itemEnd, depth, from, scope, labels, tables);
                 if (comma < 0) {
                     break;
                 }
@@ -576,7 +610,7 @@ final class SqlTableReference {
                 int start,
                 int end,
                 int depth,
-                List<Source> sources,
+                FromClause from,
                 Map<String, Source> scope,
                 List<String> labels,
                 List<TableRef> tables)
@@ -609,19 +643,15 @@ final class SqlTableReference {
             }
 
             if (expressionEnd - start == 1 && isSymbol(tokens.get(start), "*")) {
-                for (Source source : sources) {
-                    if (source.knownColumns()) {
-                        labels.addAll(source.columns());
-                        tables.addAll(source.tables());
-                    }
-                }
+                labels.addAll(from.starLabels());
+                tables.addAll(from.starTables());
                 return;
             }
 
             ColumnRef qualifiedStar = qualifiedStar(start, expressionEnd);
             if (qualifiedStar != null) {
-                Source source =
-                        findSource(qualifiedStar.parts().get(qualifiedStar.parts().size() - 1), sources);
+                Source source = findSource(
+                        qualifiedStar.parts().get(qualifiedStar.parts().size() - 1), from.sources());
                 if (source != null && source.knownColumns()) {
                     labels.addAll(source.columns());
                     tables.addAll(source.tables());
@@ -632,7 +662,7 @@ final class SqlTableReference {
             ColumnRef column = simpleColumn(start, expressionEnd);
             if (column != null) {
                 labels.add(alias != null ? alias : column.column());
-                tables.add(resolveColumn(column, sources));
+                tables.add(resolveColumn(column, from.sources()));
                 return;
             }
 
@@ -850,6 +880,17 @@ final class SqlTableReference {
             return true;
         }
 
+        private List<String> usingColumns(int start, int end, int depth) {
+            if (!isSymbolAt(start + 1, "(", depth)) {
+                return List.of();
+            }
+            int close = matchingParen(start + 1);
+            if (close < 0 || close > end) {
+                return List.of();
+            }
+            return identifiers(start + 2, close, depth + 1);
+        }
+
         private List<String> identifiers(int start, int end, int depth) {
             List<String> identifiers = new ArrayList<>();
             int index = start;
@@ -1034,6 +1075,40 @@ final class SqlTableReference {
 
     private static String upper(String value) {
         return value.toUpperCase(Locale.ROOT);
+    }
+
+    private static void appendStarColumns(
+            Source source, boolean merged, List<String> labels, List<TableRef> tables) {
+        if (!source.knownColumns()) {
+            return;
+        }
+        for (int i = 0; i < source.columns().size(); i++) {
+            String label = source.columns().get(i);
+            if (merged && containsIgnoreCase(labels, label)) {
+                continue;
+            }
+            labels.add(label);
+            tables.add(source.tables().get(i));
+        }
+    }
+
+    private static void dropStarColumns(
+            List<String> columns, int from, List<String> labels, List<TableRef> tables) {
+        for (int i = labels.size() - 1; i >= from; i--) {
+            if (containsIgnoreCase(columns, labels.get(i))) {
+                labels.remove(i);
+                tables.remove(i);
+            }
+        }
+    }
+
+    private static boolean containsIgnoreCase(List<String> values, String value) {
+        for (String candidate : values) {
+            if (candidate.equalsIgnoreCase(value)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static List<Token> tokenize(String sql) {
