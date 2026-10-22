@@ -149,6 +149,30 @@ class LibsqlResultSetTest {
     }
 
     @Test
+    void realStorageWrapsToIntThroughInt64LikeSqlite() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Float(3e9), new Value.Float(-3e9));
+
+        assertThat(rs.next()).isTrue();
+        assertThat(rs.getInt(1)).isEqualTo(-1294967296);
+        assertThat(rs.getObject(1, Integer.class)).isEqualTo(-1294967296);
+        assertThat(rs.getInt(2)).isEqualTo(1294967296);
+    }
+
+    @Test
+    void getBooleanOnWrappingRealIsFalse() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Float(4294967296.0));
+        assertThat(rs.next()).isTrue();
+        assertThat(rs.getBoolean(1)).isFalse();
+    }
+
+    @Test
+    void getFloatOnLargeIntegerRoundsThroughDouble() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Integer(1152921573326323713L));
+        assertThat(rs.next()).isTrue();
+        assertThat(rs.getFloat(1)).isEqualTo(1.1529215E18f);
+    }
+
+    @Test
     void integerStorageIsReturnedUnchanged() throws SQLException {
         LibsqlResultSet rs = resultSet(new Value.Integer(42));
         assertThat(rs.next()).isTrue();

@@ -458,7 +458,7 @@ public class LibsqlResultSet implements ResultSet {
         return switch (val) {
             case Value.Null n -> 0;
             case Value.Integer i -> (int) i.value();
-            case Value.Float f -> (int) f.value();
+            case Value.Float f -> (int) (long) f.value();
             case Value.Text t -> (int) parseSqliteLong(t.value());
             case Value.Blob b -> (int) parseSqliteLong(blobAsText(b));
         };
@@ -474,7 +474,7 @@ public class LibsqlResultSet implements ResultSet {
         Value val = getCurrentValue(columnIndex);
         return switch (val) {
             case Value.Null n -> 0.0F;
-            case Value.Integer i -> (float) i.value();
+            case Value.Integer i -> (float) (double) i.value();
             case Value.Float f -> (float) f.value();
             case Value.Text t -> (float) parseSqliteDouble(t.value());
             case Value.Blob b -> (float) parseSqliteDouble(blobAsText(b));
