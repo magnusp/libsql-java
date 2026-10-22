@@ -4,7 +4,9 @@ import com.github.magnusp.libsql.client.LibsqlClientConfig;
 import com.github.magnusp.libsql.client.LibsqlException;
 import com.github.magnusp.libsql.client.LibsqlHttpClient;
 import com.github.magnusp.libsql.hrana.codec.Batch;
+import com.github.magnusp.libsql.hrana.codec.BatchCond;
 import com.github.magnusp.libsql.hrana.codec.BatchStep;
+import com.github.magnusp.libsql.hrana.codec.HranaError;
 import com.github.magnusp.libsql.hrana.codec.PipelineReqBody;
 import com.github.magnusp.libsql.hrana.codec.PipelineRespBody;
 import com.github.magnusp.libsql.hrana.codec.Stmt;
@@ -15,6 +17,7 @@ import com.github.magnusp.libsql.hrana.codec.StreamResult;
 
 import java.net.URI;
 import java.sql.Array;
+import java.sql.BatchUpdateException;
 import java.sql.Blob;
 import java.sql.ResultSet;
 import java.sql.CallableStatement;
@@ -32,6 +35,7 @@ import java.sql.Savepoint;
 import java.sql.Statement;
 import java.sql.Struct;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -135,8 +139,9 @@ public class LibsqlConnection implements Connection {
 
         try {
             List<BatchStep> steps = new ArrayList<>(statements.size());
-            for (Stmt stmt : statements) {
-                steps.add(new BatchStep(stmt));
+            for (int i = 0; i < statements.size(); i++) {
+                BatchCond condition = i == 0 ? null : new BatchCond.StepOk(i - 1);
+                steps.add(new BatchStep(condition, statements.get(i)));
             }
             Batch batch = new Batch(steps);
 
@@ -175,14 +180,19 @@ public class LibsqlConnection implements Connection {
 
         int[] updateCounts = new int[expectedSize];
         for (int i = 0; i < expectedSize; i++) {
-            if (batchResp.result().stepErrors().containsKey(i)) {
-                updateCounts[i] = Statement.EXECUTE_FAILED;
-            } else if (batchResp.result().stepResults().containsKey(i)) {
-                StmtResult r = batchResp.result().stepResults().get(i);
-                updateCounts[i] = (int) r.affectedRowCount();
-            } else {
-                updateCounts[i] = Statement.SUCCESS_NO_INFO;
+            HranaError error = batchResp.result().stepErrors().get(i);
+            if (error != null) {
+                // JDBC stops the batch at the first failure and reports only the steps that ran.
+                throw new BatchUpdateException(error.message(), Arrays.copyOf(updateCounts, i));
             }
+            StmtResult result = batchResp.result().stepResults().get(i);
+            if (result == null) {
+                // A skipped step is legitimate only after a failed step, which the loop has
+                // already thrown on. Here the server executed the step but reported nothing.
+                throw new SQLException(
+                        "Protocol error: batch step " + i + " has neither a result nor an error");
+            }
+            updateCounts[i] = (int) result.affectedRowCount();
         }
         return updateCounts;
     }
