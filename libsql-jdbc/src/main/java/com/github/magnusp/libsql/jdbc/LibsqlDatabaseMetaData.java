@@ -486,7 +486,11 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public ResultSet getTableTypes() throws SQLException {
-        return executeMetadataQuery("SELECT 'TABLE' AS TABLE_TYPE UNION SELECT 'VIEW' AS TABLE_TYPE");
+        return executeMetadataQuery(
+                "SELECT 'TABLE' AS TABLE_TYPE "
+                        + "UNION SELECT 'VIEW' AS TABLE_TYPE "
+                        + "UNION SELECT 'SYSTEM TABLE' AS TABLE_TYPE "
+                        + "UNION SELECT 'GLOBAL TEMPORARY' AS TABLE_TYPE");
     }
 
     @Override
