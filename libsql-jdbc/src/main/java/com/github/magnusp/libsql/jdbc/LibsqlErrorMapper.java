@@ -2,7 +2,6 @@ package com.github.magnusp.libsql.jdbc;
 
 import com.github.magnusp.libsql.client.LibsqlException;
 
-import java.sql.BatchUpdateException;
 import java.sql.SQLClientInfoException;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
