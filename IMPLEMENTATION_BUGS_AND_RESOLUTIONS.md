@@ -12,6 +12,7 @@ This document compiles the critical bugs, performance bottlenecks, and concurren
 5. [Bug 5: Jackson Databind Reflection & Excessive Object Allocation Sprawl](#5-bug-5-jackson-databind-reflection--excessive-object-allocation-sprawl)
 6. [Bug 6: O(N) Linear Column Lookups in ResultSet Iteration](#6-bug-6-on-linear-column-lookups-in-resultset-iteration)
 7. [Bug 7: PreparedStatement Parameter Boxed-Object Overhead](#7-bug-7-preparedstatement-parameter-boxed-object-overhead)
+8. [Divergence: `SELECT last_insert_rowid()` in Auto-Commit Reads a Fresh Stream](#8-divergence-select-last_insert_rowid-in-auto-commit-reads-a-fresh-stream)
 
 ---
 
@@ -210,3 +211,44 @@ private void setParam(int parameterIndex, Value value) throws SQLException {
 }
 ```
 This eliminated `Integer` boxing and map entry allocations on repeated query execution.
+
+---
+
+## 8. Divergence: `SELECT last_insert_rowid()` in Auto-Commit Reads a Fresh Stream
+
+### Behavior
+
+In auto-commit, a direct `select last_insert_rowid()` returns `0` even when the same `Statement` inserted a row immediately before. xerial's `sqlite-jdbc` owns one SQLite connection and returns that insert's rowid instead. Generated keys are unaffected.
+
+### Root cause
+
+Hrana over HTTP has no connection. A stream is identified only by the `baton` in `PipelineReqBody`, and `baton: null` asks the server to create a new stream. That new stream is not the connection that ran the earlier insert. `StmtResult.last_insert_rowid` is a field on one statement result on one stream, so it describes the insert on that stream and nothing else.
+
+The driver's auto-commit path is a one-shot pipeline. It opens a stream with a null baton, executes the statement, and closes the stream in the same round trip. A later `select last_insert_rowid()` is another one-shot pipeline, so it reaches a fresh stream with no prior insert and returns SQLite's default of `0`.
+
+The driver holds no session stream open in auto-commit. Hrana over HTTP closes streams after a short period of inactivity, because the protocol has no connection that would let the server detect an abandoned stream (`vendor/HRANA_3_SPEC.md`, "Hrana over HTTP"), and the lazy transaction begin from #99 removed the last eager stream of that kind. Keeping one open just to serve session-state functions would bring back stale-baton failures on idle connections.
+
+### Supported ways to read the rowid
+
+- Call `Statement.getGeneratedKeys()` after the insert. The driver builds the key from `StmtResult.last_insert_rowid` for `INSERT`, `REPLACE`, and `INSERT` nested under a `WITH` clause, so it needs no extra round trip and is the portable JDBC route.
+- Run the insert and `select last_insert_rowid()` inside one explicit transaction. With auto-commit off, the connection holds the baton and both statements run on the same stream, so the query sees the insert.
+
+```java
+// Generated keys: no extra round trip, works in auto-commit.
+statement.executeUpdate("insert into k (v) values ('a')");
+ResultSet keys = statement.getGeneratedKeys();
+keys.next();
+long rowid = keys.getLong(1);
+
+// Direct query: same stream because the explicit transaction holds the baton.
+connection.setAutoCommit(false);
+statement.executeUpdate("insert into k (v) values ('a')");
+ResultSet rowidQuery = statement.executeQuery("select last_insert_rowid()");
+rowidQuery.next();
+long direct = rowidQuery.getLong(1);
+connection.commit();
+```
+
+### Resolution
+
+The divergence is documented rather than fixed with a hidden session stream. Generated keys stay sourced from the protocol field, and `LibsqlGeneratedKeysTest#autoCommitInsertReturnsLastInsertRowidFromStmtResult` pins that path to `StmtResult.last_insert_rowid`. Tracked in #83.

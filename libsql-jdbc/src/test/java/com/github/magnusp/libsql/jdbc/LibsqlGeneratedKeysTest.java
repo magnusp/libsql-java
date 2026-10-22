@@ -27,16 +27,22 @@ class LibsqlGeneratedKeysTest {
     }
 
     @Test
-    void statementInsertReturnsGeneratedKey() throws SQLException {
-        RecordingConnection connection = new RecordingConnection(insertResult(42L));
+    void autoCommitInsertReturnsLastInsertRowidFromStmtResult() throws SQLException {
+        // Auto-commit runs every statement one-shot, so the only rowid the driver can report is
+        // the one the server sent on this statement's result.
+        StmtResult insert = insertResult(42L);
+        RecordingConnection connection = new RecordingConnection(insert);
+        assertThat(connection.getAutoCommit()).isTrue();
 
         try (Statement statement = connection.createStatement()) {
             statement.executeUpdate("insert into k (v) values ('a')");
 
+            assertThat(insert.lastInsertRowid()).isEqualTo(42L);
             try (ResultSet keys = statement.getGeneratedKeys()) {
                 assertThat(keys.getMetaData().getColumnCount()).isEqualTo(1);
+                assertThat(keys.getMetaData().getColumnName(1)).isEqualTo("last_insert_rowid()");
                 assertThat(keys.next()).isTrue();
-                assertThat(keys.getLong(1)).isEqualTo(42L);
+                assertThat(keys.getLong(1)).isEqualTo(insert.lastInsertRowid());
                 assertThat(keys.next()).isFalse();
             }
         }
