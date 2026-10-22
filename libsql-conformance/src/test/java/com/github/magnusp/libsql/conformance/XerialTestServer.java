@@ -114,12 +114,16 @@ public final class XerialTestServer {
     static synchronized void stopForTest() {
         RuntimeException failure = openConnectionFailure();
         failure = merge(failure, failedNamespacesFailure());
-        NAMESPACES.clear();
-        FAILED_NAMESPACES.clear();
-        CONNECTIONS.clear();
         if (failure != null) {
             throw failure;
         }
+    }
+
+    static synchronized void resetNamespaceForTest(String namespace) {
+        NAMESPACES.remove(namespace);
+        RETAINED_NAMESPACES.remove(namespace);
+        FAILED_NAMESPACES.remove(namespace);
+        CONNECTIONS.remove(namespace);
     }
 
     private static RuntimeException merge(RuntimeException failure, RuntimeException next) {

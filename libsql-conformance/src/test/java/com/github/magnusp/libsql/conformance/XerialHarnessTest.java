@@ -131,11 +131,14 @@ class XerialHarnessTest {
         FakeAdmin admin = new FakeAdmin();
         String namespace = namespace();
         XerialTestServer.ensureNamespace(namespace, ADMIN_URL, admin);
-
-        assertThatThrownBy(XerialTestServer::stopForTest)
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(namespace)
-                .hasMessageContaining("open");
+        try {
+            assertThatThrownBy(XerialTestServer::stopForTest)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining(namespace)
+                    .hasMessageContaining("open");
+        } finally {
+            XerialTestServer.resetNamespaceForTest(namespace);
+        }
     }
 
     @Test
@@ -144,15 +147,20 @@ class XerialHarnessTest {
         String namespace = namespace();
         XerialTestServer.ensureNamespace(namespace, ADMIN_URL, admin);
         admin.deleteStatus.set(500);
+        try {
+            assertThatThrownBy(
+                            () ->
+                                    XerialTestServer.releaseNamespace(
+                                            namespace, ADMIN_URL, admin))
+                    .isInstanceOf(IllegalStateException.class);
 
-        assertThatThrownBy(
-                        () -> XerialTestServer.releaseNamespace(namespace, ADMIN_URL, admin))
-                .isInstanceOf(IllegalStateException.class);
-
-        assertThatThrownBy(XerialTestServer::stopForTest)
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("cleanup")
-                .hasMessageContaining(namespace);
+            assertThatThrownBy(XerialTestServer::stopForTest)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("cleanup")
+                    .hasMessageContaining(namespace);
+        } finally {
+            XerialTestServer.resetNamespaceForTest(namespace);
+        }
     }
 
     private static Connection wrap(Connection connection, String namespace) {

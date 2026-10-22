@@ -5,8 +5,11 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.net.http.HttpRequest;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 class XerialTestServerCleanupTest {
@@ -14,6 +17,7 @@ class XerialTestServerCleanupTest {
     private static final String ADMIN_URL = "http://admin.test";
 
     private final FakeAdmin admin = new FakeAdmin();
+    private final List<String> namespaces = new ArrayList<>();
 
     @Test
     void failedDeleteIsVisibleAndBlocksNamespaceReuse() {
@@ -86,8 +90,15 @@ class XerialTestServerCleanupTest {
         assertThat(admin.createRequests).hasValue(1);
     }
 
-    private static String namespace() {
-        return "cleanup_" + UUID.randomUUID().toString().replace("-", "");
+    @AfterEach
+    void resetTrackedNamespaces() {
+        namespaces.forEach(XerialTestServer::resetNamespaceForTest);
+    }
+
+    private String namespace() {
+        String namespace = "cleanup_" + UUID.randomUUID().toString().replace("-", "");
+        namespaces.add(namespace);
+        return namespace;
     }
 
     private static final class FakeAdmin implements XerialTestServer.AdminClient {
