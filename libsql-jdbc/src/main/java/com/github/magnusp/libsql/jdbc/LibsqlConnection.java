@@ -335,6 +335,7 @@ public class LibsqlConnection implements Connection {
         } catch (LibsqlException e) {
             throw LibsqlErrorMapper.toSQLException(e);
         }
+        updateStreamState(resp);
 
         if (resp.results().isEmpty()) {
             throw new SQLException("Empty result received from server");
@@ -349,7 +350,6 @@ public class LibsqlConnection implements Connection {
         }
 
         if (!rebegin) {
-            updateStreamState(resp);
             closeStreamSilently();
             return;
         }
@@ -360,21 +360,14 @@ public class LibsqlConnection implements Connection {
         }
         StreamResult begin = resp.results().get(1);
         if (begin instanceof StreamResult.Error error) {
-            if (resp.baton() != null) {
-                this.baton = resp.baton();
-            }
             closeStreamSilently();
             throw new SQLException(error.error().message());
         }
         if (!(begin instanceof StreamResult.Ok beginOk)
                 || !(beginOk.response() instanceof StreamResponse.Execute)) {
-            if (resp.baton() != null) {
-                this.baton = resp.baton();
-            }
             closeStreamSilently();
             throw new SQLException("Unexpected response: " + begin);
         }
-        updateStreamState(resp);
     }
 
     @Override
