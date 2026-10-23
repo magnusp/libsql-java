@@ -32,6 +32,8 @@ d787e71bdf2b8d12a2669eb06c432cf2a39ac77f678a92459e3dd9b6c4519a43  ./src/test/jav
 6065d284933c8462cc13217992820a9261075c0e9ee126df6cbe9961d90303f9  ./src/test/java/org/sqlite/ResultSetTest.java
 # upstream 958c1f2ff5ca2f1257dfd847207ea793839969b234d140576b51af346697233c ./src/test/java/org/sqlite/ResultSetWithoutResultsTest.java
 958c1f2ff5ca2f1257dfd847207ea793839969b234d140576b51af346697233c  ./src/test/java/org/sqlite/ResultSetWithoutResultsTest.java
+# upstream 0391680df392315cc6ba7a6b91299aa42f80da0a715880696e64adf41dd45daf ./src/test/java/org/sqlite/SavepointTest.java
+0391680df392315cc6ba7a6b91299aa42f80da0a715880696e64adf41dd45daf  ./src/test/java/org/sqlite/SavepointTest.java
 # upstream 81125078aa972d55deba801a81841271a659f0f3306060e128850cbe8cc4054b ./src/test/java/org/sqlite/StatementTest.java
 8328eec31b4504df729d39e18c978e03d71c455080a17e943e61d30ff926330c  ./src/test/java/org/sqlite/StatementTest.java
 # upstream bef3eddca2a6b80472050a3a52d5e7246128f0644d29c24ed091709b0ed6f121 ./src/test/java/org/sqlite/Utils.java
