@@ -22,10 +22,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public final class XerialTestServer {
 
-    private static final String IMAGE =
-            System.getProperty(
-                    "libsql.image",
-                    "ghcr.io/tursodatabase/libsql-server@sha256:6dd3eb276d9d3604e4a48ac4a999a2e267814732d57d7e94c04ba71482333a67");
+    private static final String IMAGE = requireLibsqlImage();
     private static final int HTTP_PORT = 8080;
     private static final int ADMIN_PORT = 9090;
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(30);
@@ -51,6 +48,16 @@ public final class XerialTestServer {
     private static boolean shutdownHookInstalled;
 
     private XerialTestServer() {}
+
+    private static String requireLibsqlImage() {
+        String image = System.getProperty("libsql.image");
+        if (image == null || image.isBlank()) {
+            throw new IllegalStateException(
+                    "libsql.image is not set. Run the conformance tests with Maven so the"
+                            + " pinned sqld image from the root pom is used.");
+        }
+        return image;
+    }
 
     public static synchronized void start() {
         if (container != null) {

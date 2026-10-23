@@ -55,7 +55,8 @@ libsql-java/
    - Maps SQLite dynamic typing to JDBC SQL types and translates Hrana error codes to `SQLException` hierarchies.
 
 4. **`libsql-itests`**:
-   - All tests run against containerized `sqld` (`ghcr.io/tursodatabase/libsql-server:latest`).
+   - All tests run against a pinned `sqld` image (`ghcr.io/tursodatabase/libsql-server:v0.24.33`).
+   - The pin lives in the root `pom.xml` as the `libsql.image` property, and Maven passes it to both the integration and conformance test JVMs. Override it with `-Dlibsql.image=...` only for a deliberate version bump.
    - Includes HikariCP connection pool churn tests and Toxiproxy network toxicity tests.
 
 ---

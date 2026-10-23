@@ -31,7 +31,8 @@ public class NetworkToxicityIT {
 
     private static final Network NETWORK = Network.newNetwork();
 
-    private static final GenericContainer<?> LIBSQL = new GenericContainer<>("ghcr.io/tursodatabase/libsql-server:latest")
+    private static final GenericContainer<?> LIBSQL =
+            new GenericContainer<>(SqldContainerBase.LIBSQL_IMAGE)
             .withNetwork(NETWORK)
             .withNetworkAliases("libsql-srv")
             .withExposedPorts(8080)

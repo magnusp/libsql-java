@@ -46,6 +46,8 @@
         <testcontainers.version>2.0.5</testcontainers.version>
         <hikaricp.version>7.1.0</hikaricp.version>
         <protobuf.version>4.36.1</protobuf.version>
+        <!-- Pinned sqld image for the integration and conformance suites. Bump deliberately. -->
+        <libsql.image>ghcr.io/tursodatabase/libsql-server:v0.24.33</libsql.image>
     </properties>
 
     <dependencyManagement>
@@ -137,11 +139,21 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>3.6.0</version>
+                    <configuration>
+                        <systemPropertyVariables>
+                            <libsql.image>${libsql.image}</libsql.image>
+                        </systemPropertyVariables>
+                    </configuration>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-failsafe-plugin</artifactId>
                     <version>3.6.0</version>
+                    <configuration>
+                        <systemPropertyVariables>
+                            <libsql.image>${libsql.image}</libsql.image>
+                        </systemPropertyVariables>
+                    </configuration>
                     <executions>
                         <execution>
                             <goals>

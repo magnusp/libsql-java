@@ -9,10 +9,17 @@ This document explains how Testcontainers is configured and utilized in this pro
 Testing a pure-Java JDBC driver for Turso requires verifying real SQLite behavior, lock contention, HTTP pipeline batons, and network edge cases over the wire. Rather than mocking HTTP endpoints, we run real `sqld` instances using Testcontainers.
 
 ### Container Image
-* **Image**: `ghcr.io/tursodatabase/libsql-server:latest`
+* **Image**: `ghcr.io/tursodatabase/libsql-server:v0.24.33`
 * **Exposed Port**: `8080` (HTTP and Hrana pipeline endpoint)
 
-The image can also be overridden via the system property `-Dlibsql.image=<custom_image>`.
+The image is pinned to a released `sqld` version so that `latest` cannot silently change
+the behavior under test. The pin is defined once in the root `pom.xml` as the
+`libsql.image` property, and Maven passes it to both the integration and conformance
+test JVMs. To test a different version, override the property:
+
+```bash
+./mvnw verify -Dlibsql.image=ghcr.io/tursodatabase/libsql-server:v0.24.33
+```
 
 ---
 
@@ -35,7 +42,8 @@ import java.time.Duration;
 @Testcontainers
 public abstract class SqldContainerBase {
 
-    private static final String LIBSQL_IMAGE = System.getProperty("libsql.image", "ghcr.io/tursodatabase/libsql-server:latest");
+    // Supplied by the root pom's libsql.image property via surefire/failsafe.
+    private static final String LIBSQL_IMAGE = System.getProperty("libsql.image");
     private static final int PORT = 8080;
 
     @Container
@@ -105,7 +113,7 @@ public class NetworkToxicityIntegrationIT {
 
     private static final Network NETWORK = Network.newNetwork();
 
-    private static final GenericContainer<?> LIBSQL = new GenericContainer<>("ghcr.io/tursodatabase/libsql-server:latest")
+    private static final GenericContainer<?> LIBSQL = new GenericContainer<>(SqldContainerBase.LIBSQL_IMAGE)
             .withNetwork(NETWORK)
             .withNetworkAliases("libsql-srv")
             .withExposedPorts(8080)
