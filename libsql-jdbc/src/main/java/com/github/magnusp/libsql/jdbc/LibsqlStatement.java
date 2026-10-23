@@ -42,6 +42,12 @@ import java.util.List;
  *       working after {@link #close()}. This deliberately copies a likely xerial bug for drop-in
  *       compatibility; see the issue #47 contract decision. A result set produced after close is
  *       returned closed, so a closed statement never holds an open result set.
+ *   <li>Every other post-close transition throws {@code SQLException("Statement is closed")}, per
+ *       {@code java.sql}: {@link #addBatch(String)}, {@link #getGeneratedKeys()}, and {@link
+ *       #getResultSet()}, including the {@code getResultSet} call that follows an execute on the
+ *       closed statement. sqlite-jdbc 3.53.4.0 diverges: it accepts {@code addBatch}, returns a
+ *       fresh generated-key result set, and reopens its internal pointer so {@code getResultSet}
+ *       hands out a live result set. The driver follows {@code java.sql}; see issue #87.
  *   <li>{@link #close()} and the execute methods are safe when called concurrently. State
  *       transitions share one lock; when close wins a race, the execute closes and discards its
  *       result set instead of attaching it to the closed statement.

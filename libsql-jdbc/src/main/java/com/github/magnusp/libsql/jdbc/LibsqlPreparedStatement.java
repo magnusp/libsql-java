@@ -28,6 +28,14 @@ import java.util.Calendar;
 import java.util.List;
 import java.util.Locale;
 
+/**
+ * Prepared statement over the Hrana transport.
+ *
+ * <p>Post-close transitions follow {@link LibsqlStatement}: {@link #addBatch()} and {@link
+ * #getGeneratedKeys()} throw after {@link #close()}. A prepared execute already throws once closed,
+ * so there is no post-close execute that could expose a result set. sqlite-jdbc 3.53.4.0 instead
+ * returns generated keys, and rejects {@code addBatch()} with a different message; see issue #87.
+ */
 public class LibsqlPreparedStatement extends LibsqlStatement implements PreparedStatement {
 
     private final String sql;
