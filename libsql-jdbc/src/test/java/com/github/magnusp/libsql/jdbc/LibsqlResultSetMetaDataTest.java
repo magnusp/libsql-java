@@ -269,7 +269,7 @@ class LibsqlResultSetMetaDataTest {
                 "SELECT CAST(1 AS BOOLEAN), cast(1 as BOOLEAN)",
                 null);
 
-        assertThat(metadata.getColumnTypeName(1)).as("uppercase CAST").isEqualTo("INTEGER");
+        assertThat(metadata.getColumnTypeName(1)).as("uppercase CAST").isEqualTo("NUMERIC");
         assertThat(metadata.getColumnType(1)).as("uppercase CAST").isEqualTo(Types.INTEGER);
         assertThat(metadata.isSigned(1)).as("uppercase CAST").isTrue();
 
@@ -376,6 +376,55 @@ class LibsqlResultSetMetaDataTest {
         assertThat(metadata.getColumnClassName(1))
                 .as("after the last row")
                 .isEqualTo(Object.class.getName());
+    }
+
+    @Test
+    void reportsUnknownTypeNameForExpressionColumnAtEveryCursorPosition() throws SQLException {
+        StmtResult result = new StmtResult(
+                List.of(new Col("x", null)), List.of(new Row(List.of(Value.of(1L)))), 0, null);
+        LibsqlResultSet resultSet = new LibsqlResultSet(null, result);
+        ResultSetMetaData metadata = resultSet.getMetaData();
+
+        assertThat(metadata.getColumnTypeName(1))
+                .as("before the first row")
+                .isEqualTo("NUMERIC");
+
+        assertThat(resultSet.next()).isTrue();
+        assertThat(metadata.getColumnTypeName(1)).as("on a row").isEqualTo("NUMERIC");
+
+        assertThat(resultSet.next()).isFalse();
+        assertThat(metadata.getColumnTypeName(1))
+                .as("after the last row")
+                .isEqualTo("NUMERIC");
+    }
+
+    @Test
+    void reportsUnknownTypeNameForMixedTypeColumn() throws SQLException {
+        StmtResult result = new StmtResult(
+                List.of(new Col("x", null)),
+                List.of(new Row(List.of(Value.of(1L))), new Row(List.of(Value.of("a")))),
+                0,
+                null);
+        LibsqlResultSet resultSet = new LibsqlResultSet(null, result);
+        ResultSetMetaData metadata = resultSet.getMetaData();
+
+        assertThat(resultSet.next()).isTrue();
+        assertThat(metadata.getColumnTypeName(1))
+                .as("on the integer row")
+                .isEqualTo("NUMERIC");
+        assertThat(metadata.isSigned(1)).as("on the integer row").isTrue();
+
+        assertThat(resultSet.next()).isTrue();
+        assertThat(metadata.getColumnTypeName(1))
+                .as("on the text row")
+                .isEqualTo("NUMERIC");
+        assertThat(metadata.isSigned(1)).as("on the text row").isFalse();
+
+        assertThat(resultSet.next()).isFalse();
+        assertThat(metadata.getColumnTypeName(1))
+                .as("after the last row")
+                .isEqualTo("NUMERIC");
+        assertThat(metadata.isSigned(1)).as("after the last row").isTrue();
     }
 
     @Test
