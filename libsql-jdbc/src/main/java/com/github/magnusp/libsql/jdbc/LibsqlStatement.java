@@ -37,6 +37,16 @@ import java.util.List;
  *   <li>{@link #closeOnCompletion()} and {@link #isCloseOnCompletion()} throw {@code
  *       SQLException("Statement is closed")} after the statement is closed.
  *   <li>{@link #close()} closes the current result set and generated-key results.
+ *   <li>Optional statement settings are pinned per setter. {@link #setMaxRows(int)} stores a limit
+ *       and drops the excess rows from the result set, matching {@code java.sql} and sqlite-jdbc
+ *       3.53.4.0. {@link #setEscapeProcessing(boolean)} stores the java.sql flag, which starts
+ *       enabled: while it is enabled, SQL that contains a JDBC escape sequence throws {@link
+ *       SQLFeatureNotSupportedException} rather than reaching sqld untranslated. {@link
+ *       #setMaxFieldSize(int)} and {@link #setQueryTimeout(int)} accept the zero that means no
+ *       limit and throw for a limit the driver cannot enforce. {@link #setCursorName(String)}
+ *       always throws: Hrana has no positioned cursor. sqlite-jdbc 3.53.4.0 instead accepts the
+ *       last three silently, and its query timeout drives SQLite's busy timeout, which is a lock
+ *       wait rather than a query deadline.
  *   <li>Matching xerial's execute-after-close behavior, {@link #execute(String)}, {@link
  *       #executeQuery(String)}, {@link #executeUpdate(String)}, and {@link #getConnection()} keep
  *       working after {@link #close()}. This deliberately copies a likely xerial bug for drop-in
@@ -66,6 +76,8 @@ public class LibsqlStatement implements Statement {
     private boolean resultSetRequested = false;
     private boolean closing = false;
     private int fetchSize = 0;
+    private int maxRows = 0;
+    private boolean escapeProcessing = true;
 
     public LibsqlStatement(LibsqlConnection connection) {
         this.connection = connection;
@@ -94,7 +106,7 @@ public class LibsqlStatement implements Statement {
         if (result.cols() == null || result.cols().isEmpty()) {
             throw new SQLException("Query did not produce a ResultSet: " + sql);
         }
-        LibsqlResultSet resultSet = new LibsqlResultSet(this, result, sql, false);
+        LibsqlResultSet resultSet = new LibsqlResultSet(this, limitRows(result), sql, false);
         assignResultSet(resultSet, result, sql, true);
         return resultSet;
     }
@@ -139,7 +151,7 @@ public class LibsqlStatement implements Statement {
     protected boolean executeResult(String sql, StmtResult result) throws SQLException {
         boolean hasResultSet = result.cols() != null && !result.cols().isEmpty();
         LibsqlResultSet resultSet =
-                hasResultSet ? new LibsqlResultSet(this, result, sql, false) : null;
+                hasResultSet ? new LibsqlResultSet(this, limitRows(result), sql, false) : null;
 
         if (hasResultSet && !isClosed()) {
             beforeResultSetAssignment();
@@ -165,8 +177,104 @@ public class LibsqlStatement implements Statement {
     }
 
     private StmtResult executeSql(String sql) throws SQLException {
+        checkEscapeProcessing(sql);
         beginExecution();
         return connection.executeStatement(new Stmt(sql));
+    }
+
+    /**
+     * Rejects SQL that needs JDBC escape substitution while escape processing is on. The driver
+     * sends SQL to sqld verbatim, so a sequence such as {@code {fn abs(-1)}} would fail as SQLite
+     * syntax instead of being translated. Turning escape processing off is how a caller states
+     * that it sends raw SQL.
+     */
+    private void checkEscapeProcessing(String sql) throws SQLException {
+        boolean enabled;
+        synchronized (stateLock) {
+            enabled = escapeProcessing;
+        }
+        if (enabled && hasEscapeSequence(sql)) {
+            throw new SQLFeatureNotSupportedException("JDBC escape sequences are not supported");
+        }
+    }
+
+    /**
+     * Whether the SQL contains a JDBC escape sequence. Braces inside string literals, quoted
+     * identifiers, and comments do not count, and a brace that does not start with an escape code
+     * is left to the server.
+     */
+    private static boolean hasEscapeSequence(String sql) {
+        if (sql == null || sql.indexOf('{') < 0) {
+            return false;
+        }
+        int n = sql.length();
+        int i = 0;
+        while (i < n) {
+            char c = sql.charAt(i);
+            if (c == '\'' || c == '"' || c == '`') {
+                i++;
+                while (i < n) {
+                    if (sql.charAt(i) == c) {
+                        if (i + 1 < n && sql.charAt(i + 1) == c) {
+                            i += 2;
+                            continue;
+                        }
+                        i++;
+                        break;
+                    }
+                    i++;
+                }
+            } else if (c == '[') {
+                i++;
+                while (i < n && sql.charAt(i) != ']') {
+                    i++;
+                }
+                i++;
+            } else if (c == '-' && i + 1 < n && sql.charAt(i + 1) == '-') {
+                i += 2;
+                while (i < n && sql.charAt(i) != '\n') {
+                    i++;
+                }
+            } else if (c == '/' && i + 1 < n && sql.charAt(i + 1) == '*') {
+                i += 2;
+                while (i + 1 < n && !(sql.charAt(i) == '*' && sql.charAt(i + 1) == '/')) {
+                    i++;
+                }
+                i += 2;
+            } else if (c == '{') {
+                int code = i + 1;
+                while (code < n && Character.isWhitespace(sql.charAt(code))) {
+                    code++;
+                }
+                if (code < n && "dDtTfFoOeEcC".indexOf(sql.charAt(code)) >= 0) {
+                    return true;
+                }
+                i++;
+            } else {
+                i++;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Drops rows above the {@link #setMaxRows(int)} limit. java.sql requires the excess rows to be
+     * dropped silently from the result set, not from the statement that produced it, so the server
+     * still runs the full query.
+     */
+    private StmtResult limitRows(StmtResult result) {
+        int limit;
+        synchronized (stateLock) {
+            limit = maxRows;
+        }
+        if (limit <= 0 || result == null || result.rows() == null || result.rows().size() <= limit) {
+            return result;
+        }
+        return new StmtResult(
+                result.cols(),
+                new ArrayList<>(result.rows().subList(0, limit)),
+                result.affectedRowCount(),
+                result.lastInsertRowid());
     }
 
     /**
@@ -411,6 +519,7 @@ public class LibsqlStatement implements Statement {
     @Override
     public void addBatch(String sql) throws SQLException {
         checkClosed();
+        checkEscapeProcessing(sql);
         batchStatements.add(new Stmt(sql));
     }
 
@@ -485,16 +594,53 @@ public class LibsqlStatement implements Statement {
     }
 
     @Override public int getMaxFieldSize() throws SQLException { return 0; }
-    @Override public void setMaxFieldSize(int max) throws SQLException {}
-    @Override public int getMaxRows() throws SQLException { return 0; }
-    @Override public void setMaxRows(int max) throws SQLException {}
-    @Override public void setEscapeProcessing(boolean enable) throws SQLException {}
+    @Override
+    public void setMaxFieldSize(int max) throws SQLException {
+        if (max < 0) {
+            throw new SQLException("max field size must be >= 0");
+        }
+        if (max > 0) {
+            throw new SQLFeatureNotSupportedException("Column size limits are not supported");
+        }
+    }
+    @Override
+    public int getMaxRows() throws SQLException {
+        synchronized (stateLock) {
+            return maxRows;
+        }
+    }
+    @Override
+    public void setMaxRows(int max) throws SQLException {
+        if (max < 0) {
+            throw new SQLException("max row count must be >= 0");
+        }
+        synchronized (stateLock) {
+            maxRows = max;
+        }
+    }
+    @Override
+    public void setEscapeProcessing(boolean enable) throws SQLException {
+        synchronized (stateLock) {
+            escapeProcessing = enable;
+        }
+    }
     @Override public int getQueryTimeout() throws SQLException { return 0; }
-    @Override public void setQueryTimeout(int seconds) throws SQLException {}
+    @Override
+    public void setQueryTimeout(int seconds) throws SQLException {
+        if (seconds < 0) {
+            throw new SQLException("query timeout must be >= 0");
+        }
+        if (seconds > 0) {
+            throw new SQLFeatureNotSupportedException("Query timeouts are not supported");
+        }
+    }
     @Override public void cancel() throws SQLException {}
     @Override public SQLWarning getWarnings() throws SQLException { return null; }
     @Override public void clearWarnings() throws SQLException {}
-    @Override public void setCursorName(String name) throws SQLException {}
+    @Override
+    public void setCursorName(String name) throws SQLException {
+        throw new SQLFeatureNotSupportedException("Cursor names are not supported");
+    }
     @Override public void setFetchDirection(int direction) throws SQLException {}
     @Override public int getFetchDirection() throws SQLException { return ResultSet.FETCH_FORWARD; }
     @Override
