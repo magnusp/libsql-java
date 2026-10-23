@@ -120,8 +120,18 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public boolean isSigned(int column) throws SQLException {
-        String typeName = getColumnTypeName(column);
-        return "NUMERIC".equals(typeName) || "INTEGER".equals(typeName) || "REAL".equals(typeName);
+        if (declType(column) != null) {
+            return switch (getColumnTypeName(column)) {
+                case "NUMERIC", "INTEGER", "REAL" -> true;
+                default -> false;
+            };
+        }
+        // An expression column has no declared type, so signedness follows the
+        // storage class of the current value, as xerial does.
+        return switch (storageType(runtimeValue(column))) {
+            case INTEGER, FLOAT, NULL -> true;
+            case TEXT, BLOB -> false;
+        };
     }
 
     @Override
@@ -286,13 +296,7 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
             matcher.find();
             return matcher.group(1).toUpperCase(Locale.ENGLISH);
         }
-        return switch (sampleType(column)) {
-            case INTEGER -> "INTEGER";
-            case FLOAT -> "FLOAT";
-            case BLOB -> "BLOB";
-            case TEXT -> "TEXT";
-            default -> "NUMERIC";
-        };
+        return "NUMERIC";
     }
 
     @Override
@@ -372,10 +376,6 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
             }
         }
         return null;
-    }
-
-    private SampleType sampleType(int column) {
-        return storageType(sampleValue(column));
     }
 
     private static SampleType storageType(Value value) {
