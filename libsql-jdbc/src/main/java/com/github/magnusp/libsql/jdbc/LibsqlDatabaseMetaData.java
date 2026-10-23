@@ -13,9 +13,11 @@ import java.sql.RowIdLifetime;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.UnaryOperator;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class LibsqlDatabaseMetaData implements DatabaseMetaData {
@@ -23,8 +25,69 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     private static final Pattern INTEGER_TYPE = Pattern.compile(".*(INT|BOOL).*");
     private static final Pattern VARCHAR_TYPE = Pattern.compile(".*(CHAR|CLOB|TEXT|BLOB).*");
     private static final Pattern FLOAT_TYPE = Pattern.compile(".*(REAL|FLOA|DOUB|DEC|NUM).*");
+    private static final Pattern NAMED_PRIMARY_KEY = Pattern.compile(
+            "\\bCONSTRAINT\\s+(\"[^\"]+\"|`[^`]+`|\\[[^\\]]+\\]|'[^']+'|[^\\s]+)\\s+PRIMARY\\s+KEY\\b",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    private static final Pattern NAMED_FOREIGN_KEY = Pattern.compile(
+            "\\bCONSTRAINT\\s+(\"[^\"]+\"|`[^`]+`|\\[[^\\]]+\\]|'[^']+'|[^\\s]+)\\s+FOREIGN\\s+KEY\\b",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     private static final int UNKNOWN_COLUMN_SIZE = 2_000_000_000;
     private static final int DEFAULT_DECIMAL_DIGITS = 10;
+
+    private static final List<Col> FOREIGN_KEY_COLUMNS = List.of(
+            new Col("PKTABLE_CAT", "TEXT"),
+            new Col("PKTABLE_SCHEM", "TEXT"),
+            new Col("PKTABLE_NAME", "TEXT"),
+            new Col("PKCOLUMN_NAME", "TEXT"),
+            new Col("FKTABLE_CAT", "TEXT"),
+            new Col("FKTABLE_SCHEM", "TEXT"),
+            new Col("FKTABLE_NAME", "TEXT"),
+            new Col("FKCOLUMN_NAME", "TEXT"),
+            new Col("KEY_SEQ", "INTEGER"),
+            new Col("UPDATE_RULE", "INTEGER"),
+            new Col("DELETE_RULE", "INTEGER"),
+            new Col("FK_NAME", "TEXT"),
+            new Col("PK_NAME", "TEXT"),
+            new Col("DEFERRABILITY", "INTEGER"));
+
+    private static final List<Col> PRIMARY_KEY_COLUMNS = List.of(
+            new Col("TABLE_CAT", "TEXT"),
+            new Col("TABLE_SCHEM", "TEXT"),
+            new Col("TABLE_NAME", "TEXT"),
+            new Col("COLUMN_NAME", "TEXT"),
+            new Col("KEY_SEQ", "INTEGER"),
+            new Col("PK_NAME", "TEXT"));
+
+    private static final List<Col> TYPE_INFO_COLUMNS = List.of(
+            new Col("TYPE_NAME", "TEXT"),
+            new Col("DATA_TYPE", "INTEGER"),
+            new Col("PRECISION", "INTEGER"),
+            new Col("LITERAL_PREFIX", "TEXT"),
+            new Col("LITERAL_SUFFIX", "TEXT"),
+            new Col("CREATE_PARAMS", "TEXT"),
+            new Col("NULLABLE", "INTEGER"),
+            new Col("CASE_SENSITIVE", "INTEGER"),
+            new Col("SEARCHABLE", "INTEGER"),
+            new Col("UNSIGNED_ATTRIBUTE", "INTEGER"),
+            new Col("FIXED_PREC_SCALE", "INTEGER"),
+            new Col("AUTO_INCREMENT", "INTEGER"),
+            new Col("LOCAL_TYPE_NAME", "TEXT"),
+            new Col("MINIMUM_SCALE", "INTEGER"),
+            new Col("MAXIMUM_SCALE", "INTEGER"),
+            new Col("SQL_DATA_TYPE", "INTEGER"),
+            new Col("SQL_DATETIME_SUB", "INTEGER"),
+            new Col("NUM_PREC_RADIX", "INTEGER"));
+
+    private static final StmtResult TYPE_INFO_RESULT = new StmtResult(
+            TYPE_INFO_COLUMNS,
+            List.of(
+                    typeInfoRow("NULL", Types.NULL, 0, 1, 0),
+                    typeInfoRow("INTEGER", Types.INTEGER, 0, 0, 1),
+                    typeInfoRow("REAL", Types.REAL, 0, 0, 0),
+                    typeInfoRow("TEXT", Types.VARCHAR, 1, 1, 0),
+                    typeInfoRow("BLOB", Types.BLOB, 0, 1, 0)),
+            0,
+            null);
 
     private final LibsqlConnection connection;
     private String cachedDatabaseProductVersion;
@@ -487,14 +550,279 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
         return value instanceof Value.Integer integer ? integer.value() : 0L;
     }
 
+    /**
+     * Builds a result set from rows the driver synthesizes itself. The statement is created without
+     * executing anything, because the JDBC shape is not the shape of the underlying pragma.
+     */
+    private ResultSet metadataResult(StmtResult result) throws SQLException {
+        LibsqlStatement statement = connection.createStatementInternal();
+        LibsqlResultSet resultSet = new LibsqlResultSet(statement, result, null, true);
+        statement.assignResultSet(resultSet, true);
+        return resultSet;
+    }
+
+    private static StmtResult primaryKeysResult(StmtResult raw, String table) {
+        List<Row> rows = new ArrayList<>();
+        if (raw != null && raw.rows() != null) {
+            for (Row row : raw.rows()) {
+                List<Value> values = row.values();
+                rows.add(new Row(List.of(
+                        Value.ofNull(),
+                        Value.ofNull(),
+                        Value.of(table),
+                        Value.of(text(values.get(0))),
+                        Value.of(integer(values.get(1))),
+                        Value.of(primaryKeyName(text(values.get(2)))))));
+            }
+        }
+        return new StmtResult(PRIMARY_KEY_COLUMNS, rows, 0, null);
+    }
+
+    private static String importedKeysSql(String table) {
+        String escapedTable = escapeLiteral(table == null ? "" : table);
+        return "SELECT f.id AS FK_ID, f.seq AS KEY_SEQ, f.\"table\" AS PKTABLE_NAME, "
+                + "f.\"from\" AS FKCOLUMN_NAME, f.\"to\" AS PKCOLUMN_NAME, "
+                + "f.on_update AS UPDATE_RULE, f.on_delete AS DELETE_RULE, "
+                + "c.sql AS FK_CREATE_SQL, p.sql AS PK_CREATE_SQL, "
+                + "(SELECT pi.name FROM pragma_table_info(f.\"table\") pi WHERE pi.pk = 1) AS PK_FIRST_COLUMN "
+                + "FROM pragma_foreign_key_list('" + escapedTable + "') f "
+                + "LEFT JOIN sqlite_schema c ON lower(c.name) = lower('" + escapedTable + "') "
+                + "LEFT JOIN sqlite_schema p ON lower(p.name) = lower(f.\"table\") "
+                + "ORDER BY f.id, f.seq";
+    }
+
+    private static String exportedKeysSql(String parentTable, String childTable) {
+        String escapedParent = escapeLiteral(parentTable == null ? "" : parentTable);
+        StringBuilder sql = new StringBuilder()
+                .append("SELECT f.id AS FK_ID, f.seq AS KEY_SEQ, ")
+                .append("COALESCE(p.name, f.\"table\") AS PKTABLE_NAME, f.\"from\" AS FKCOLUMN_NAME, ")
+                .append("COALESCE(f.\"to\", (SELECT pi.name FROM pragma_table_info(f.\"table\") pi WHERE pi.pk = 1)) AS PKCOLUMN_NAME, ")
+                .append("f.on_update AS UPDATE_RULE, f.on_delete AS DELETE_RULE, ")
+                .append("m.name AS FKTABLE_NAME, m.sql AS FK_CREATE_SQL, p.sql AS PK_CREATE_SQL, ")
+                .append("(SELECT group_concat(pi.name, ',') FROM pragma_table_info(f.\"table\") pi WHERE pi.pk > 0) AS PK_COLUMNS ")
+                .append("FROM sqlite_schema m JOIN pragma_foreign_key_list(m.name) f ")
+                .append("LEFT JOIN sqlite_schema p ON lower(p.name) = lower(f.\"table\") ")
+                .append("WHERE m.type = 'table' AND lower(f.\"table\") = lower('")
+                .append(escapedParent)
+                .append("')");
+        if (childTable != null) {
+            sql.append(" AND lower(m.name) = lower('").append(escapeLiteral(childTable)).append("')");
+        }
+        return sql.append(" ORDER BY m.name, f.id, f.seq").toString();
+    }
+
+    private static StmtResult importedKeysResult(
+            StmtResult raw, String catalog, String schema, String table) {
+        List<ForeignKeyRow> rows = new ArrayList<>();
+        if (raw != null && raw.rows() != null) {
+            for (Row row : raw.rows()) {
+                List<Value> values = row.values();
+                long fkId = integer(values.get(0));
+                String pkColumn = text(values.get(4));
+                if (pkColumn == null) {
+                    pkColumn = text(values.get(9));
+                }
+                rows.add(new ForeignKeyRow(
+                        catalog,
+                        schema,
+                        text(values.get(2)),
+                        pkColumn,
+                        catalog,
+                        schema,
+                        table,
+                        text(values.get(3)),
+                        (int) integer(values.get(1)) + 1,
+                        keyRule(text(values.get(5))),
+                        keyRule(text(values.get(6))),
+                        nameOrEmpty(foreignKeyName(text(values.get(7)), fkId)),
+                        nameOrEmpty(primaryKeyName(text(values.get(8))))));
+            }
+        }
+        rows.sort(Comparator.comparing(
+                        ForeignKeyRow::pkTable, Comparator.nullsFirst(Comparator.naturalOrder()))
+                .thenComparingInt(ForeignKeyRow::keySeq));
+        return foreignKeyResult(rows);
+    }
+
+    private static StmtResult exportedKeysResult(
+            StmtResult raw, String pkCatalog, String pkSchema, String fkCatalog, String fkSchema) {
+        List<ForeignKeyRow> rows = new ArrayList<>();
+        if (raw != null && raw.rows() != null) {
+            for (Row row : raw.rows()) {
+                List<Value> values = row.values();
+                long fkId = integer(values.get(0));
+                String pkColumn = text(values.get(4));
+                String pkName = primaryKeyName(text(values.get(9)));
+                if (!containsColumn(text(values.get(10)), pkColumn)) {
+                    pkName = null;
+                }
+                rows.add(new ForeignKeyRow(
+                        pkCatalog,
+                        pkSchema,
+                        text(values.get(2)),
+                        pkColumn,
+                        fkCatalog,
+                        fkSchema,
+                        text(values.get(7)),
+                        text(values.get(3)),
+                        (int) integer(values.get(1)) + 1,
+                        keyRule(text(values.get(5))),
+                        keyRule(text(values.get(6))),
+                        nameOrEmpty(foreignKeyName(text(values.get(8)), fkId)),
+                        nameOrEmpty(pkName)));
+            }
+        }
+        rows.sort(Comparator.comparing(
+                        ForeignKeyRow::fkTable, Comparator.nullsFirst(Comparator.naturalOrder()))
+                .thenComparingInt(ForeignKeyRow::keySeq));
+        return foreignKeyResult(rows);
+    }
+
+    private static StmtResult foreignKeyResult(List<ForeignKeyRow> rows) {
+        List<Row> values = new ArrayList<>(rows.size());
+        for (ForeignKeyRow row : rows) {
+            values.add(row.toRow());
+        }
+        return new StmtResult(FOREIGN_KEY_COLUMNS, values, 0, null);
+    }
+
+    private static int keyRule(String rule) {
+        if (rule == null) {
+            return DatabaseMetaData.importedKeyNoAction;
+        }
+        return switch (rule.toUpperCase(Locale.ENGLISH)) {
+            case "CASCADE" -> DatabaseMetaData.importedKeyCascade;
+            case "RESTRICT" -> DatabaseMetaData.importedKeyRestrict;
+            case "SET NULL" -> DatabaseMetaData.importedKeySetNull;
+            case "SET DEFAULT" -> DatabaseMetaData.importedKeySetDefault;
+            default -> DatabaseMetaData.importedKeyNoAction;
+        };
+    }
+
+    private static String primaryKeyName(String createSql) {
+        if (createSql == null) {
+            return null;
+        }
+        Matcher matcher = NAMED_PRIMARY_KEY.matcher(createSql);
+        return matcher.find() ? unquoteIdentifier(matcher.group(1)) : null;
+    }
+
+    private static String foreignKeyName(String createSql, long fkId) {
+        if (createSql == null) {
+            return null;
+        }
+        List<String> names = new ArrayList<>();
+        Matcher matcher = NAMED_FOREIGN_KEY.matcher(createSql);
+        while (matcher.find()) {
+            names.add(unquoteIdentifier(matcher.group(1)));
+        }
+        // SQLite numbers foreign keys from the last declaration down, so the parsed names are
+        // matched to pragma ids in reverse declaration order.
+        int index = names.size() - 1 - (int) fkId;
+        return index >= 0 && index < names.size() ? names.get(index) : null;
+    }
+
+    private static boolean containsColumn(String columns, String column) {
+        if (columns == null || column == null) {
+            return false;
+        }
+        for (String candidate : columns.split(",")) {
+            if (candidate.trim().equalsIgnoreCase(column)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String nameOrEmpty(String name) {
+        return name == null ? "" : name;
+    }
+
+    private static String unquoteIdentifier(String name) {
+        if (name == null) {
+            return null;
+        }
+        String trimmed = name.trim();
+        if (trimmed.length() > 2) {
+            char first = trimmed.charAt(0);
+            char last = trimmed.charAt(trimmed.length() - 1);
+            if ((first == '"' && last == '"')
+                    || (first == '`' && last == '`')
+                    || (first == '[' && last == ']')
+                    || (first == '\'' && last == '\'')) {
+                return trimmed.substring(1, trimmed.length() - 1);
+            }
+        }
+        return trimmed;
+    }
+
+    private static Row typeInfoRow(
+            String typeName, int dataType, int caseSensitive, int unsigned, int autoIncrement) {
+        return new Row(List.of(
+                Value.of(typeName),
+                Value.of(dataType),
+                Value.of(0),
+                Value.ofNull(),
+                Value.ofNull(),
+                Value.ofNull(),
+                Value.of(DatabaseMetaData.typeNullable),
+                Value.of(caseSensitive),
+                Value.of(DatabaseMetaData.typeSearchable),
+                Value.of(unsigned),
+                Value.of(0),
+                Value.of(autoIncrement),
+                Value.ofNull(),
+                Value.of(0),
+                Value.of(0),
+                Value.of(0),
+                Value.of(0),
+                Value.of(10)));
+    }
+
+    private record ForeignKeyRow(
+            String pkCatalog,
+            String pkSchema,
+            String pkTable,
+            String pkColumn,
+            String fkCatalog,
+            String fkSchema,
+            String fkTable,
+            String fkColumn,
+            int keySeq,
+            int updateRule,
+            int deleteRule,
+            String fkName,
+            String pkName) {
+
+        private Row toRow() {
+            return new Row(List.of(
+                    Value.of(pkCatalog),
+                    Value.of(pkSchema),
+                    Value.of(pkTable),
+                    Value.of(pkColumn),
+                    Value.of(fkCatalog),
+                    Value.of(fkSchema),
+                    Value.of(fkTable),
+                    Value.of(fkColumn),
+                    Value.of(keySeq),
+                    Value.of(updateRule),
+                    Value.of(deleteRule),
+                    Value.of(fkName),
+                    Value.of(pkName),
+                    Value.of(DatabaseMetaData.importedKeyInitiallyDeferred)));
+        }
+    }
+
     private record ColumnShape(int jdbcType, String typeName, int columnSize, int decimalDigits) {}
 
     @Override
     public ResultSet getPrimaryKeys(String catalog, String schema, String table) throws SQLException {
         String escapedTable = escapeLiteral(table == null ? "" : table);
-        String sql = "SELECT NULL AS TABLE_CAT, NULL AS TABLE_SCHEM, '" + escapedTable + "' AS TABLE_NAME, name AS COLUMN_NAME, pk AS KEY_SEQ, NULL AS PK_NAME " +
-                "FROM pragma_table_info('" + escapedTable + "') WHERE pk > 0 ORDER BY pk";
-        return executeMetadataQuery(sql);
+        String sql = "SELECT p.name AS COLUMN_NAME, p.pk AS KEY_SEQ, s.sql AS CREATE_SQL "
+                + "FROM pragma_table_info('" + escapedTable + "') p "
+                + "LEFT JOIN sqlite_schema s ON lower(s.name) = lower('" + escapedTable + "') "
+                + "WHERE p.pk > 0 ORDER BY p.pk";
+        return executeMetadataQuery(sql, null, raw -> primaryKeysResult(raw, table));
     }
 
     @Override
@@ -519,30 +847,42 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     @Override public ResultSet getTablePrivileges(String catalog, String schemaPattern, String tableNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public ResultSet getBestRowIdentifier(String catalog, String schema, String table, int scope, boolean nullable) throws SQLException { throw new UnsupportedOperationException(); }
     @Override public ResultSet getVersionColumns(String catalog, String schema, String table) throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public ResultSet getImportedKeys(String catalog, String schema, String table) throws SQLException {
-        String sql = "SELECT NULL AS PKTABLE_CAT, NULL AS PKTABLE_SCHEM, NULL AS PKTABLE_NAME, NULL AS PKCOLUMN_NAME, " +
-                "NULL AS FKTABLE_CAT, NULL AS FKTABLE_SCHEM, NULL AS FKTABLE_NAME, NULL AS FKCOLUMN_NAME, " +
-                "0 AS KEY_SEQ, 0 AS UPDATE_RULE, 0 AS DELETE_RULE, NULL AS FK_NAME, NULL AS PK_NAME, 0 AS DEFERRABILITY WHERE 0";
-        return executeMetadataQuery(sql);
+    @Override
+    public ResultSet getImportedKeys(String catalog, String schema, String table) throws SQLException {
+        return executeMetadataQuery(
+                importedKeysSql(table), null, raw -> importedKeysResult(raw, catalog, schema, table));
     }
-    @Override public ResultSet getExportedKeys(String catalog, String schema, String table) throws SQLException {
-        String sql = "SELECT NULL AS PKTABLE_CAT, NULL AS PKTABLE_SCHEM, NULL AS PKTABLE_NAME, NULL AS PKCOLUMN_NAME, " +
-                "NULL AS FKTABLE_CAT, NULL AS FKTABLE_SCHEM, NULL AS FKTABLE_NAME, NULL AS FKCOLUMN_NAME, " +
-                "0 AS KEY_SEQ, 0 AS UPDATE_RULE, 0 AS DELETE_RULE, NULL AS FK_NAME, NULL AS PK_NAME, 0 AS DEFERRABILITY WHERE 0";
-        return executeMetadataQuery(sql);
+
+    @Override
+    public ResultSet getExportedKeys(String catalog, String schema, String table) throws SQLException {
+        return executeMetadataQuery(
+                exportedKeysSql(table, null), null, raw -> exportedKeysResult(raw, catalog, schema, catalog, schema));
     }
-    @Override public ResultSet getCrossReference(String parentCatalog, String parentSchema, String parentTable, String foreignCatalog, String foreignSchema, String foreignTable) throws SQLException {
-        String sql = "SELECT NULL AS PKTABLE_CAT, NULL AS PKTABLE_SCHEM, NULL AS PKTABLE_NAME, NULL AS PKCOLUMN_NAME, " +
-                "NULL AS FKTABLE_CAT, NULL AS FKTABLE_SCHEM, NULL AS FKTABLE_NAME, NULL AS FKCOLUMN_NAME, " +
-                "0 AS KEY_SEQ, 0 AS UPDATE_RULE, 0 AS DELETE_RULE, NULL AS FK_NAME, NULL AS PK_NAME, 0 AS DEFERRABILITY WHERE 0";
-        return executeMetadataQuery(sql);
+
+    @Override
+    public ResultSet getCrossReference(
+            String parentCatalog,
+            String parentSchema,
+            String parentTable,
+            String foreignCatalog,
+            String foreignSchema,
+            String foreignTable)
+            throws SQLException {
+        if (parentTable == null) {
+            return getExportedKeys(foreignCatalog, foreignSchema, foreignTable);
+        }
+        if (foreignTable == null) {
+            return getImportedKeys(parentCatalog, parentSchema, parentTable);
+        }
+        return executeMetadataQuery(
+                exportedKeysSql(parentTable, foreignTable),
+                null,
+                raw -> exportedKeysResult(raw, parentCatalog, parentSchema, foreignCatalog, foreignSchema));
     }
-    @Override public ResultSet getTypeInfo() throws SQLException {
-        String sql = "SELECT 'VARCHAR' AS TYPE_NAME, " + java.sql.Types.VARCHAR + " AS DATA_TYPE, 0 AS PRECISION, " +
-                "NULL AS LITERAL_PREFIX, NULL AS LITERAL_SUFFIX, NULL AS CREATE_PARAMS, 1 AS NULLABLE, 1 AS CASE_SENSITIVE, " +
-                "3 AS SEARCHABLE, 0 AS UNSIGNED_ATTRIBUTE, 0 AS FIXED_PREC_SCALE, 0 AS AUTO_INCREMENT, " +
-                "NULL AS LOCAL_TYPE_NAME, 0 AS MINIMUM_SCALE, 0 AS MAXIMUM_SCALE, 0 AS SQL_DATA_TYPE, 0 AS SQL_DATETIME_SUB, 10 AS NUM_PREC_RADIX WHERE 0";
-        return executeMetadataQuery(sql);
+
+    @Override
+    public ResultSet getTypeInfo() throws SQLException {
+        return metadataResult(TYPE_INFO_RESULT);
     }
     @Override public ResultSet getIndexInfo(String catalog, String schema, String table, boolean unique, boolean approximate) throws SQLException {
         String escapedTable = escapeLiteral(table == null ? "" : table);

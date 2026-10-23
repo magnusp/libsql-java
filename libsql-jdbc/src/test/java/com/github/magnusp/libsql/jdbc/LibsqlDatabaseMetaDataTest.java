@@ -336,8 +336,311 @@ class LibsqlDatabaseMetaDataTest {
                 Value.of(hidden)));
     }
 
+    private static final String PARENT_CREATE_SQL =
+            "CREATE TABLE parent (id INTEGER, name TEXT, CONSTRAINT pk_parent PRIMARY KEY (id))";
+    private static final String CHILD_CREATE_SQL =
+            "CREATE TABLE child (id INTEGER, parent_id INTEGER, "
+                    + "CONSTRAINT fk_child_parent FOREIGN KEY (parent_id) REFERENCES parent (id) "
+                    + "ON UPDATE CASCADE ON DELETE SET NULL)";
+
+    @Test
+    void getImportedKeysMapsForeignKeyRowsAndNames() throws SQLException {
+        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new ForeignKeyConnection(false));
+
+        try (ResultSet rs = metadata.getImportedKeys(null, null, "child")) {
+            assertThat(columnNames(rs))
+                    .containsExactly(
+                            "PKTABLE_CAT",
+                            "PKTABLE_SCHEM",
+                            "PKTABLE_NAME",
+                            "PKCOLUMN_NAME",
+                            "FKTABLE_CAT",
+                            "FKTABLE_SCHEM",
+                            "FKTABLE_NAME",
+                            "FKCOLUMN_NAME",
+                            "KEY_SEQ",
+                            "UPDATE_RULE",
+                            "DELETE_RULE",
+                            "FK_NAME",
+                            "PK_NAME",
+                            "DEFERRABILITY");
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("PKTABLE_NAME")).isEqualTo("parent");
+            assertThat(rs.getString("PKCOLUMN_NAME")).isEqualTo("id");
+            assertThat(rs.getString("FKTABLE_NAME")).isEqualTo("child");
+            assertThat(rs.getString("FKCOLUMN_NAME")).isEqualTo("parent_id");
+            assertThat(rs.getInt("KEY_SEQ")).isEqualTo(1);
+            assertThat(rs.getInt("UPDATE_RULE")).isEqualTo(DatabaseMetaData.importedKeyCascade);
+            assertThat(rs.getInt("DELETE_RULE")).isEqualTo(DatabaseMetaData.importedKeySetNull);
+            assertThat(rs.getString("FK_NAME")).isEqualTo("fk_child_parent");
+            assertThat(rs.getString("PK_NAME")).isEqualTo("pk_parent");
+            assertThat(rs.getInt("DEFERRABILITY"))
+                    .isEqualTo(DatabaseMetaData.importedKeyInitiallyDeferred);
+            assertThat(rs.next()).isFalse();
+        }
+    }
+
+    @Test
+    void getExportedKeysMapsForeignKeyRowsAndNames() throws SQLException {
+        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new ForeignKeyConnection(false));
+
+        try (ResultSet rs = metadata.getExportedKeys(null, null, "parent")) {
+            assertThat(columnNames(rs)).hasSize(14);
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("PKTABLE_NAME")).isEqualTo("parent");
+            assertThat(rs.getString("PKCOLUMN_NAME")).isEqualTo("id");
+            assertThat(rs.getString("FKTABLE_NAME")).isEqualTo("child");
+            assertThat(rs.getString("FKCOLUMN_NAME")).isEqualTo("parent_id");
+            assertThat(rs.getInt("KEY_SEQ")).isEqualTo(1);
+            assertThat(rs.getInt("UPDATE_RULE")).isEqualTo(DatabaseMetaData.importedKeyNoAction);
+            assertThat(rs.getInt("DELETE_RULE")).isEqualTo(DatabaseMetaData.importedKeyCascade);
+            assertThat(rs.getString("FK_NAME")).isEqualTo("fk_child_parent");
+            assertThat(rs.getString("PK_NAME")).isEqualTo("pk_parent");
+            assertThat(rs.next()).isFalse();
+        }
+    }
+
+    @Test
+    void getCrossReferenceMapsBothTables() throws SQLException {
+        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new ForeignKeyConnection(false));
+
+        try (ResultSet rs = metadata.getCrossReference(null, null, "parent", null, null, "child")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("PKTABLE_NAME")).isEqualTo("parent");
+            assertThat(rs.getString("FKTABLE_NAME")).isEqualTo("child");
+            assertThat(rs.getString("FK_NAME")).isEqualTo("fk_child_parent");
+            assertThat(rs.getString("PK_NAME")).isEqualTo("pk_parent");
+            assertThat(rs.next()).isFalse();
+        }
+    }
+
+    @Test
+    void getCrossReferenceWithoutAChildTableDelegatesToImportedKeys() throws SQLException {
+        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new ForeignKeyConnection(false));
+
+        try (ResultSet rs = metadata.getCrossReference(null, null, "child", null, null, null)) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("FKTABLE_NAME")).isEqualTo("child");
+            assertThat(rs.getString("FKCOLUMN_NAME")).isEqualTo("parent_id");
+        }
+    }
+
+    @Test
+    void emptyDatabaseReturnsWellFormedEmptyKeyMetadata() throws SQLException {
+        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new ForeignKeyConnection(true));
+
+        try (ResultSet rs = metadata.getImportedKeys(null, null, "child")) {
+            assertThat(columnNames(rs)).hasSize(14);
+            assertThat(rs.next()).isFalse();
+        }
+        try (ResultSet rs = metadata.getExportedKeys(null, null, "parent")) {
+            assertThat(columnNames(rs)).hasSize(14);
+            assertThat(rs.next()).isFalse();
+        }
+        try (ResultSet rs = metadata.getCrossReference(null, null, "parent", null, null, "child")) {
+            assertThat(columnNames(rs)).hasSize(14);
+            assertThat(rs.next()).isFalse();
+        }
+        try (ResultSet rs = metadata.getPrimaryKeys(null, null, "parent")) {
+            assertThat(columnNames(rs))
+                    .containsExactly(
+                            "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "COLUMN_NAME", "KEY_SEQ", "PK_NAME");
+            assertThat(rs.next()).isFalse();
+        }
+    }
+
+    @Test
+    void getPrimaryKeysReturnsTheParsedConstraintName() throws SQLException {
+        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new PrimaryKeysConnection(PARENT_CREATE_SQL));
+
+        try (ResultSet rs = metadata.getPrimaryKeys(null, null, "parent")) {
+            assertThat(columnNames(rs))
+                    .containsExactly(
+                            "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "COLUMN_NAME", "KEY_SEQ", "PK_NAME");
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("TABLE_NAME")).isEqualTo("parent");
+            assertThat(rs.getString("COLUMN_NAME")).isEqualTo("id");
+            assertThat(rs.getInt("KEY_SEQ")).isEqualTo(1);
+            assertThat(rs.getString("PK_NAME")).isEqualTo("pk_parent");
+            assertThat(rs.next()).isFalse();
+        }
+    }
+
+    @Test
+    void getPrimaryKeysLeavesPKNameNullForAnInlinePrimaryKey() throws SQLException {
+        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(
+                new PrimaryKeysConnection("CREATE TABLE tag (id INTEGER PRIMARY KEY, label TEXT)"));
+
+        try (ResultSet rs = metadata.getPrimaryKeys(null, null, "tag")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("COLUMN_NAME")).isEqualTo("id");
+            assertThat(rs.getString("PK_NAME")).isNull();
+        }
+    }
+
+    @Test
+    void getTypeInfoReturnsTheXerialTypeTable() throws SQLException {
+        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new RecordingConnection(emptyResult()));
+
+        try (ResultSet rs = metadata.getTypeInfo()) {
+            assertThat(columnNames(rs))
+                    .containsExactly(
+                            "TYPE_NAME",
+                            "DATA_TYPE",
+                            "PRECISION",
+                            "LITERAL_PREFIX",
+                            "LITERAL_SUFFIX",
+                            "CREATE_PARAMS",
+                            "NULLABLE",
+                            "CASE_SENSITIVE",
+                            "SEARCHABLE",
+                            "UNSIGNED_ATTRIBUTE",
+                            "FIXED_PREC_SCALE",
+                            "AUTO_INCREMENT",
+                            "LOCAL_TYPE_NAME",
+                            "MINIMUM_SCALE",
+                            "MAXIMUM_SCALE",
+                            "SQL_DATA_TYPE",
+                            "SQL_DATETIME_SUB",
+                            "NUM_PREC_RADIX");
+
+            List<String> names = new ArrayList<>();
+            List<Integer> types = new ArrayList<>();
+            while (rs.next()) {
+                names.add(rs.getString("TYPE_NAME"));
+                types.add(rs.getInt("DATA_TYPE"));
+                assertThat(rs.getInt("NULLABLE")).isEqualTo(DatabaseMetaData.typeNullable);
+                assertThat(rs.getInt("SEARCHABLE")).isEqualTo(DatabaseMetaData.typeSearchable);
+                assertThat(rs.getInt("NUM_PREC_RADIX")).isEqualTo(10);
+            }
+
+            assertThat(names).containsExactly("NULL", "INTEGER", "REAL", "TEXT", "BLOB");
+            assertThat(types).containsExactly(Types.NULL, Types.INTEGER, Types.REAL, Types.VARCHAR, Types.BLOB);
+        }
+    }
+
+    private static List<String> columnNames(ResultSet rs) throws SQLException {
+        List<String> names = new ArrayList<>();
+        for (int i = 1; i <= rs.getMetaData().getColumnCount(); i++) {
+            names.add(rs.getMetaData().getColumnName(i));
+        }
+        return names;
+    }
+
     private static StmtResult emptyResult() {
         return new StmtResult(List.of(new Col("TABLE_NAME", "TEXT")), List.of(), 0, null);
+    }
+
+    private static final class ForeignKeyConnection extends LibsqlConnection {
+        private final boolean empty;
+
+        private ForeignKeyConnection(boolean empty) {
+            super(null, null);
+            this.empty = empty;
+        }
+
+        @Override
+        public StmtResult executeStatement(Stmt stmt) {
+            String sql = stmt.sql();
+            if (sql.contains("JOIN pragma_foreign_key_list")) {
+                return empty ? emptyForeignKeyResult() : exportedForeignKeyResult();
+            }
+            if (sql.contains("FROM pragma_foreign_key_list")) {
+                return empty ? emptyForeignKeyResult() : importedForeignKeyResult();
+            }
+            if (sql.contains("FROM pragma_table_info")) {
+                return new StmtResult(
+                        List.of(new Col("COLUMN_NAME", "TEXT"), new Col("KEY_SEQ", "INTEGER"), new Col("CREATE_SQL", "TEXT")),
+                        List.of(),
+                        0,
+                        null);
+            }
+            throw new AssertionError("unexpected metadata query: " + sql);
+        }
+
+        private static StmtResult importedForeignKeyResult() {
+            return new StmtResult(
+                    List.of(
+                            new Col("FK_ID", "INTEGER"),
+                            new Col("KEY_SEQ", "INTEGER"),
+                            new Col("PKTABLE_NAME", "TEXT"),
+                            new Col("FKCOLUMN_NAME", "TEXT"),
+                            new Col("PKCOLUMN_NAME", "TEXT"),
+                            new Col("UPDATE_RULE", "TEXT"),
+                            new Col("DELETE_RULE", "TEXT"),
+                            new Col("FK_CREATE_SQL", "TEXT"),
+                            new Col("PK_CREATE_SQL", "TEXT"),
+                            new Col("PK_FIRST_COLUMN", "TEXT")),
+                    List.of(new Row(List.of(
+                            Value.of(0),
+                            Value.of(0),
+                            Value.of("parent"),
+                            Value.of("parent_id"),
+                            Value.of("id"),
+                            Value.of("CASCADE"),
+                            Value.of("SET NULL"),
+                            Value.of(CHILD_CREATE_SQL),
+                            Value.of(PARENT_CREATE_SQL),
+                            Value.of("id")))),
+                    0,
+                    null);
+        }
+
+        private static StmtResult exportedForeignKeyResult() {
+            return new StmtResult(
+                    List.of(
+                            new Col("FK_ID", "INTEGER"),
+                            new Col("KEY_SEQ", "INTEGER"),
+                            new Col("PKTABLE_NAME", "TEXT"),
+                            new Col("FKCOLUMN_NAME", "TEXT"),
+                            new Col("PKCOLUMN_NAME", "TEXT"),
+                            new Col("UPDATE_RULE", "TEXT"),
+                            new Col("DELETE_RULE", "TEXT"),
+                            new Col("FKTABLE_NAME", "TEXT"),
+                            new Col("FK_CREATE_SQL", "TEXT"),
+                            new Col("PK_CREATE_SQL", "TEXT"),
+                            new Col("PK_COLUMNS", "TEXT")),
+                    List.of(new Row(List.of(
+                            Value.of(0),
+                            Value.of(0),
+                            Value.of("parent"),
+                            Value.of("parent_id"),
+                            Value.of("id"),
+                            Value.of("NO ACTION"),
+                            Value.of("CASCADE"),
+                            Value.of("child"),
+                            Value.of(CHILD_CREATE_SQL),
+                            Value.of(PARENT_CREATE_SQL),
+                            Value.of("id")))),
+                    0,
+                    null);
+        }
+
+        private static StmtResult emptyForeignKeyResult() {
+            return new StmtResult(
+                    List.of(new Col("FK_ID", "INTEGER"), new Col("KEY_SEQ", "INTEGER")), List.of(), 0, null);
+        }
+    }
+
+    private static final class PrimaryKeysConnection extends LibsqlConnection {
+        private final String createSql;
+
+        private PrimaryKeysConnection(String createSql) {
+            super(null, null);
+            this.createSql = createSql;
+        }
+
+        @Override
+        public StmtResult executeStatement(Stmt stmt) {
+            return new StmtResult(
+                    List.of(
+                            new Col("COLUMN_NAME", "TEXT"),
+                            new Col("KEY_SEQ", "INTEGER"),
+                            new Col("CREATE_SQL", "TEXT")),
+                    List.of(new Row(List.of(Value.of("id"), Value.of(1), Value.of(createSql)))),
+                    0,
+                    null);
+        }
     }
 
     private static StmtResult versionResult(String version) {
