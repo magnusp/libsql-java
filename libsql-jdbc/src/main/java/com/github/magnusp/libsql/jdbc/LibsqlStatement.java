@@ -31,6 +31,9 @@ import java.util.List;
  *       {@link Statement#KEEP_CURRENT_RESULT} and {@link Statement#CLOSE_ALL_RESULTS} throw
  *       {@link SQLFeatureNotSupportedException} naming both constants, and any other value throws
  *       {@code SQLException("Invalid argument")}. The method always returns {@code false}.
+ *   <li>Closing a result set closes the statement when {@link #closeOnCompletion()} was called,
+ *       per {@code java.sql}. sqlite-jdbc 3.53.4.0 does the same, including for prepared
+ *       statements.
  *   <li>{@link #closeOnCompletion()} and {@link #isCloseOnCompletion()} throw {@code
  *       SQLException("Statement is closed")} after the statement is closed.
  *   <li>{@link #close()} closes the current result set and generated-key results.
