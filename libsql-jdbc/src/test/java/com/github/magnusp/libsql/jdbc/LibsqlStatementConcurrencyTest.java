@@ -1,20 +1,34 @@
 package com.github.magnusp.libsql.jdbc;
 
+import com.github.magnusp.libsql.client.LibsqlClientConfig;
+import com.github.magnusp.libsql.client.LibsqlHttpClient;
 import com.github.magnusp.libsql.hrana.codec.Col;
+import com.github.magnusp.libsql.hrana.codec.PipelineReqBody;
+import com.github.magnusp.libsql.hrana.codec.PipelineRespBody;
 import com.github.magnusp.libsql.hrana.codec.Row;
 import com.github.magnusp.libsql.hrana.codec.Stmt;
 import com.github.magnusp.libsql.hrana.codec.StmtResult;
+import com.github.magnusp.libsql.hrana.codec.StreamRequest;
+import com.github.magnusp.libsql.hrana.codec.StreamResponse;
+import com.github.magnusp.libsql.hrana.codec.StreamResult;
 import com.github.magnusp.libsql.hrana.codec.Value;
 import org.junit.jupiter.api.Test;
 
+import java.net.URI;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -26,6 +40,8 @@ class LibsqlStatementConcurrencyTest {
             List.of(new Row(List.of(Value.of(1L)))),
             0,
             null);
+    private static final LibsqlClientConfig CONFIG =
+            new LibsqlClientConfig("http://localhost:1", null);
 
     @Test
     void plainExecuteQueryDoesNotAttachAnOpenResultSetWhenCloseWinsTheRace() throws Exception {
@@ -83,6 +99,129 @@ class LibsqlStatementConcurrencyTest {
 
         assertThat(statement.isClosed()).isTrue();
         assertThat(resultSet.isClosed()).isTrue();
+    }
+
+    /**
+     * Two threads share one non-auto-commit connection. Hrana consumes a baton once and allows one
+     * request per stream at a time, so the two lazily started transactions must not both send
+     * {@code BEGIN} from the same empty stream state.
+     */
+    @Test
+    void twoThreadsOnOneNonAutoCommitConnectionDoNotReuseABaton() throws Exception {
+        ProtocolClient client = new ProtocolClient(new CyclicBarrier(2));
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.setAutoCommit(false);
+        LibsqlStatement first = new LibsqlStatement(connection);
+        LibsqlStatement second = new LibsqlStatement(connection);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> firstWork = executor.submit(() -> executeRepeatedly(first, 20));
+            Future<?> secondWork = executor.submit(() -> executeRepeatedly(second, 20));
+
+            assertThat(failureOf(firstWork, secondWork)).isNull();
+            assertThat(client.violations()).as("protocol violations").isEmpty();
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    /**
+     * A commit from another thread must not land between the lazy transaction begin and the
+     * statement sent on the new baton.
+     */
+    @Test
+    void commitDoesNotInterleaveWithTheLazyTransactionBegin() throws Exception {
+        ProtocolClient client = new ProtocolClient(null);
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.setAutoCommit(false);
+        LibsqlStatement statement = new LibsqlStatement(connection);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> work = executor.submit(() -> statement.execute("SELECT 1"));
+            assertThat(client.awaitStatementInFlight()).isTrue();
+
+            AtomicReference<Throwable> commitFailure = new AtomicReference<>();
+            joinAndCheck(commitInThread(connection, commitFailure), commitFailure);
+
+            Throwable workFailure = failureOf(work);
+            assertThat(client.violations()).as("protocol violations").isEmpty();
+            assertThat(workFailure).isNull();
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    /**
+     * A close from another thread must not race the statement's round trip, and it must leave no
+     * server-side stream open.
+     */
+    @Test
+    void closeDoesNotInterleaveWithExecuteAndLeavesNoStreamOpen() throws Exception {
+        ProtocolClient client = new ProtocolClient(null);
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.setAutoCommit(false);
+        LibsqlStatement statement = new LibsqlStatement(connection);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> work = executor.submit(() -> statement.execute("SELECT 1"));
+            assertThat(client.awaitStatementInFlight()).isTrue();
+
+            AtomicReference<Throwable> closeFailure = new AtomicReference<>();
+            joinAndCheck(closeInThread(connection, closeFailure), closeFailure);
+
+            Throwable workFailure = failureOf(work);
+            assertThat(client.violations()).as("protocol violations").isEmpty();
+            assertThat(workFailure).isNull();
+            assertThat(client.hasOpenStream()).isFalse();
+            assertThat(connection.isClosed()).isTrue();
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private static Void executeRepeatedly(LibsqlStatement statement, int count) throws SQLException {
+        for (int i = 0; i < count; i++) {
+            statement.execute("SELECT " + i);
+        }
+        return null;
+    }
+
+    private static Thread commitInThread(
+            LibsqlConnection connection, AtomicReference<Throwable> failure) {
+        return runInThread(() -> connection.commit(), failure);
+    }
+
+    private static Thread closeInThread(
+            LibsqlConnection connection, AtomicReference<Throwable> failure) {
+        return runInThread(() -> connection.close(), failure);
+    }
+
+    private static Thread runInThread(ThrowingRunnable action, AtomicReference<Throwable> failure) {
+        Thread thread = new Thread(() -> {
+            try {
+                action.run();
+            } catch (Throwable t) {
+                failure.set(t);
+            }
+        });
+        thread.start();
+        return thread;
+    }
+
+    private static Throwable failureOf(Future<?>... futures) throws Exception {
+        for (Future<?> future : futures) {
+            try {
+                future.get(10, TimeUnit.SECONDS);
+            } catch (ExecutionException e) {
+                return e.getCause();
+            }
+        }
+        return null;
+    }
+
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run() throws Exception;
     }
 
     private static Thread closeInThread(
@@ -156,6 +295,144 @@ class LibsqlStatementConcurrencyTest {
         @Override
         protected void beforeResultSetAssignment() throws SQLException {
             pause.await();
+        }
+    }
+
+    /**
+     * Models the baton rules the connection must uphold: one open stream per connection, one
+     * request on a stream at a time, and a baton that is consumed by its request. Every rule break
+     * is recorded instead of thrown, so a failing case reports why the interleaving was invalid.
+     */
+    private static final class ProtocolClient extends LibsqlHttpClient {
+
+        private final Object lock = new Object();
+        private final List<String> violations = new ArrayList<>();
+        private final Set<String> inFlightBatons = new HashSet<>();
+        private final CountDownLatch statementInFlight = new CountDownLatch(1);
+        private final AtomicBoolean statementWindowUsed = new AtomicBoolean();
+        private final CyclicBarrier beginRace;
+        private int inFlightRequests;
+        private String liveBaton;
+        private int batonCount;
+        private boolean streamOpen;
+
+        private ProtocolClient(CyclicBarrier beginRace) {
+            super(CONFIG);
+            this.beginRace = beginRace;
+        }
+
+        @Override
+        public PipelineRespBody sendPipeline(PipelineReqBody request, URI targetUri) {
+            String baton = request.baton();
+            StreamRequest first = request.requests().get(0);
+            String sql = first instanceof StreamRequest.Execute execute
+                    ? execute.stmt().sql()
+                    : null;
+            boolean close = first instanceof StreamRequest.Close;
+
+            synchronized (lock) {
+                if (inFlightRequests > 0) {
+                    violations.add("concurrent round trip while " + inFlightRequests
+                            + " was in flight: " + sql);
+                }
+                if (baton != null && inFlightBatons.contains(baton)) {
+                    violations.add("baton reused while in flight: " + baton);
+                } else if (baton != null && (!streamOpen || !baton.equals(liveBaton))) {
+                    violations.add("request on a stream that is not open: " + baton);
+                } else if (baton == null && streamOpen) {
+                    violations.add("new stream while another is open");
+                }
+                inFlightRequests++;
+                if (baton != null) {
+                    inFlightBatons.add(baton);
+                }
+            }
+            try {
+                if (isBegin(sql)) {
+                    awaitBeginRace();
+                } else if (sql != null && !isTransactionEnd(sql)) {
+                    if (statementInFlight.getCount() > 0) {
+                        statementInFlight.countDown();
+                        if (statementWindowUsed.compareAndSet(false, true)) {
+                            pause();
+                        }
+                    }
+                }
+                synchronized (lock) {
+                    if (close) {
+                        liveBaton = null;
+                        streamOpen = false;
+                    } else {
+                        liveBaton = "baton-" + (++batonCount);
+                        streamOpen = true;
+                    }
+                    return new PipelineRespBody(
+                            close ? null : liveBaton, null, responsesFor(request));
+                }
+            } finally {
+                synchronized (lock) {
+                    inFlightRequests--;
+                    if (baton != null) {
+                        inFlightBatons.remove(baton);
+                    }
+                }
+            }
+        }
+
+        private void awaitBeginRace() {
+            if (beginRace == null) {
+                return;
+            }
+            try {
+                beginRace.await(200, TimeUnit.MILLISECONDS);
+            } catch (Exception expected) {
+                // The fixed connection holds its lock, so the second begin never arrives.
+            }
+        }
+
+        private static void pause() {
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        private static boolean isBegin(String sql) {
+            return sql != null && sql.startsWith("BEGIN");
+        }
+
+        private static boolean isTransactionEnd(String sql) {
+            return "COMMIT".equals(sql) || "ROLLBACK".equals(sql);
+        }
+
+        private static List<StreamResult> responsesFor(PipelineReqBody request) {
+            List<StreamResult> results = new ArrayList<>();
+            for (StreamRequest streamRequest : request.requests()) {
+                if (streamRequest instanceof StreamRequest.Close) {
+                    results.add(new StreamResult.Ok(StreamResponse.Close.INSTANCE));
+                } else {
+                    results.add(new StreamResult.Ok(new StreamResponse.Execute(new StmtResult(
+                            List.of(), List.of(), 0, null))));
+                }
+            }
+            return results;
+        }
+
+        private boolean awaitStatementInFlight() throws InterruptedException {
+            return statementInFlight.await(5, TimeUnit.SECONDS);
+        }
+
+        private List<String> violations() {
+            synchronized (lock) {
+                return List.copyOf(violations);
+            }
+        }
+
+        private boolean hasOpenStream() {
+            synchronized (lock) {
+                return streamOpen;
+            }
         }
     }
 
