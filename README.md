@@ -20,10 +20,11 @@ A pure-Java JDBC driver, client library, and protocol codec for **libSQL** and *
 
 | Module | Description |
 |---|---|
-| [`libsql-jdbc`](libsql-jdbc) | Standard JDBC 4.3 driver (`jdbc:libsql:...`) |
-| [`libsql-client`](libsql-client) | High-level client API for libSQL queries and streaming |
 | [`libsql-hrana-codec`](libsql-hrana-codec) | Core codec implementation for the Hrana 3 protocol |
+| [`libsql-client`](libsql-client) | High-level client API for libSQL queries and streaming |
+| [`libsql-jdbc`](libsql-jdbc) | Standard JDBC 4.3 driver (`jdbc:libsql:...`) |
 | [`libsql-itests`](libsql-itests) | Integration tests against `sqld` running in Testcontainers |
+| [`libsql-conformance`](libsql-conformance/README.md) | Selected xerial/sqlite-jdbc tests running against libSQL |
 
 ## Getting Started
 
