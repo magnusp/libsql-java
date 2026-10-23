@@ -65,7 +65,7 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
             throw new SQLException("Query does not return results");
         }
         LibsqlResultSet resultSet = new LibsqlResultSet(this, result, sql, false);
-        assignResultSet(resultSet, true);
+        assignResultSet(resultSet, result, sql, true);
         return resultSet;
     }
 
@@ -222,7 +222,7 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
 
     private StmtResult executeCurrent() throws SQLException {
         checkClosed();
-        closeCurrentResultSet();
+        beginExecution();
         checkClosed();
         return connection.executeStatement(buildCurrentStmt());
     }

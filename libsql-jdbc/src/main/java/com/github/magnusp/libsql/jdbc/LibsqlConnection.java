@@ -35,7 +35,6 @@ import java.sql.Savepoint;
 import java.sql.Statement;
 import java.sql.Struct;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -132,9 +131,23 @@ public class LibsqlConnection implements Connection {
     }
 
     public int[] executeBatch(List<Stmt> statements) throws SQLException {
+        List<StmtResult> results = executeBatchResults(statements);
+        int[] updateCounts = new int[results.size()];
+        for (int i = 0; i < results.size(); i++) {
+            updateCounts[i] = (int) results.get(i).affectedRowCount();
+        }
+        return updateCounts;
+    }
+
+    /**
+     * Executes a batch and returns the {@code BatchResult} step results, one per statement. The
+     * caller derives both the update counts and the generated keys from these results, so the
+     * driver needs no follow-up query and no extra round trip.
+     */
+    List<StmtResult> executeBatchResults(List<Stmt> statements) throws SQLException {
         checkClosed();
         if (statements == null || statements.isEmpty()) {
-            return new int[0];
+            return List.of();
         }
 
         try {
@@ -165,7 +178,8 @@ public class LibsqlConnection implements Connection {
         }
     }
 
-    private int[] extractBatchResults(PipelineRespBody resp, int expectedSize) throws SQLException {
+    private List<StmtResult> extractBatchResults(PipelineRespBody resp, int expectedSize)
+            throws SQLException {
         if (resp.results().isEmpty()) {
             throw new SQLException("Empty response for batch execution");
         }
@@ -178,12 +192,12 @@ public class LibsqlConnection implements Connection {
             throw new SQLException("Unexpected batch response: " + response);
         }
 
-        int[] updateCounts = new int[expectedSize];
+        List<StmtResult> results = new ArrayList<>(expectedSize);
         for (int i = 0; i < expectedSize; i++) {
             HranaError error = batchResp.result().stepErrors().get(i);
             if (error != null) {
                 // JDBC stops the batch at the first failure and reports only the steps that ran.
-                throw new BatchUpdateException(error.message(), Arrays.copyOf(updateCounts, i));
+                throw new BatchUpdateException(error.message(), steppedUpdateCounts(results));
             }
             StmtResult result = batchResp.result().stepResults().get(i);
             if (result == null) {
@@ -192,7 +206,15 @@ public class LibsqlConnection implements Connection {
                 throw new SQLException(
                         "Protocol error: batch step " + i + " has neither a result nor an error");
             }
-            updateCounts[i] = (int) result.affectedRowCount();
+            results.add(result);
+        }
+        return results;
+    }
+
+    private static int[] steppedUpdateCounts(List<StmtResult> results) {
+        int[] updateCounts = new int[results.size()];
+        for (int i = 0; i < results.size(); i++) {
+            updateCounts[i] = (int) results.get(i).affectedRowCount();
         }
         return updateCounts;
     }
