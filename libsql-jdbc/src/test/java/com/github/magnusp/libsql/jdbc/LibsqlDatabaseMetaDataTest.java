@@ -13,6 +13,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
@@ -518,6 +519,36 @@ class LibsqlDatabaseMetaDataTest {
             assertThat(types).containsExactly(Types.NULL, Types.INTEGER, Types.REAL, Types.VARCHAR, Types.BLOB);
         }
     }
+
+    @Test
+    void everyUnsupportedMethodThrowsSqlFeatureNotSupportedException() {
+        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new RecordingConnection(emptyResult()));
+
+        List<UnsupportedCall> calls = List.of(
+                new UnsupportedCall("getProcedures", () -> metadata.getProcedures(null, null, null)),
+                new UnsupportedCall("getProcedureColumns", () -> metadata.getProcedureColumns(null, null, null, null)),
+                new UnsupportedCall("getColumnPrivileges", () -> metadata.getColumnPrivileges(null, null, null, null)),
+                new UnsupportedCall("getTablePrivileges", () -> metadata.getTablePrivileges(null, null, null)),
+                new UnsupportedCall("getBestRowIdentifier", () -> metadata.getBestRowIdentifier(
+                        null, null, null, DatabaseMetaData.bestRowSession, false)),
+                new UnsupportedCall("getVersionColumns", () -> metadata.getVersionColumns(null, null, null)),
+                new UnsupportedCall("getUDTs", () -> metadata.getUDTs(null, null, null, null)),
+                new UnsupportedCall("getSuperTypes", () -> metadata.getSuperTypes(null, null, null)),
+                new UnsupportedCall("getSuperTables", () -> metadata.getSuperTables(null, null, null)),
+                new UnsupportedCall("getAttributes", () -> metadata.getAttributes(null, null, null, null)),
+                new UnsupportedCall("getClientInfoProperties", metadata::getClientInfoProperties),
+                new UnsupportedCall("getFunctions", () -> metadata.getFunctions(null, null, null)),
+                new UnsupportedCall("getFunctionColumns", () -> metadata.getFunctionColumns(null, null, null, null)),
+                new UnsupportedCall("getPseudoColumns", () -> metadata.getPseudoColumns(null, null, null, null)));
+
+        for (UnsupportedCall call : calls) {
+            assertThatThrownBy(call.call())
+                    .as(call.name())
+                    .isInstanceOf(SQLFeatureNotSupportedException.class);
+        }
+    }
+
+    private record UnsupportedCall(String name, org.assertj.core.api.ThrowableAssert.ThrowingCallable call) {}
 
     private static List<String> columnNames(ResultSet rs) throws SQLException {
         List<String> names = new ArrayList<>();
