@@ -122,6 +122,49 @@ class LibsqlDatabaseMetaDataTest {
     }
 
     @Test
+    void getColumnsIncludesSqliteSchemaBeforeUserTables() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(emptyResult());
+
+        new LibsqlDatabaseMetaData(connection).getColumns(null, null, "%", "%").close();
+
+        assertThat(connection.lastSql)
+                .as("getColumns must synthesize the sqlite_schema system table")
+                .contains("'sqlite_schema' AS TABLE_NAME")
+                .as("getColumns must order system tables before user tables, like getTables")
+                .contains("ORDER BY t.TABLE_RANK, t.TABLE_NAME, p.cid");
+    }
+
+    @Test
+    void getCrossReferenceReturnsNoRowForAnotherCatalogOrSchema() throws SQLException {
+        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new ForeignKeyConnection(false));
+
+        try (ResultSet rs =
+                metadata.getCrossReference("ca'talog", "sch'ema", "parent", null, null, "child1")) {
+            assertThat(columnNames(rs)).hasSize(14);
+            assertThat(rs.next())
+                    .as("the database has no catalog or schema, so a specific request matches nothing")
+                    .isFalse();
+        }
+    }
+
+    @Test
+    void getPrimaryKeysOrdersColumnsByNameAndKeepsTheDeclaredKeySequence() throws SQLException {
+        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new CompositePrimaryKeysConnection());
+
+        try (ResultSet rs = metadata.getPrimaryKeys(null, null, "pk")) {
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("COLUMN_NAME")).isEqualTo("col2");
+            assertThat(rs.getInt("KEY_SEQ")).isEqualTo(2);
+
+            assertThat(rs.next()).isTrue();
+            assertThat(rs.getString("COLUMN_NAME")).isEqualTo("col3");
+            assertThat(rs.getInt("KEY_SEQ")).isEqualTo(1);
+
+            assertThat(rs.next()).isFalse();
+        }
+    }
+
+    @Test
     void getTablesWithNullTypesReturnsOnlyTablesViewsAndSystemAndTemporaryRows() throws SQLException {
         RecordingConnection connection = new RecordingConnection(emptyResult());
 
@@ -244,7 +287,26 @@ class LibsqlDatabaseMetaDataTest {
                                 m -> m.getCrossReference(null, null, "parent", null, null, "child")),
                 arguments(
                         "getIndexInfo",
-                        (MetadataCall) m -> m.getIndexInfo(null, null, "t", false, false)));
+                        (MetadataCall) m -> m.getIndexInfo(null, null, "t", false, false)),
+                arguments("getProcedures", (MetadataCall) m -> m.getProcedures(null, null, null)),
+                arguments(
+                        "getProcedureColumns",
+                        (MetadataCall) m -> m.getProcedureColumns(null, null, null, null)),
+                arguments(
+                        "getColumnPrivileges",
+                        (MetadataCall) m -> m.getColumnPrivileges(null, null, null, null)),
+                arguments(
+                        "getTablePrivileges",
+                        (MetadataCall) m -> m.getTablePrivileges(null, null, null)),
+                arguments(
+                        "getBestRowIdentifier",
+                        (MetadataCall)
+                                m -> m.getBestRowIdentifier(
+                                        null, null, null, DatabaseMetaData.bestRowSession, false)),
+                arguments(
+                        "getVersionColumns",
+                        (MetadataCall) m -> m.getVersionColumns(null, null, null)),
+                arguments("getUDTs", (MetadataCall) m -> m.getUDTs(null, null, null, null)));
     }
 
     @FunctionalInterface
@@ -480,6 +542,23 @@ class LibsqlDatabaseMetaDataTest {
     }
 
     @Test
+    void getPrimaryKeysReadsAConstraintNameGluedToTheKeywords() throws SQLException {
+        for (String createSql : List.of(
+                "CREATE TABLE `Pk10` (`Col1`, `Col2`, `Col3`, CONSTRAINT `NamedPk`PRIMARY KEY (`Col3`, `Col2`))",
+                "CREATE TABLE `Pk12` (`Col1`, `Col2`, `Col3`, CONSTRAINT`NamedPk`PRIMARY KEY(`Col3`,`Col2`))")) {
+            LibsqlDatabaseMetaData metadata =
+                    new LibsqlDatabaseMetaData(new PrimaryKeysConnection(createSql));
+
+            try (ResultSet rs = metadata.getPrimaryKeys(null, null, "pk")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("PK_NAME"))
+                        .as(createSql)
+                        .isEqualTo("NamedPk");
+            }
+        }
+    }
+
+    @Test
     void getTypeInfoReturnsTheXerialTypeTable() throws SQLException {
         LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new RecordingConnection(emptyResult()));
 
@@ -525,14 +604,6 @@ class LibsqlDatabaseMetaDataTest {
         LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new RecordingConnection(emptyResult()));
 
         List<UnsupportedCall> calls = List.of(
-                new UnsupportedCall("getProcedures", () -> metadata.getProcedures(null, null, null)),
-                new UnsupportedCall("getProcedureColumns", () -> metadata.getProcedureColumns(null, null, null, null)),
-                new UnsupportedCall("getColumnPrivileges", () -> metadata.getColumnPrivileges(null, null, null, null)),
-                new UnsupportedCall("getTablePrivileges", () -> metadata.getTablePrivileges(null, null, null)),
-                new UnsupportedCall("getBestRowIdentifier", () -> metadata.getBestRowIdentifier(
-                        null, null, null, DatabaseMetaData.bestRowSession, false)),
-                new UnsupportedCall("getVersionColumns", () -> metadata.getVersionColumns(null, null, null)),
-                new UnsupportedCall("getUDTs", () -> metadata.getUDTs(null, null, null, null)),
                 new UnsupportedCall("getSuperTypes", () -> metadata.getSuperTypes(null, null, null)),
                 new UnsupportedCall("getSuperTables", () -> metadata.getSuperTables(null, null, null)),
                 new UnsupportedCall("getAttributes", () -> metadata.getAttributes(null, null, null, null)),
@@ -546,6 +617,115 @@ class LibsqlDatabaseMetaDataTest {
                     .as(call.name())
                     .isInstanceOf(SQLFeatureNotSupportedException.class);
         }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("emptyMetadataShapes")
+    void metadataMethodsWithoutSqliteSupportReturnJavaSqlShapedEmptyResultSets(
+            String method, List<String> columns, MetadataCall call) throws SQLException {
+        LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new RecordingConnection(emptyResult()));
+
+        try (ResultSet resultSet = call.execute(metadata)) {
+            assertThat(resultSet.next())
+                    .as("%s must return an empty result set", method)
+                    .isFalse();
+            assertThat(columnNames(resultSet))
+                    .as("%s must return the java.sql column list", method)
+                    .containsExactlyElementsOf(columns);
+        }
+    }
+
+    static Stream<Arguments> emptyMetadataShapes() {
+        return Stream.of(
+                arguments(
+                        "getProcedures",
+                        List.of(
+                                "PROCEDURE_CAT",
+                                "PROCEDURE_SCHEM",
+                                "PROCEDURE_NAME",
+                                "UNDEF1",
+                                "UNDEF2",
+                                "UNDEF3",
+                                "REMARKS",
+                                "PROCEDURE_TYPE"),
+                        (MetadataCall) m -> m.getProcedures(null, null, null)),
+                arguments(
+                        "getProcedureColumns",
+                        List.of(
+                                "PROCEDURE_CAT",
+                                "PROCEDURE_SCHEM",
+                                "PROCEDURE_NAME",
+                                "COLUMN_NAME",
+                                "COLUMN_TYPE",
+                                "DATA_TYPE",
+                                "TYPE_NAME",
+                                "PRECISION",
+                                "LENGTH",
+                                "SCALE",
+                                "RADIX",
+                                "NULLABLE",
+                                "REMARKS"),
+                        (MetadataCall) m -> m.getProcedureColumns(null, null, null, null)),
+                arguments(
+                        "getColumnPrivileges",
+                        List.of(
+                                "TABLE_CAT",
+                                "TABLE_SCHEM",
+                                "TABLE_NAME",
+                                "COLUMN_NAME",
+                                "GRANTOR",
+                                "GRANTEE",
+                                "PRIVILEGE",
+                                "IS_GRANTABLE"),
+                        (MetadataCall) m -> m.getColumnPrivileges(null, null, null, null)),
+                arguments(
+                        "getTablePrivileges",
+                        List.of(
+                                "TABLE_CAT",
+                                "TABLE_SCHEM",
+                                "TABLE_NAME",
+                                "GRANTOR",
+                                "GRANTEE",
+                                "PRIVILEGE",
+                                "IS_GRANTABLE"),
+                        (MetadataCall) m -> m.getTablePrivileges(null, null, null)),
+                arguments(
+                        "getBestRowIdentifier",
+                        List.of(
+                                "SCOPE",
+                                "COLUMN_NAME",
+                                "DATA_TYPE",
+                                "TYPE_NAME",
+                                "COLUMN_SIZE",
+                                "BUFFER_LENGTH",
+                                "DECIMAL_DIGITS",
+                                "PSEUDO_COLUMN"),
+                        (MetadataCall)
+                                m -> m.getBestRowIdentifier(
+                                        null, null, null, DatabaseMetaData.bestRowSession, false)),
+                arguments(
+                        "getVersionColumns",
+                        List.of(
+                                "SCOPE",
+                                "COLUMN_NAME",
+                                "DATA_TYPE",
+                                "TYPE_NAME",
+                                "COLUMN_SIZE",
+                                "BUFFER_LENGTH",
+                                "DECIMAL_DIGITS",
+                                "PSEUDO_COLUMN"),
+                        (MetadataCall) m -> m.getVersionColumns(null, null, null)),
+                arguments(
+                        "getUDTs",
+                        List.of(
+                                "TYPE_CAT",
+                                "TYPE_SCHEM",
+                                "TYPE_NAME",
+                                "CLASS_NAME",
+                                "DATA_TYPE",
+                                "REMARKS",
+                                "BASE_TYPE"),
+                        (MetadataCall) m -> m.getUDTs(null, null, null, null)));
     }
 
     private record UnsupportedCall(String name, org.assertj.core.api.ThrowableAssert.ThrowingCallable call) {}
@@ -669,6 +849,32 @@ class LibsqlDatabaseMetaDataTest {
                             new Col("KEY_SEQ", "INTEGER"),
                             new Col("CREATE_SQL", "TEXT")),
                     List.of(new Row(List.of(Value.of("id"), Value.of(1), Value.of(createSql)))),
+                    0,
+                    null);
+        }
+    }
+
+    private static final class CompositePrimaryKeysConnection extends LibsqlConnection {
+        private CompositePrimaryKeysConnection() {
+            super(null, null);
+        }
+
+        @Override
+        public StmtResult executeStatement(Stmt stmt) {
+            return new StmtResult(
+                    List.of(
+                            new Col("COLUMN_NAME", "TEXT"),
+                            new Col("KEY_SEQ", "INTEGER"),
+                            new Col("CREATE_SQL", "TEXT")),
+                    List.of(
+                            new Row(List.of(
+                                    Value.of("col3"),
+                                    Value.of(1),
+                                    Value.of("CREATE TABLE pk (col1, col2, col3, col4, PRIMARY KEY (col3, col2))"))),
+                            new Row(List.of(
+                                    Value.of("col2"),
+                                    Value.of(2),
+                                    Value.of("CREATE TABLE pk (col1, col2, col3, col4, PRIMARY KEY (col3, col2))")))),
                     0,
                     null);
         }
