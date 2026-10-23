@@ -1012,7 +1012,7 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     @Override public boolean insertsAreDetected(int type) throws SQLException { return false; }
     @Override public boolean supportsBatchUpdates() throws SQLException { return true; }
     @Override public ResultSet getUDTs(String catalog, String schemaPattern, String typeNamePattern, int[] types) throws SQLException { return metadataResult(UDTS_RESULT); }
-    @Override public boolean supportsSavepoints() throws SQLException { return false; }
+    @Override public boolean supportsSavepoints() throws SQLException { return true; }
     @Override public boolean supportsNamedParameters() throws SQLException { return false; }
     @Override public boolean supportsMultipleOpenResults() throws SQLException { return false; }
     @Override public boolean supportsGetGeneratedKeys() throws SQLException { return true; }

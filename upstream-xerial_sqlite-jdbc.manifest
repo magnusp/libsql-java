@@ -30,6 +30,7 @@
 # selected: src/test/java/org/sqlite/DBMetaDataTest.java -- DatabaseMetaData tables, columns, keys, type info, and java.sql-shaped empty result sets.
 # selected: src/test/java/org/sqlite/StatementTest.java -- Statement lifecycle, conversions, batches, and execute transitions over ordinary SQL.
 # selected: src/test/java/org/sqlite/PrepStmtTest.java -- PreparedStatement binding, metadata, batches, and value round trips.
+# selected: src/test/java/org/sqlite/SavepointTest.java -- savepoint creation, rollback, and release over ordinary SQL.
 
 # Rejected tests.
 # Rejection categories. Every rejected line carries one bracketed
@@ -78,7 +79,6 @@
 # rejected: src/test/java/org/sqlite/ProgressHandlerTest.java -- [permanent: native-extension-api] registers native progress callbacks that Hrana does not expose.
 # rejected: src/test/java/org/sqlite/QueryTest.java -- [permanent: sqlite-jdbc-configuration-surface] imports sqlite-jdbc's SQLiteConfig and FastDateFormat classes and drives query timeouts; the conversion getters it exercises are covered by selected ResultSetTest cases.
 # rejected: src/test/java/org/sqlite/ReadUncommittedTest.java -- [permanent: remote-model-semantics] depends on sqlite-jdbc shared-cache and read-uncommitted connection configuration; sqld does not expose it.
-# rejected: src/test/java/org/sqlite/SavepointTest.java -- [addressable: savepoints] savepoints are not yet implemented by the libSQL driver, but SQLite SAVEPOINT, RELEASE, and ROLLBACK TO over Hrana makes them implementable as ordinary SQL without a native API; reversing this is bounded driver work (see #173).
 # rejected: src/test/java/org/sqlite/SerializeTest.java -- [permanent: native-extension-api] serializes and restores a native database image; Hrana has no equivalent.
 # rejected: src/test/java/org/sqlite/SQLiteConfigTest.java -- [permanent: sqlite-jdbc-configuration-surface] tests sqlite-jdbc's configuration object, not the JDBC API.
 # rejected: src/test/java/org/sqlite/SQLiteConnectionPoolDataSourceTest.java -- [permanent: sqlite-jdbc-configuration-surface] tests sqlite-jdbc DataSource and pooling classes that libSQL does not provide.
@@ -110,6 +110,9 @@ src/test/java/org/sqlite/RSMetaDataTest.java
 src/test/java/org/sqlite/DBMetaDataTest.java
 src/test/java/org/sqlite/StatementTest.java
 src/test/java/org/sqlite/PrepStmtTest.java
+
+# Fourth batch: savepoints.
+src/test/java/org/sqlite/SavepointTest.java
 
 LICENSE
 LICENSE.zentus
