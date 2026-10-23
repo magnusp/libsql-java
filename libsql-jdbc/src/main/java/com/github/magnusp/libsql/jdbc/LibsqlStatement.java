@@ -6,6 +6,7 @@ import com.github.magnusp.libsql.hrana.codec.Stmt;
 import com.github.magnusp.libsql.hrana.codec.StmtResult;
 import com.github.magnusp.libsql.hrana.codec.Value;
 
+import java.sql.BatchUpdateException;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -533,7 +534,9 @@ public class LibsqlStatement implements Statement {
      * Executes the batch and reports one update count per step. The generated keys and the update
      * count are rebuilt from the step results, so neither can leak from an earlier execution. The
      * update count is the total affected rows across the batch; JDBC leaves {@code getUpdateCount}
-     * unspecified after a batch, and xerial leaves the previous value in place.
+     * unspecified after a batch, and xerial leaves the previous value in place. A step that returns
+     * a result set throws {@link BatchUpdateException} with the counts of the steps up to and
+     * including it, per {@code java.sql}.
      */
     @Override
     public int[] executeBatch() throws SQLException {
@@ -545,8 +548,14 @@ public class LibsqlStatement implements Statement {
             int[] updateCounts = new int[results.size()];
             long affectedRows = 0;
             for (int i = 0; i < results.size(); i++) {
-                updateCounts[i] = (int) results.get(i).affectedRowCount();
-                affectedRows += results.get(i).affectedRowCount();
+                StmtResult result = results.get(i);
+                if (result.cols() != null && !result.cols().isEmpty()) {
+                    throw new BatchUpdateException(
+                            "batch entry " + i + ": query returns results",
+                            java.util.Arrays.copyOf(updateCounts, i + 1));
+                }
+                updateCounts[i] = (int) result.affectedRowCount();
+                affectedRows += result.affectedRowCount();
             }
             synchronized (stateLock) {
                 updateBatchGeneratedKeys(statements, results);
@@ -641,7 +650,18 @@ public class LibsqlStatement implements Statement {
     public void setCursorName(String name) throws SQLException {
         throw new SQLFeatureNotSupportedException("Cursor names are not supported");
     }
-    @Override public void setFetchDirection(int direction) throws SQLException {}
+    @Override
+    public void setFetchDirection(int direction) throws SQLException {
+        if (direction != ResultSet.FETCH_FORWARD
+                && direction != ResultSet.FETCH_REVERSE
+                && direction != ResultSet.FETCH_UNKNOWN) {
+            throw new SQLException(
+                    "Unknown fetch direction "
+                            + direction
+                            + ". Must be one of FETCH_FORWARD, FETCH_REVERSE, or FETCH_UNKNOWN");
+        }
+    }
+
     @Override public int getFetchDirection() throws SQLException { return ResultSet.FETCH_FORWARD; }
     @Override
     public void setFetchSize(int rows) throws SQLException {

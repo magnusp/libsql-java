@@ -870,7 +870,15 @@ public class LibsqlResultSet implements ResultSet {
     @Override public boolean absolute(int row) throws SQLException { throw new SQLException("Forward only"); }
     @Override public boolean relative(int rows) throws SQLException { throw new SQLException("Forward only"); }
     @Override public boolean previous() throws SQLException { throw new SQLException("Forward only"); }
-    @Override public void setFetchDirection(int direction) throws SQLException {}
+    @Override
+    public void setFetchDirection(int direction) throws SQLException {
+        if (direction != FETCH_FORWARD && direction != FETCH_REVERSE && direction != FETCH_UNKNOWN) {
+            throw new SQLException(
+                    "Unknown fetch direction "
+                            + direction
+                            + ". Must be one of FETCH_FORWARD, FETCH_REVERSE, or FETCH_UNKNOWN");
+        }
+    }
     @Override public int getFetchDirection() throws SQLException { return FETCH_FORWARD; }
     @Override
     public void setFetchSize(int rows) throws SQLException {
@@ -1170,7 +1178,8 @@ public class LibsqlResultSet implements ResultSet {
             case Value.Integer i -> epochMillisToLocalDateTime(i.value(), targetType);
             case Value.Float f ->
                     epochMillisToLocalDateTime(julianDayToEpochMillis(f.value()), targetType);
-            case Value.Text t -> parseSqliteDateTime(t.value(), targetType);
+            case Value.Text t ->
+                    t.value().isBlank() ? null : parseSqliteDateTime(t.value(), targetType);
             case Value.Blob b -> throw new SQLException("Bad value for type " + targetType);
         };
     }

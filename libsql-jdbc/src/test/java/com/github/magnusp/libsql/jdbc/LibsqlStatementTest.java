@@ -7,6 +7,7 @@ import com.github.magnusp.libsql.hrana.codec.StmtResult;
 import com.github.magnusp.libsql.hrana.codec.Value;
 import org.junit.jupiter.api.Test;
 
+import java.sql.BatchUpdateException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
@@ -141,19 +142,69 @@ class LibsqlStatementTest {
                 .hasMessage("Cursor names are not supported");
     }
 
+    @Test
+    void setFetchDirectionAcceptsTheJdbcDirections() throws SQLException {
+        LibsqlStatement statement = new LibsqlStatement(new RecordingConnection(THREE_ROWS));
+
+        statement.setFetchDirection(ResultSet.FETCH_FORWARD);
+        statement.setFetchDirection(ResultSet.FETCH_REVERSE);
+        statement.setFetchDirection(ResultSet.FETCH_UNKNOWN);
+    }
+
+    @Test
+    void setFetchDirectionRejectsAnUnknownDirection() {
+        LibsqlStatement statement = new LibsqlStatement(new RecordingConnection(THREE_ROWS));
+
+        assertThatThrownBy(() -> statement.setFetchDirection(999))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("999");
+    }
+
+    @Test
+    void batchThatReturnsResultsThrowsBatchUpdateException() throws SQLException {
+        StmtResult select = new StmtResult(
+                List.of(new Col("value", null)),
+                List.of(new Row(List.of(Value.ofNull()))),
+                0,
+                null);
+        StmtResult insert = new StmtResult(List.of(), List.of(), 1, 1L);
+        LibsqlStatement statement =
+                new LibsqlStatement(new RecordingConnection(THREE_ROWS, List.of(insert, select)));
+
+        statement.addBatch("insert into t(value) values (1)");
+        statement.addBatch("select null");
+
+        assertThatThrownBy(statement::executeBatch)
+                .isInstanceOf(BatchUpdateException.class)
+                .hasMessageContaining("query returns results")
+                .satisfies(thrown -> assertThat(((BatchUpdateException) thrown).getUpdateCounts())
+                        .containsExactly(1, 0));
+    }
+
     private static final class RecordingConnection extends LibsqlConnection {
         private final StmtResult result;
+        private final List<StmtResult> batchResults;
         private final List<String> executedSql = new ArrayList<>();
 
         private RecordingConnection(StmtResult result) {
+            this(result, List.of());
+        }
+
+        private RecordingConnection(StmtResult result, List<StmtResult> batchResults) {
             super(null, null);
             this.result = result;
+            this.batchResults = batchResults;
         }
 
         @Override
         public StmtResult executeStatement(Stmt stmt) {
             executedSql.add(stmt.sql());
             return result;
+        }
+
+        @Override
+        public List<StmtResult> executeBatchResults(List<Stmt> statements) {
+            return batchResults;
         }
     }
 }
