@@ -188,7 +188,7 @@ public class LibsqlStatement implements Statement {
      * syntax instead of being translated. Turning escape processing off is how a caller states
      * that it sends raw SQL.
      */
-    private void checkEscapeProcessing(String sql) throws SQLException {
+    protected void checkEscapeProcessing(String sql) throws SQLException {
         boolean enabled;
         synchronized (stateLock) {
             enabled = escapeProcessing;
@@ -262,7 +262,7 @@ public class LibsqlStatement implements Statement {
      * dropped silently from the result set, not from the statement that produced it, so the server
      * still runs the full query.
      */
-    private StmtResult limitRows(StmtResult result) {
+    protected StmtResult limitRows(StmtResult result) {
         int limit;
         synchronized (stateLock) {
             limit = maxRows;
