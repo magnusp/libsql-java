@@ -210,6 +210,48 @@ class LibsqlConnectionTest {
     }
 
     @Test
+    void aFailedBeginPinsTheLazyBeginStateUntilTheRetrySucceeds() throws SQLException {
+        AtomicInteger begins = new AtomicInteger();
+        ScriptedClient client = new ScriptedClient((request, index) -> {
+            if ("BEGIN".equals(executedSql(request)) && begins.incrementAndGet() == 1) {
+                return errorResponse(new HranaError(SERVER_ERROR, "SQLITE_ERROR"));
+            }
+            return successResponse(request);
+        });
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.setAutoCommit(false);
+
+        assertThatThrownBy(() -> connection.executeStatement(new Stmt("SELECT 1")))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining(SERVER_ERROR);
+
+        assertThat(connection.getAutoCommit())
+                .as("the JDBC mode is unchanged by a failed begin")
+                .isFalse();
+        assertThat(client.requests.get(1).requests())
+                .as("the failed begin closes its stream, so no phantom transaction stays open")
+                .containsExactly(StreamRequest.Close.INSTANCE);
+
+        connection.commit();
+        connection.rollback();
+
+        assertThat(client.requests)
+                .as("commit and rollback with no work send nothing after a failed begin")
+                .hasSize(2);
+        assertThat(connection.getAutoCommit()).isFalse();
+
+        connection.executeStatement(new Stmt("SELECT 1"));
+
+        assertThat(client.executedStatements()).containsExactly("BEGIN", "BEGIN", "SELECT 1");
+        assertThat(client.requests.get(2).baton())
+                .as("the retry begins the transaction on a new stream")
+                .isNull();
+        assertThat(client.requests.get(3).baton())
+                .as("the statement runs on the stream the retried begin opened")
+                .isNotNull();
+    }
+
+    @Test
     void enablingAutoCommitAfterWorkCommitsAndClosesTheOpenTransaction() throws SQLException {
         ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
         LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
