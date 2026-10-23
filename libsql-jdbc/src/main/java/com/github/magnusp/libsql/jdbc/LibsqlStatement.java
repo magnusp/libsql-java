@@ -15,6 +15,7 @@ import java.sql.SQLWarning;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Statement over the Hrana transport.
@@ -79,6 +80,9 @@ public class LibsqlStatement implements Statement {
     private int fetchSize = 0;
     private int maxRows = 0;
     private boolean escapeProcessing = true;
+
+    private static final Set<String> STATEMENT_KEYWORDS =
+            Set.of("SELECT", "VALUES", "INSERT", "REPLACE", "UPDATE", "DELETE");
 
     public LibsqlStatement(LibsqlConnection connection) {
         this.connection = connection;
@@ -402,89 +406,20 @@ public class LibsqlStatement implements Statement {
     }
 
     private static boolean isInsertSql(String sql) {
-        int start = skipWhitespace(sql, 0);
-        if (keywordAt(sql, start, "INSERT") || keywordAt(sql, start, "REPLACE")) {
+        List<SqlTokenizer.Token> tokens = SqlTokenizer.tokenize(sql);
+        if (tokens == null) {
+            return false;
+        }
+        String first = SqlTokenizer.wordAt(tokens, 0, 0);
+        if ("INSERT".equals(first) || "REPLACE".equals(first)) {
             return true;
         }
-        if (!keywordAt(sql, start, "WITH")) {
+        if (!"WITH".equals(first)) {
             return false;
         }
-        int afterWith = start + "WITH".length();
-        if (afterWith >= sql.length() || !Character.isWhitespace(sql.charAt(afterWith))) {
-            return false;
-        }
-
-        int depth = 0;
-        int i = afterWith;
-        while (i < sql.length()) {
-            char c = sql.charAt(i);
-            if (c == '-' && i + 1 < sql.length() && sql.charAt(i + 1) == '-') {
-                i += 2;
-                while (i < sql.length() && sql.charAt(i) != '\n') {
-                    i++;
-                }
-            } else if (c == '/' && i + 1 < sql.length() && sql.charAt(i + 1) == '*') {
-                i += 2;
-                while (i + 1 < sql.length()
-                        && !(sql.charAt(i) == '*' && sql.charAt(i + 1) == '/')) {
-                    i++;
-                }
-                i = Math.min(sql.length(), i + 2);
-            } else if (c == '\'' || c == '"' || c == '`') {
-                i = skipQuoted(sql, i, c);
-            } else if (c == '[') {
-                i++;
-                while (i < sql.length() && sql.charAt(i) != ']') {
-                    i++;
-                }
-                if (i < sql.length()) {
-                    i++;
-                }
-            } else if (c == '(') {
-                depth++;
-                i++;
-            } else if (c == ')') {
-                depth = Math.max(0, depth - 1);
-                i++;
-                if (depth == 0) {
-                    int next = skipWhitespace(sql, i);
-                    if (keywordAt(sql, next, "INSERT") || keywordAt(sql, next, "REPLACE")) {
-                        return true;
-                    }
-                }
-            } else {
-                i++;
-            }
-        }
-        return false;
-    }
-
-    private static int skipWhitespace(String sql, int start) {
-        int i = start;
-        while (i < sql.length() && Character.isWhitespace(sql.charAt(i))) {
-            i++;
-        }
-        return i;
-    }
-
-    private static int skipQuoted(String sql, int start, char quote) {
-        int i = start + 1;
-        while (i < sql.length()) {
-            if (sql.charAt(i) == quote) {
-                if (i + 1 < sql.length() && sql.charAt(i + 1) == quote) {
-                    i += 2;
-                    continue;
-                }
-                return i + 1;
-            }
-            i++;
-        }
-        return sql.length();
-    }
-
-    private static boolean keywordAt(String sql, int index, String keyword) {
-        return index + keyword.length() <= sql.length()
-                && sql.regionMatches(true, index, keyword, 0, keyword.length());
+        int index = SqlTokenizer.indexOfAnyWord(tokens, 1, tokens.size(), 0, STATEMENT_KEYWORDS);
+        String statement = SqlTokenizer.wordAt(tokens, index, 0);
+        return "INSERT".equals(statement) || "REPLACE".equals(statement);
     }
 
     private ResultSet emptyGeneratedKeys() {

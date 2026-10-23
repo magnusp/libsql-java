@@ -31,7 +31,6 @@ import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * Prepared statement over the Hrana transport.
@@ -105,11 +104,18 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
     }
 
     private static boolean returnsResultSet(String sql) {
-        List<Token> tokens = tokenize(sql);
-        if (tokens.isEmpty()) {
+        if (sql == null) {
             return false;
         }
-        return switch (tokens.get(0).word()) {
+        List<SqlTokenizer.Token> tokens = SqlTokenizer.tokenize(sql);
+        if (tokens == null) {
+            return false;
+        }
+        String first = SqlTokenizer.wordAt(tokens, 0, 0);
+        if (first == null) {
+            return false;
+        }
+        return switch (first) {
             case "SELECT", "VALUES", "EXPLAIN" -> true;
             case "PRAGMA" -> pragmaReturnsResultSet(tokens);
             case "INSERT", "UPDATE", "DELETE", "REPLACE" -> hasTopLevelReturning(tokens, 1);
@@ -118,23 +124,22 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
         };
     }
 
-    private static boolean pragmaReturnsResultSet(List<Token> tokens) {
+    private static boolean pragmaReturnsResultSet(List<SqlTokenizer.Token> tokens) {
         for (int i = 1; i < tokens.size(); i++) {
-            Token token = tokens.get(i);
-            if (token.depth() == 0 && token.word().equals("=")) {
+            if (SqlTokenizer.isSymbolAt(tokens, i, "=", 0)) {
                 return false;
             }
         }
         return true;
     }
 
-    private static boolean withReturnsResultSet(List<Token> tokens) {
+    private static boolean withReturnsResultSet(List<SqlTokenizer.Token> tokens) {
         for (int i = 1; i < tokens.size(); i++) {
-            Token token = tokens.get(i);
-            if (token.depth() != 0) {
+            String word = SqlTokenizer.wordAt(tokens, i, 0);
+            if (word == null) {
                 continue;
             }
-            switch (token.word()) {
+            switch (word) {
                 case "SELECT", "VALUES" -> {
                     return true;
                 }
@@ -148,97 +153,14 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
         return false;
     }
 
-    private static boolean hasTopLevelReturning(List<Token> tokens, int from) {
+    private static boolean hasTopLevelReturning(List<SqlTokenizer.Token> tokens, int from) {
         for (int i = from; i < tokens.size(); i++) {
-            Token token = tokens.get(i);
-            if (token.depth() == 0 && token.word().equals("RETURNING")) {
+            if (SqlTokenizer.isWordAt(tokens, i, 0, "RETURNING")) {
                 return true;
             }
         }
         return false;
     }
-
-    private static List<Token> tokenize(String sql) {
-        List<Token> tokens = new ArrayList<>();
-        if (sql == null) {
-            return tokens;
-        }
-        int depth = 0;
-        int i = 0;
-        int n = sql.length();
-        while (i < n) {
-            char c = sql.charAt(i);
-            if (Character.isWhitespace(c)) {
-                i++;
-            } else if (c == '-' && i + 1 < n && sql.charAt(i + 1) == '-') {
-                i += 2;
-                while (i < n && sql.charAt(i) != '\n') {
-                    i++;
-                }
-            } else if (c == '/' && i + 1 < n && sql.charAt(i + 1) == '*') {
-                i += 2;
-                while (i + 1 < n && !(sql.charAt(i) == '*' && sql.charAt(i + 1) == '/')) {
-                    i++;
-                }
-                i = Math.min(n, i + 2);
-            } else if (c == '\'' || c == '"' || c == '`') {
-                i = skipQuoted(sql, i, c);
-            } else if (c == '[') {
-                i++;
-                while (i < n && sql.charAt(i) != ']') {
-                    i++;
-                }
-                if (i < n) {
-                    i++;
-                }
-            } else if (c == '(') {
-                depth++;
-                i++;
-            } else if (c == ')') {
-                depth = Math.max(0, depth - 1);
-                i++;
-            } else if (c == '=') {
-                tokens.add(new Token("=", depth));
-                i++;
-            } else if (isWordStart(c)) {
-                int start = i;
-                i++;
-                while (i < n && isWordPart(sql.charAt(i))) {
-                    i++;
-                }
-                tokens.add(new Token(sql.substring(start, i).toUpperCase(Locale.ROOT), depth));
-            } else {
-                i++;
-            }
-        }
-        return tokens;
-    }
-
-    private static int skipQuoted(String sql, int start, char quote) {
-        int i = start + 1;
-        int n = sql.length();
-        while (i < n) {
-            if (sql.charAt(i) == quote) {
-                if (i + 1 < n && sql.charAt(i + 1) == quote) {
-                    i += 2;
-                    continue;
-                }
-                return i + 1;
-            }
-            i++;
-        }
-        return n;
-    }
-
-    private static boolean isWordStart(char c) {
-        return Character.isLetter(c) || c == '_';
-    }
-
-    private static boolean isWordPart(char c) {
-        return Character.isLetterOrDigit(c) || c == '_' || c == '$';
-    }
-
-    private record Token(String word, int depth) {}
 
     @Override
     public boolean execute() throws SQLException {
