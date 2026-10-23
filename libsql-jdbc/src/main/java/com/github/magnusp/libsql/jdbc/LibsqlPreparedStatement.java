@@ -72,7 +72,7 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
         if (result.cols() == null || result.cols().isEmpty()) {
             throw new SQLException("Query does not return results");
         }
-        LibsqlResultSet resultSet = new LibsqlResultSet(this, result, sql, false);
+        LibsqlResultSet resultSet = new LibsqlResultSet(this, limitRows(result), sql, false);
         assignResultSet(resultSet, result, sql, true);
         return resultSet;
     }
@@ -229,6 +229,7 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
     }
 
     private StmtResult executeCurrent() throws SQLException {
+        checkEscapeProcessing(sql);
         checkClosed();
         beginExecution();
         return connection.executeStatement(buildCurrentStmt());

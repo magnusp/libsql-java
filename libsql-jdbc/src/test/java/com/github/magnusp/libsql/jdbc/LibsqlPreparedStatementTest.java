@@ -9,6 +9,8 @@ import org.junit.jupiter.api.Test;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -23,6 +25,15 @@ class LibsqlPreparedStatementTest {
             null);
 
     private static final StmtResult NO_ROWS = new StmtResult(List.of(), List.of(), 1, 1L);
+
+    private static final StmtResult THREE_ROWS = new StmtResult(
+            List.of(new Col("id", "INTEGER")),
+            List.of(
+                    new Row(List.of(Value.of(1L))),
+                    new Row(List.of(Value.of(2L))),
+                    new Row(List.of(Value.of(3L)))),
+            0,
+            null);
 
     @Test
     void executeQueryOnInsertThrowsWithoutExecuting() throws SQLException {
@@ -102,8 +113,44 @@ class LibsqlPreparedStatementTest {
         assertThat(connection.executeCalls).isZero();
     }
 
+    @Test
+    void setMaxRowsLimitsPreparedQueryAndGetMaxRowsReadsItBack() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(THREE_ROWS);
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "select id from t")) {
+            statement.setMaxRows(2);
+
+            assertThat(statement.getMaxRows()).isEqualTo(2);
+            ResultSet resultSet = statement.executeQuery();
+            assertThat(resultSet.next()).isTrue();
+            assertThat(resultSet.getLong(1)).isEqualTo(1L);
+            assertThat(resultSet.next()).isTrue();
+            assertThat(resultSet.getLong(1)).isEqualTo(2L);
+            assertThat(resultSet.next()).isFalse();
+        }
+    }
+
+    @Test
+    void escapeProcessingAppliesToPreparedSql() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(THREE_ROWS);
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "select {fn abs(-1)} from t")) {
+            assertThatThrownBy(statement::executeQuery)
+                    .isInstanceOf(SQLFeatureNotSupportedException.class)
+                    .hasMessage("JDBC escape sequences are not supported");
+            assertThat(connection.executeCalls).isZero();
+
+            statement.setEscapeProcessing(false);
+            statement.executeQuery();
+
+            assertThat(connection.executedSql)
+                    .containsExactly("select {fn abs(-1)} from t");
+        }
+    }
+
     private static final class RecordingConnection extends LibsqlConnection {
         private final StmtResult result;
+        private final List<String> executedSql = new ArrayList<>();
         private int executeCalls;
 
         private RecordingConnection(StmtResult result) {
@@ -114,6 +161,7 @@ class LibsqlPreparedStatementTest {
         @Override
         public StmtResult executeStatement(Stmt stmt) {
             executeCalls++;
+            executedSql.add(stmt.sql());
             return result;
         }
     }
