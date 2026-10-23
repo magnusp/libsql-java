@@ -119,6 +119,110 @@ class LibsqlPreparedStatementTest {
     }
 
     @Test
+    void withInsertReturningIsAQuery() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(ROWS);
+        try (LibsqlPreparedStatement statement = new LibsqlPreparedStatement(
+                connection,
+                "with cte as (select 1 as v) insert into t (v) select v from cte returning id")) {
+            ResultSet resultSet = statement.executeQuery();
+
+            assertThat(resultSet.next()).isTrue();
+        }
+
+        assertThat(connection.executeCalls).isEqualTo(1);
+    }
+
+    @Test
+    void withInsertWithoutReturningIsAnUpdate() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        try (LibsqlPreparedStatement statement = new LibsqlPreparedStatement(
+                connection, "with cte as (select 1 as v) insert into t (v) select v from cte")) {
+            assertThat(statement.executeUpdate()).isEqualTo(1);
+        }
+
+        assertThat(connection.executeCalls).isEqualTo(1);
+    }
+
+    @Test
+    void pragmaWithoutAssignmentIsAQuery() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(ROWS);
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "pragma table_info('t')")) {
+            assertThatThrownBy(statement::executeUpdate)
+                    .isInstanceOf(SQLException.class)
+                    .hasMessage("Query returns results");
+
+            ResultSet resultSet = statement.executeQuery();
+            assertThat(resultSet.next()).isTrue();
+        }
+
+        assertThat(connection.executeCalls).isEqualTo(1);
+    }
+
+    @Test
+    void pragmaAssignmentIsAnUpdate() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "pragma journal_mode = wal")) {
+            assertThatThrownBy(statement::executeQuery)
+                    .isInstanceOf(SQLException.class)
+                    .hasMessage("Query does not return results");
+
+            assertThat(statement.executeUpdate()).isEqualTo(1);
+        }
+
+        assertThat(connection.executeCalls).isEqualTo(1);
+    }
+
+    @Test
+    void lineCommentBeforeSelectKeepsTheQueryKind() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(ROWS);
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "-- insert\nselect id from t")) {
+            ResultSet resultSet = statement.executeQuery();
+
+            assertThat(resultSet.next()).isTrue();
+        }
+
+        assertThat(connection.executeCalls).isEqualTo(1);
+    }
+
+    @Test
+    void blockCommentBeforeUpdateKeepsTheUpdateKind() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "/* select */ update t set a = 1")) {
+            assertThat(statement.executeUpdate()).isEqualTo(1);
+        }
+
+        assertThat(connection.executeCalls).isEqualTo(1);
+    }
+
+    @Test
+    void quotedIdentifierNamedLikeAKeywordDoesNotDecideTheStatementKind() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(ROWS);
+        try (LibsqlPreparedStatement statement = new LibsqlPreparedStatement(
+                connection, "with \"update\" as (select id from t) select id from \"update\"")) {
+            ResultSet resultSet = statement.executeQuery();
+
+            assertThat(resultSet.next()).isTrue();
+        }
+
+        assertThat(connection.executeCalls).isEqualTo(1);
+    }
+
+    @Test
+    void malformedSqlIsTreatedAsAnUpdate() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "select (1")) {
+            assertThat(statement.executeUpdate()).isEqualTo(1);
+        }
+
+        assertThat(connection.executeCalls).isEqualTo(1);
+    }
+
+    @Test
     void setMaxRowsLimitsPreparedQueryAndGetMaxRowsReadsItBack() throws SQLException {
         RecordingConnection connection = new RecordingConnection(THREE_ROWS);
         try (LibsqlPreparedStatement statement =

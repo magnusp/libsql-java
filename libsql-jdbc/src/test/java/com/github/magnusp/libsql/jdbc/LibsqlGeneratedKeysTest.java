@@ -51,6 +51,107 @@ class LibsqlGeneratedKeysTest {
     }
 
     @Test
+    void insertOrReplaceReturnsGeneratedKey() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(insertResult(8L));
+
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("insert or replace into k (id, v) values (8, 'a')");
+
+            try (ResultSet keys = statement.getGeneratedKeys()) {
+                assertThat(keys.next()).isTrue();
+                assertThat(keys.getLong(1)).isEqualTo(8L);
+            }
+        }
+    }
+
+    @Test
+    void commentsAroundInsertLeaveTheKeyDetectionIntact() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(insertResult(4L));
+
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("/* seed */ insert into k (v) values ('a')");
+            try (ResultSet keys = statement.getGeneratedKeys()) {
+                assertThat(keys.next()).isTrue();
+                assertThat(keys.getLong(1)).isEqualTo(4L);
+            }
+
+            statement.executeUpdate("-- seed\ninsert into k (v) values ('b')");
+            try (ResultSet keys = statement.getGeneratedKeys()) {
+                assertThat(keys.next()).isTrue();
+                assertThat(keys.getLong(1)).isEqualTo(4L);
+            }
+        }
+    }
+
+    @Test
+    void commentBetweenCteAndInsertLeavesTheKeyDetectionIntact() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(insertResult(12L));
+
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("with cte as (select lower('--') as v)"
+                    + " /* insert */ insert into k (v) select v from cte");
+
+            try (ResultSet keys = statement.getGeneratedKeys()) {
+                assertThat(keys.next()).isTrue();
+                assertThat(keys.getLong(1)).isEqualTo(12L);
+            }
+        }
+    }
+
+    @Test
+    void quotedIdentifierNamedInsertDoesNotCreateGeneratedKeys() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(insertResult(21L));
+
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("with \"insert\" as (select 1) select * from \"insert\"");
+
+            try (ResultSet keys = statement.getGeneratedKeys()) {
+                assertThat(keys.next()).isFalse();
+            }
+        }
+    }
+
+    @Test
+    void cteUpdateDoesNotCreateGeneratedKeys() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(insertResult(22L));
+
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("with cte as (select 1) update k set v = 'a'");
+
+            try (ResultSet keys = statement.getGeneratedKeys()) {
+                assertThat(keys.next()).isFalse();
+            }
+        }
+    }
+
+    @Test
+    void quotedTableNameStillReportsTheInsertKey() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(insertResult(23L));
+
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("insert into [k] (v) values ('a')");
+
+            try (ResultSet keys = statement.getGeneratedKeys()) {
+                assertThat(keys.next()).isTrue();
+                assertThat(keys.getLong(1)).isEqualTo(23L);
+            }
+        }
+    }
+
+    @Test
+    void unbalancedSqlLeavesNoGeneratedKeys() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(insertResult(24L));
+
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("insert into k (v values ('a')");
+
+            try (ResultSet keys = statement.getGeneratedKeys()) {
+                assertThat(keys.next()).isFalse();
+            }
+        }
+    }
+
+    @Test
     void statementReplaceReturnsGeneratedKey() throws SQLException {
         RecordingConnection connection = new RecordingConnection(insertResult(7L));
 
