@@ -180,7 +180,27 @@ public class LibsqlStatement implements Statement {
     private StmtResult executeSql(String sql) throws SQLException {
         checkEscapeProcessing(sql);
         beginExecution();
-        return connection.executeStatement(new Stmt(sql));
+        return connection.executeStatement(statement(sql));
+    }
+
+    /**
+     * Builds a statement with SQL NULL for every placeholder a plain {@code Statement} leaves
+     * unbound, matching SQLite, where an unset parameter reads as NULL. Hrana rejects an argument
+     * list shorter than the SQL placeholders, so the nulls must be sent explicitly.
+     */
+    static Stmt statement(String sql) {
+        if (sql == null || sql.indexOf('?') < 0) {
+            return new Stmt(sql);
+        }
+        int placeholders = SqlTokenizer.placeholderCount(sql);
+        if (placeholders == 0) {
+            return new Stmt(sql);
+        }
+        List<Value> args = new ArrayList<>(placeholders);
+        for (int i = 0; i < placeholders; i++) {
+            args.add(Value.ofNull());
+        }
+        return new Stmt(sql, args);
     }
 
     /**
@@ -521,7 +541,7 @@ public class LibsqlStatement implements Statement {
     public void addBatch(String sql) throws SQLException {
         checkClosed();
         checkEscapeProcessing(sql);
-        batchStatements.add(new Stmt(sql));
+        batchStatements.add(statement(sql));
     }
 
     @Override

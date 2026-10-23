@@ -147,6 +147,20 @@ final class SqlTokenizer {
         return tokens;
     }
 
+    static int placeholderCount(String sql) {
+        List<Token> tokens = tokenize(sql);
+        if (tokens == null) {
+            return 0;
+        }
+        int count = 0;
+        for (Token token : tokens) {
+            if (token.isSymbol("?")) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     static boolean isWordAt(List<Token> tokens, int index, int depth, String word) {
         if (index < 0 || index >= tokens.size()) {
             return false;
