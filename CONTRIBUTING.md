@@ -39,6 +39,7 @@ The repository is organized as a multi-module Maven project:
 - **`libsql-client`**: High-level reactive / asynchronous libSQL client.
 - **`libsql-jdbc`**: Standard JDBC 4.3 compliant driver implementation (`jdbc:libsql:...`).
 - **`libsql-itests`**: End-to-end integration tests using Testcontainers and sqld.
+- **`libsql-conformance`**: Selected xerial/sqlite-jdbc tests running against libSQL.
 
 ## Code Style & Quality
 
