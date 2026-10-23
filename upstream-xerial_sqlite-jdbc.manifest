@@ -30,6 +30,7 @@
 # selected: src/test/java/org/sqlite/DBMetaDataTest.java -- DatabaseMetaData tables, columns, keys, type info, and java.sql-shaped empty result sets.
 # selected: src/test/java/org/sqlite/StatementTest.java -- Statement lifecycle, conversions, batches, and execute transitions over ordinary SQL.
 # selected: src/test/java/org/sqlite/PrepStmtTest.java -- PreparedStatement binding, metadata, batches, and value round trips.
+# selected: src/test/java/org/sqlite/SavepointTest.java -- savepoint creation, rollback, and release over ordinary SQL.
 
 # Rejected tests.
 # rejected: src/test/java/org/sqlite/BackupTest.java -- drives sqlite-jdbc's native backup API; Hrana exposes no backup primitive.
@@ -46,7 +47,6 @@
 # rejected: src/test/java/org/sqlite/ProgressHandlerTest.java -- registers native progress callbacks that Hrana does not expose.
 # rejected: src/test/java/org/sqlite/QueryTest.java -- imports sqlite-jdbc's SQLiteConfig and FastDateFormat classes and drives query timeouts; the conversion getters it exercises are covered by selected ResultSetTest cases.
 # rejected: src/test/java/org/sqlite/ReadUncommittedTest.java -- depends on sqlite-jdbc shared-cache and read-uncommitted connection configuration; sqld does not expose it.
-# rejected: src/test/java/org/sqlite/SavepointTest.java -- savepoints are not implemented by the libSQL driver.
 # rejected: src/test/java/org/sqlite/SerializeTest.java -- serializes and restores a native database image; Hrana has no equivalent.
 # rejected: src/test/java/org/sqlite/SQLiteConfigTest.java -- tests sqlite-jdbc's configuration object, not the JDBC API.
 # rejected: src/test/java/org/sqlite/SQLiteConnectionPoolDataSourceTest.java -- tests sqlite-jdbc DataSource and pooling classes that libSQL does not provide.
@@ -78,6 +78,9 @@ src/test/java/org/sqlite/RSMetaDataTest.java
 src/test/java/org/sqlite/DBMetaDataTest.java
 src/test/java/org/sqlite/StatementTest.java
 src/test/java/org/sqlite/PrepStmtTest.java
+
+# Fourth batch: savepoints.
+src/test/java/org/sqlite/SavepointTest.java
 
 LICENSE
 LICENSE.zentus
