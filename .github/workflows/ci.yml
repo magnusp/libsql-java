@@ -29,6 +29,11 @@ jobs:
       - name: Verify vendored upstream integrity
         run: ./tools/export-upstream --verify
 
+      - name: Verify vendored upstream hashes against the pinned commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./tools/export-upstream --verify-pinned
+
       - name: Self-check vendoring enforcement
         run: ./tools/export-upstream --self-test
 
