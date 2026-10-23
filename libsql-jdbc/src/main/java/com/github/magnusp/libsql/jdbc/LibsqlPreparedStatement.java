@@ -231,7 +231,6 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
     private StmtResult executeCurrent() throws SQLException {
         checkClosed();
         beginExecution();
-        checkClosed();
         return connection.executeStatement(buildCurrentStmt());
     }
 
