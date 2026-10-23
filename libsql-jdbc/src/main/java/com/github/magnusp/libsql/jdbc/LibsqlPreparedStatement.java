@@ -50,7 +50,7 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
     private final String sql;
     private final boolean returnsResultSet;
     private final int parameterCount;
-    // Mitigation for Bug 7: Sequential ArrayList instead of Map to eliminate Integer autoboxing overhead
+    // Sequential list indexed by JDBC parameter position; no map or boxing overhead.
     private final List<Value> parameters = new ArrayList<>();
 
     public LibsqlPreparedStatement(LibsqlConnection connection, String sql) {

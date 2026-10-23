@@ -39,7 +39,7 @@ public class LibsqlHttpClientIT extends SqldContainerBase {
 
     @Test
     void testAutocommitWriteBurstDoesNotStall() {
-        // Verifies mitigation for Bug 1: 128-stream 10-second stall
+        // One-shot close must keep a write burst from exhausting the server stream pool.
         LibsqlClientConfig config = new LibsqlClientConfig(getHttpUrl(), null);
         LibsqlHttpClient client = new LibsqlHttpClient(config);
 
@@ -63,7 +63,7 @@ public class LibsqlHttpClientIT extends SqldContainerBase {
         LibsqlClientConfig config = new LibsqlClientConfig(getHttpUrl(), null);
         LibsqlHttpClient client = new LibsqlHttpClient(config);
 
-        // 1. BEGIN IMMEDIATE (prevents Bug 2 lock upgrade deadlocks)
+        // 1. BEGIN IMMEDIATE takes the write lock at begin, avoiding the deferred upgrade.
         PipelineReqBody beginReq = new PipelineReqBody(null, List.of(new StreamRequest.Execute(new Stmt("BEGIN IMMEDIATE"))));
         PipelineRespBody beginResp = client.sendPipeline(beginReq, null);
 
