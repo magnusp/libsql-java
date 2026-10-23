@@ -4,7 +4,9 @@ import com.github.magnusp.libsql.client.LibsqlClientConfig;
 import com.github.magnusp.libsql.client.LibsqlException;
 import com.github.magnusp.libsql.client.LibsqlHttpClient;
 import com.github.magnusp.libsql.hrana.codec.Batch;
+import com.github.magnusp.libsql.hrana.codec.BatchCond;
 import com.github.magnusp.libsql.hrana.codec.BatchStep;
+import com.github.magnusp.libsql.hrana.codec.HranaError;
 import com.github.magnusp.libsql.hrana.codec.PipelineReqBody;
 import com.github.magnusp.libsql.hrana.codec.PipelineRespBody;
 import com.github.magnusp.libsql.hrana.codec.Stmt;
@@ -15,6 +17,7 @@ import com.github.magnusp.libsql.hrana.codec.StreamResult;
 
 import java.net.URI;
 import java.sql.Array;
+import java.sql.BatchUpdateException;
 import java.sql.Blob;
 import java.sql.ResultSet;
 import java.sql.CallableStatement;
@@ -37,15 +40,65 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.Executor;
 
+/**
+ * A JDBC connection whose state is serialized on one connection-level lock, the way sqlite-jdbc
+ * serializes every call on its {@code DB} object.
+ *
+ * <p>Hrana over HTTP requires serialized requests per stream and consumes a baton once, so each
+ * pipeline round trip and each transaction transition ({@link #setAutoCommit(boolean)}, {@link
+ * #commit()}, {@link #rollback()}, {@link #close()}) runs while holding {@link #stateLock}.
+ * Without it, two statements on one non-auto-commit connection can read the same baton, a commit
+ * can land between another thread's begin and its send, and a close can leave a stream open.
+ *
+ * <p><strong>Lock ordering.</strong> A statement's {@code stateLock} is never held across a call
+ * into the connection, so the only possible order is statement lock, then connection lock. {@code
+ * LibsqlStatement.checkClosed()} releases its statement lock before calling {@link
+ * #checkClosed()}, and both execute paths call {@link #executeStatement(Stmt)} and {@link
+ * #executeBatchResults(List)} after their statement critical sections have exited. The connection
+ * never calls back into a statement, so the order cannot invert and the two locks cannot deadlock.
+ */
 public class LibsqlConnection implements Connection {
 
     private final LibsqlClientConfig config;
     private final LibsqlHttpClient client;
 
+    /** Guards every field below and every pipeline round trip. See the class javadoc. */
+    private final Object stateLock = new Object();
+
     private boolean autoCommit = true;
     private boolean readOnly = false;
     private int transactionIsolation = TRANSACTION_SERIALIZABLE;
     private boolean closed = false;
+    private TransactionMode transactionMode = TransactionMode.DEFERRED;
+    private LibsqlDatabaseMetaData meta;
+
+    /**
+     * Transaction begin mode, matching xerial sqlite-jdbc's
+     * {@code SQLiteConfig.TransactionMode}.
+     */
+    public enum TransactionMode {
+        DEFERRED("BEGIN"),
+        IMMEDIATE("BEGIN IMMEDIATE"),
+        EXCLUSIVE("BEGIN EXCLUSIVE");
+
+        private final String beginSql;
+
+        TransactionMode(String beginSql) {
+            this.beginSql = beginSql;
+        }
+
+        String beginSql() {
+            return beginSql;
+        }
+
+        public static TransactionMode from(String mode) {
+            try {
+                return valueOf(mode.toUpperCase());
+            } catch (RuntimeException e) {
+                throw new IllegalArgumentException("Unknown transaction mode: " + mode, e);
+            }
+        }
+    }
 
     // Interactive stream state
     private String baton = null;
@@ -61,116 +114,189 @@ public class LibsqlConnection implements Connection {
     }
 
     public void checkClosed() throws SQLException {
-        if (closed) {
-            throw new SQLException("Connection is closed");
+        synchronized (stateLock) {
+            if (closed) {
+                throw new SQLException("Connection is closed");
+            }
         }
     }
 
     public StmtResult executeStatement(Stmt stmt) throws SQLException {
-        checkClosed();
-        try {
-            if (autoCommit) {
-                // One-shot execution with single-roundtrip close (prevents Bug 1 128-stream 10s stall)
-                return client.executeOneShot(stmt);
-            } else {
-                ensureTransactionStarted();
-                PipelineReqBody req = new PipelineReqBody(baton, List.of(new StreamRequest.Execute(stmt)));
-                PipelineRespBody resp = client.sendPipeline(req, baseUrl);
-                updateStreamState(resp);
+        synchronized (stateLock) {
+            checkClosed();
+            try {
+                if (autoCommit) {
+                    // One-shot execution with single-roundtrip close (prevents Bug 1 128-stream 10s stall)
+                    return client.executeOneShot(stmt);
+                } else {
+                    ensureTransactionStarted();
+                    PipelineReqBody req = new PipelineReqBody(baton, List.of(new StreamRequest.Execute(stmt)));
+                    PipelineRespBody resp = client.sendPipeline(req, baseUrl);
+                    updateStreamState(resp);
 
-                if (resp.results().isEmpty()) {
-                    throw new SQLException("Empty result received from server");
-                }
-                StreamResult sr = resp.results().get(0);
-                return switch (sr) {
-                    case StreamResult.Ok ok -> {
-                        if (ok.response() instanceof StreamResponse.Execute exec) {
-                            yield exec.result();
-                        }
-                        throw new SQLException("Unexpected response: " + ok.response());
+                    if (resp.results().isEmpty()) {
+                        throw new SQLException("Empty result received from server");
                     }
-                    case StreamResult.Error err -> throw new SQLException(err.error().message());
-                };
+                    StreamResult sr = resp.results().get(0);
+                    return switch (sr) {
+                        case StreamResult.Ok ok -> {
+                            if (ok.response() instanceof StreamResponse.Execute exec) {
+                                yield exec.result();
+                            }
+                            throw new SQLException("Unexpected response: " + ok.response());
+                        }
+                        case StreamResult.Error err -> throw LibsqlErrorMapper.toSQLException(err.error());
+                    };
+                }
+            } catch (LibsqlException e) {
+                throw LibsqlErrorMapper.toSQLException(e);
             }
-        } catch (LibsqlException e) {
-            throw LibsqlErrorMapper.toSQLException(e);
         }
     }
 
     public int[] executeBatch(List<Stmt> statements) throws SQLException {
-        checkClosed();
-        if (statements == null || statements.isEmpty()) {
-            return new int[0];
+        List<StmtResult> results = executeBatchResults(statements);
+        int[] updateCounts = new int[results.size()];
+        for (int i = 0; i < results.size(); i++) {
+            updateCounts[i] = (int) results.get(i).affectedRowCount();
         }
+        return updateCounts;
+    }
 
-        try {
-            List<BatchStep> steps = new ArrayList<>(statements.size());
-            for (Stmt stmt : statements) {
-                steps.add(new BatchStep(stmt));
+    /**
+     * Executes a batch and returns the {@code BatchResult} step results, one per statement. The
+     * caller derives both the update counts and the generated keys from these results, so the
+     * driver needs no follow-up query and no extra round trip.
+     */
+    List<StmtResult> executeBatchResults(List<Stmt> statements) throws SQLException {
+        synchronized (stateLock) {
+            checkClosed();
+            if (statements == null || statements.isEmpty()) {
+                return List.of();
             }
-            Batch batch = new Batch(steps);
 
-            if (autoCommit) {
-                // One-shot batch
-                PipelineReqBody req = new PipelineReqBody(null, List.of(
-                        new StreamRequest.BatchReq(batch),
-                        StreamRequest.Close.INSTANCE
-                ));
-                PipelineRespBody resp = client.sendPipeline(req, baseUrl);
-                return extractBatchResults(resp, statements.size());
-            } else {
-                ensureTransactionStarted();
-                PipelineReqBody req = new PipelineReqBody(baton, List.of(new StreamRequest.BatchReq(batch)));
-                PipelineRespBody resp = client.sendPipeline(req, baseUrl);
-                updateStreamState(resp);
-                return extractBatchResults(resp, statements.size());
+            try {
+                List<BatchStep> steps = new ArrayList<>(statements.size());
+                for (int i = 0; i < statements.size(); i++) {
+                    BatchCond condition = i == 0 ? null : new BatchCond.StepOk(i - 1);
+                    steps.add(new BatchStep(condition, statements.get(i)));
+                }
+                Batch batch = new Batch(steps);
+
+                if (autoCommit) {
+                    // One-shot batch
+                    PipelineReqBody req = new PipelineReqBody(null, List.of(
+                            new StreamRequest.BatchReq(batch),
+                            StreamRequest.Close.INSTANCE
+                    ));
+                    PipelineRespBody resp = client.sendPipeline(req, baseUrl);
+                    return extractBatchResults(resp, statements.size());
+                } else {
+                    ensureTransactionStarted();
+                    PipelineReqBody req = new PipelineReqBody(baton, List.of(new StreamRequest.BatchReq(batch)));
+                    PipelineRespBody resp = client.sendPipeline(req, baseUrl);
+                    updateStreamState(resp);
+                    return extractBatchResults(resp, statements.size());
+                }
+            } catch (LibsqlException e) {
+                throw LibsqlErrorMapper.toSQLException(e);
             }
-        } catch (LibsqlException e) {
-            throw LibsqlErrorMapper.toSQLException(e);
         }
     }
 
-    private int[] extractBatchResults(PipelineRespBody resp, int expectedSize) throws SQLException {
+    private List<StmtResult> extractBatchResults(PipelineRespBody resp, int expectedSize)
+            throws SQLException {
         if (resp.results().isEmpty()) {
             throw new SQLException("Empty response for batch execution");
         }
         StreamResult sr = resp.results().get(0);
         if (sr instanceof StreamResult.Error err) {
-            throw new SQLException(err.error().message());
+            throw LibsqlErrorMapper.toSQLException(err.error());
         }
         StreamResponse response = ((StreamResult.Ok) sr).response();
         if (!(response instanceof StreamResponse.BatchResp batchResp)) {
             throw new SQLException("Unexpected batch response: " + response);
         }
 
-        int[] updateCounts = new int[expectedSize];
+        List<StmtResult> results = new ArrayList<>(expectedSize);
         for (int i = 0; i < expectedSize; i++) {
-            if (batchResp.result().stepErrors().containsKey(i)) {
-                updateCounts[i] = Statement.EXECUTE_FAILED;
-            } else if (batchResp.result().stepResults().containsKey(i)) {
-                StmtResult r = batchResp.result().stepResults().get(i);
-                updateCounts[i] = (int) r.affectedRowCount();
-            } else {
-                updateCounts[i] = Statement.SUCCESS_NO_INFO;
+            HranaError error = batchResp.result().stepErrors().get(i);
+            if (error != null) {
+                // JDBC stops the batch at the first failure and reports only the steps that ran.
+                // The mapped exception is the cause, so SQLState and vendor code survive too.
+                SQLException mapped = LibsqlErrorMapper.toSQLException(error);
+                throw new BatchUpdateException(
+                        error.message(),
+                        mapped.getSQLState(),
+                        mapped.getErrorCode(),
+                        steppedUpdateCounts(results),
+                        mapped);
             }
+            StmtResult result = batchResp.result().stepResults().get(i);
+            if (result == null) {
+                // A skipped step is legitimate only after a failed step, which the loop has
+                // already thrown on. Here the server executed the step but reported nothing.
+                throw new SQLException(
+                        "Protocol error: batch step " + i + " has neither a result nor an error");
+            }
+            results.add(result);
+        }
+        return results;
+    }
+
+    private static int[] steppedUpdateCounts(List<StmtResult> results) {
+        int[] updateCounts = new int[results.size()];
+        for (int i = 0; i < results.size(); i++) {
+            updateCounts[i] = (int) results.get(i).affectedRowCount();
         }
         return updateCounts;
     }
 
     private void ensureTransactionStarted() throws SQLException {
-        if (baton == null) {
-            // Mitigation for Bug 2: Read-write transactions start with BEGIN IMMEDIATE
-            String beginSql = readOnly ? "BEGIN DEFERRED" : "BEGIN IMMEDIATE";
-            PipelineReqBody req = new PipelineReqBody(null, List.of(new StreamRequest.Execute(new Stmt(beginSql))));
-            PipelineRespBody resp = client.sendPipeline(req, baseUrl);
-            updateStreamState(resp);
-            if (resp.results().isEmpty() || resp.results().get(0) instanceof StreamResult.Error) {
-                closeStreamSilently();
-                throw new SQLException("Failed to begin transaction");
-            }
+        if (beginPending()) {
+            beginTransaction();
         }
     }
 
+    /**
+     * The begin-pending state is derived rather than stored: auto-commit is off and no stream is
+     * open, so the next statement must begin the transaction. A separate boolean would be a second
+     * source of truth for a fact the baton already carries.
+     *
+     * <p>Callers hold {@link #stateLock}.
+     */
+    private boolean beginPending() {
+        return !autoCommit && baton == null;
+    }
+
+    /** Callers hold {@link #stateLock}. */
+    private void beginTransaction() throws SQLException {
+        PipelineRespBody resp;
+        try {
+            PipelineReqBody req = new PipelineReqBody(null,
+                    List.of(new StreamRequest.Execute(new Stmt(transactionMode.beginSql()))));
+            resp = client.sendPipeline(req, baseUrl);
+        } catch (LibsqlException e) {
+            throw LibsqlErrorMapper.toSQLException(e);
+        }
+        updateStreamState(resp);
+        if (resp.results().isEmpty()) {
+            closeStreamSilently();
+            throw new SQLException("Empty result received from server");
+        }
+        StreamResult result = resp.results().get(0);
+        if (result instanceof StreamResult.Error error) {
+            closeStreamSilently();
+            throw LibsqlErrorMapper.toSQLException(error.error());
+        }
+        if (!(result instanceof StreamResult.Ok ok)
+                || !(ok.response() instanceof StreamResponse.Execute)) {
+            closeStreamSilently();
+            throw new SQLException("Unexpected response: " + result);
+        }
+    }
+
+    /** Callers hold {@link #stateLock}. */
     private void updateStreamState(PipelineRespBody resp) {
         this.baton = resp.baton();
         if (resp.baseUrl() != null && !resp.baseUrl().isBlank()) {
@@ -178,6 +304,7 @@ public class LibsqlConnection implements Connection {
         }
     }
 
+    /** Callers hold {@link #stateLock}. */
     private void closeStreamSilently() {
         if (baton != null) {
             try {
@@ -188,10 +315,14 @@ public class LibsqlConnection implements Connection {
         }
     }
 
-    @Override
-    public Statement createStatement() throws SQLException {
+    LibsqlStatement createStatementInternal() throws SQLException {
         checkClosed();
         return new LibsqlStatement(this);
+    }
+
+    @Override
+    public Statement createStatement() throws SQLException {
+        return createStatementInternal();
     }
 
     @Override
@@ -210,93 +341,155 @@ public class LibsqlConnection implements Connection {
         return sql;
     }
 
+    /**
+     * Matches the observable JDBC behaviour of xerial sqlite-jdbc 3.53.4.0 while keeping the
+     * transaction begin lazy:
+     *
+     * <ul>
+     *   <li>Disabling auto-commit only records that the next statement must begin a transaction in
+     *       the configured {@link TransactionMode}. No request is sent, so an idle non-auto-commit
+     *       connection holds no Hrana stream and cannot hit sqld's idle stream expiry.
+     *   <li>{@link #commit()} and {@link #rollback()} end the open transaction and close its stream
+     *       without beginning the next one. A commit or rollback with no work sent nothing to the
+     *       server, as in xerial.
+     *   <li>Re-enabling auto-commit commits the open transaction and ends the Hrana transaction
+     *       stream.
+     * </ul>
+     *
+     * <p>This diverges from xerial only in when the server sees the begin: an {@code IMMEDIATE} or
+     * {@code EXCLUSIVE} transaction no longer takes its write lock until the next statement. The
+     * protocol requires it, because Hrana over HTTP expires idle streams.
+     *
+     * <p>Use {@link #setTransactionMode(TransactionMode)} to select {@code IMMEDIATE} or {@code
+     * EXCLUSIVE}, which acquire the write lock when the transaction begins.
+     */
     @Override
     public void setAutoCommit(boolean autoCommit) throws SQLException {
-        checkClosed();
-        if (this.autoCommit == autoCommit) return;
-        if (!this.autoCommit && autoCommit) {
-            // Committing active transaction
-            commit();
+        synchronized (stateLock) {
+            checkClosed();
+            if (this.autoCommit == autoCommit) return;
+            if (autoCommit) {
+                endTransaction("COMMIT");
+                this.autoCommit = true;
+            } else {
+                this.autoCommit = false;
+            }
         }
-        this.autoCommit = autoCommit;
     }
 
     @Override
     public boolean getAutoCommit() throws SQLException {
-        checkClosed();
-        return autoCommit;
+        synchronized (stateLock) {
+            checkClosed();
+            return autoCommit;
+        }
     }
 
     @Override
     public void commit() throws SQLException {
-        checkClosed();
-        if (autoCommit) {
-            throw new SQLException("Cannot commit when in autoCommit mode");
-        }
-        if (baton != null) {
-            try {
-                PipelineReqBody req = new PipelineReqBody(baton, List.of(
-                        new StreamRequest.Execute(new Stmt("COMMIT")),
-                        StreamRequest.Close.INSTANCE
-                ));
-                PipelineRespBody resp = client.sendPipeline(req, baseUrl);
-                this.baton = null;
-            } catch (LibsqlException e) {
-                closeStreamSilently();
-                throw LibsqlErrorMapper.toSQLException(e);
+        synchronized (stateLock) {
+            checkClosed();
+            if (autoCommit) {
+                throw new SQLException("Cannot commit when in autoCommit mode");
             }
+            endTransaction("COMMIT");
         }
     }
 
     @Override
     public void rollback() throws SQLException {
-        checkClosed();
-        if (autoCommit) {
-            throw new SQLException("Cannot rollback when in autoCommit mode");
+        synchronized (stateLock) {
+            checkClosed();
+            if (autoCommit) {
+                throw new SQLException("Cannot rollback when in autoCommit mode");
+            }
+            endTransaction("ROLLBACK");
         }
-        if (baton != null) {
-            try {
-                PipelineReqBody req = new PipelineReqBody(baton, List.of(
-                        new StreamRequest.Execute(new Stmt("ROLLBACK")),
-                        StreamRequest.Close.INSTANCE
-                ));
-                client.sendPipeline(req, baseUrl);
-            } catch (Exception ignored) {
-            } finally {
-                this.baton = null;
+    }
+
+    /** Callers hold {@link #stateLock}. */
+    private void endTransaction(String sql) throws SQLException {
+        if (beginPending()) {
+            // No transaction has started, so there is nothing to send and nothing to close.
+            return;
+        }
+
+        PipelineRespBody resp;
+        try {
+            PipelineReqBody req = new PipelineReqBody(baton,
+                    List.of(new StreamRequest.Execute(new Stmt(sql))));
+            resp = client.sendPipeline(req, baseUrl);
+        } catch (LibsqlException e) {
+            throw LibsqlErrorMapper.toSQLException(e);
+        }
+        updateStreamState(resp);
+
+        if (resp.results().isEmpty()) {
+            throw new SQLException("Empty result received from server");
+        }
+        StreamResult result = resp.results().get(0);
+        if (result instanceof StreamResult.Error error) {
+            throw LibsqlErrorMapper.toSQLException(error.error());
+        }
+        if (!(result instanceof StreamResult.Ok ok)
+                || !(ok.response() instanceof StreamResponse.Execute)) {
+            throw new SQLException("Unexpected response: " + result);
+        }
+
+        // The server committed or rolled back, so the stream has no state left worth holding.
+        // Closing it lets an idle connection drop its server-side stream. On an error above the
+        // baton stays, so the caller can retry or roll back on the same stream.
+        closeStreamSilently();
+    }
+
+    @Override
+    public void close() throws SQLException {
+        synchronized (stateLock) {
+            if (!closed) {
+                closed = true;
+                closeStreamSilently();
             }
         }
     }
 
     @Override
-    public void close() throws SQLException {
-        if (!closed) {
-            closed = true;
-            closeStreamSilently();
+    public boolean isClosed() throws SQLException {
+        synchronized (stateLock) {
+            return closed;
+        }
+    }
+
+    /**
+     * Returns the metadata for this connection, creating it on first use and reusing it afterwards,
+     * matching xerial sqlite-jdbc 3.53.4.0. The instance is cached for the lifetime of the
+     * connection, so repeated calls return the same object and separate connections get separate
+     * instances. Calling this on a closed connection throws.
+     */
+    @Override
+    public DatabaseMetaData getMetaData() throws SQLException {
+        synchronized (stateLock) {
+            checkClosed();
+            if (meta == null) {
+                meta = new LibsqlDatabaseMetaData(this);
+            }
+            return meta;
         }
     }
 
     @Override
-    public boolean isClosed() throws SQLException {
-        return closed;
-    }
-
-    @Override
-    public DatabaseMetaData getMetaData() throws SQLException {
-        checkClosed();
-        return new LibsqlDatabaseMetaData(this);
-    }
-
-    @Override
     public void setReadOnly(boolean readOnly) throws SQLException {
-        checkClosed();
-        this.readOnly = readOnly;
+        synchronized (stateLock) {
+            checkClosed();
+            this.readOnly = readOnly;
+        }
     }
 
     @Override
     public boolean isReadOnly() throws SQLException {
-        checkClosed();
-        return readOnly;
+        synchronized (stateLock) {
+            checkClosed();
+            return readOnly;
+        }
     }
 
     @Override
@@ -307,16 +500,45 @@ public class LibsqlConnection implements Connection {
         return null;
     }
 
+    /**
+     * Selects the mode used by the next transaction begin. Matches xerial sqlite-jdbc's {@code
+     * SQLiteConfig.setTransactionMode}; the default is {@link TransactionMode#DEFERRED}.
+     */
+    public void setTransactionMode(TransactionMode mode) throws SQLException {
+        synchronized (stateLock) {
+            checkClosed();
+            if (mode == null) {
+                throw new IllegalArgumentException("Transaction mode cannot be null");
+            }
+            this.transactionMode = mode;
+        }
+    }
+
+    public void setTransactionMode(String mode) throws SQLException {
+        setTransactionMode(TransactionMode.from(mode));
+    }
+
+    public TransactionMode getTransactionMode() throws SQLException {
+        synchronized (stateLock) {
+            checkClosed();
+            return transactionMode;
+        }
+    }
+
     @Override
     public void setTransactionIsolation(int level) throws SQLException {
-        checkClosed();
-        this.transactionIsolation = level;
+        synchronized (stateLock) {
+            checkClosed();
+            this.transactionIsolation = level;
+        }
     }
 
     @Override
     public int getTransactionIsolation() throws SQLException {
-        checkClosed();
-        return transactionIsolation;
+        synchronized (stateLock) {
+            checkClosed();
+            return transactionIsolation;
+        }
     }
 
     @Override
@@ -344,18 +566,30 @@ public class LibsqlConnection implements Connection {
 
     @Override
     public Map<String, Class<?>> getTypeMap() throws SQLException {
-        return Map.of();
+        throw new SQLFeatureNotSupportedException("Type maps are not supported");
     }
 
     @Override
-    public void setTypeMap(Map<String, Class<?>> map) throws SQLException {}
+    public void setTypeMap(Map<String, Class<?>> map) throws SQLException {
+        throw new SQLFeatureNotSupportedException("Type maps are not supported");
+    }
 
     @Override
-    public void setHoldability(int holdability) throws SQLException {}
+    public void setHoldability(int holdability) throws SQLException {
+        checkClosed();
+        checkHoldability(holdability);
+    }
 
     @Override
     public int getHoldability() throws SQLException {
-        return 1; // HOLD_CURSORS_OVER_COMMIT
+        checkClosed();
+        return ResultSet.CLOSE_CURSORS_AT_COMMIT;
+    }
+
+    private static void checkHoldability(int holdability) throws SQLException {
+        if (holdability != ResultSet.CLOSE_CURSORS_AT_COMMIT) {
+            throw new SQLException("SQLite only supports CLOSE_CURSORS_AT_COMMIT");
+        }
     }
 
     @Override
@@ -380,16 +614,22 @@ public class LibsqlConnection implements Connection {
 
     @Override
     public Statement createStatement(int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException {
+        checkClosed();
+        checkHoldability(resultSetHoldability);
         return createStatement();
     }
 
     @Override
     public PreparedStatement prepareStatement(String sql, int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException {
+        checkClosed();
+        checkHoldability(resultSetHoldability);
         return prepareStatement(sql);
     }
 
     @Override
     public CallableStatement prepareCall(String sql, int resultSetType, int resultSetConcurrency, int resultSetHoldability) throws SQLException {
+        checkClosed();
+        checkHoldability(resultSetHoldability);
         return prepareCall(sql);
     }
 
@@ -419,7 +659,9 @@ public class LibsqlConnection implements Connection {
 
     @Override
     public boolean isValid(int timeout) throws SQLException {
-        if (closed) return false;
+        synchronized (stateLock) {
+            if (closed) return false;
+        }
         try {
             executeStatement(new Stmt("SELECT 1", null, List.of(), List.of(), false));
             return true;

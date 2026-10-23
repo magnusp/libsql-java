@@ -35,6 +35,20 @@ public class DirectHranaJsonCodecTest {
     }
 
     @Test
+    void testSerializeSupplementaryCharactersAsUtf8() throws IOException {
+        String supplementary = "\uD840\uDC40 and \uD880\uDC99";
+        Stmt stmt = new Stmt("SELECT '" + supplementary + "'", List.of(Value.of(supplementary)));
+        PipelineReqBody req = new PipelineReqBody(null, List.of(new StreamRequest.Execute(stmt)));
+
+        byte[] jsonBytes = codec.serializePipelineRequest(req);
+        String json = new String(jsonBytes, StandardCharsets.UTF_8);
+
+        assertThat(json).contains("\"sql\":\"SELECT '" + supplementary + "'\"");
+        assertThat(json).contains("\"value\":\"" + supplementary + "\"");
+        assertThat(json).doesNotContain("?");
+    }
+
+    @Test
     void testDeserializePipelineResponse() throws IOException {
         String json = """
         {

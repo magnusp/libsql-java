@@ -694,7 +694,16 @@ public class DirectHranaJsonCodec implements HranaJsonCodec {
                         } else if (c < 0x80) {
                             writeByte((byte) c);
                         } else {
-                            byte[] utf8 = String.valueOf(c).getBytes(StandardCharsets.UTF_8);
+                            String chunk;
+                            if (Character.isHighSurrogate(c)
+                                    && i + 1 < len
+                                    && Character.isLowSurrogate(s.charAt(i + 1))) {
+                                chunk = s.substring(i, i + 2);
+                                i++;
+                            } else {
+                                chunk = String.valueOf(c);
+                            }
+                            byte[] utf8 = chunk.getBytes(StandardCharsets.UTF_8);
                             ensureCapacity(count + utf8.length);
                             System.arraycopy(utf8, 0, buf, count, utf8.length);
                             count += utf8.length;

@@ -11,8 +11,18 @@ import java.time.Duration;
 @Testcontainers
 public abstract class SqldContainerBase {
 
-    private static final String LIBSQL_IMAGE = System.getProperty("libsql.image", "ghcr.io/tursodatabase/libsql-server:latest");
+    static final String LIBSQL_IMAGE = requireLibsqlImage();
     private static final int PORT = 8080;
+
+    private static String requireLibsqlImage() {
+        String image = System.getProperty("libsql.image");
+        if (image == null || image.isBlank()) {
+            throw new IllegalStateException(
+                    "libsql.image is not set. Run the integration tests with Maven so the"
+                            + " pinned sqld image from the root pom is used.");
+        }
+        return image;
+    }
 
     @Container
     public static final GenericContainer<?> LIBSQL_CONTAINER = new GenericContainer<>(LIBSQL_IMAGE)

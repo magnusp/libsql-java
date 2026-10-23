@@ -31,7 +31,8 @@ public class NetworkToxicityIT {
 
     private static final Network NETWORK = Network.newNetwork();
 
-    private static final GenericContainer<?> LIBSQL = new GenericContainer<>("ghcr.io/tursodatabase/libsql-server:latest")
+    private static final GenericContainer<?> LIBSQL =
+            new GenericContainer<>(SqldContainerBase.LIBSQL_IMAGE)
             .withNetwork(NETWORK)
             .withNetworkAliases("libsql-srv")
             .withExposedPorts(8080)
@@ -129,6 +130,36 @@ public class NetworkToxicityIT {
              ResultSet rs = st.executeQuery("SELECT 'fragmented_packet_data_stream'")) {
             assertThat(rs.next()).isTrue();
             assertThat(rs.getString(1)).isEqualTo("fragmented_packet_data_stream");
+        }
+    }
+
+    @Test
+    void testFailedRollbackThrowsAndKeepsTransactionForRetry() throws IOException, SQLException {
+        try (Connection conn = DriverManager.getConnection(getProxiedJdbcUrl(5000))) {
+            try (Statement st = conn.createStatement()) {
+                st.execute("CREATE TABLE IF NOT EXISTS toxi_rollback_test (id INTEGER PRIMARY KEY)");
+                st.execute("DELETE FROM toxi_rollback_test");
+            }
+
+            conn.setAutoCommit(false);
+            try (Statement st = conn.createStatement()) {
+                st.executeUpdate("INSERT INTO toxi_rollback_test VALUES (1)");
+            }
+
+            proxy.disable();
+
+            assertThatThrownBy(conn::rollback).isInstanceOf(SQLException.class);
+
+            proxy.enable();
+
+            conn.rollback();
+            conn.setAutoCommit(true);
+
+            try (Statement st = conn.createStatement();
+                 ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM toxi_rollback_test")) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getInt(1)).isZero();
+            }
         }
     }
 }

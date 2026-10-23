@@ -33,12 +33,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 public class NamespacePathIT {
 
-    private static final String LIBSQL_IMAGE = System.getProperty("libsql.image", "ghcr.io/tursodatabase/libsql-server:latest");
     private static final int HTTP_PORT = 8080;
     private static final int ADMIN_PORT = 9090;
 
     @Container
-    public static final GenericContainer<?> SQLD_CONTAINER = new GenericContainer<>(LIBSQL_IMAGE)
+    public static final GenericContainer<?> SQLD_CONTAINER = new GenericContainer<>(SqldContainerBase.LIBSQL_IMAGE)
             .withExposedPorts(HTTP_PORT, ADMIN_PORT)
             .withCommand(
                     "sqld",

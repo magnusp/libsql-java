@@ -1,0 +1,833 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage: export-upstream <tag> [options]
+       export-upstream --verify [--manifest FILE]
+       export-upstream --verify-pinned [--manifest FILE]
+       export-upstream --self-test
+
+Export xerial/sqlite-jdbc at the given tag into upstream-xerial_sqlite-jdbc/
+and update upstream-xerial_sqlite-jdbc/UPSTREAM.md. The tag is resolved to its
+commit SHA with the GitHub API, and both the tag and the SHA are recorded.
+
+The selected files come from upstream-xerial_sqlite-jdbc.manifest by default.
+The manifest is the single source of truth for both the export and the
+libsql-conformance build.
+
+Requires the GitHub CLI, authenticated with `gh auth login`.
+
+Examples:
+  export-upstream 3.53.4.0
+  export-upstream 3.53.4.0 --manifest upstream.manifest
+  export-upstream --verify
+
+Options:
+  --manifest FILE     Repo-relative paths, one per line.
+                      Blank lines and lines starting with # are ignored.
+  --all               Export the whole repository instead of the manifest.
+  --force             Replace a non-empty destination not created by this script.
+  --verify            Check the vendored tree against the manifest and
+                      CHECKSUMS.sha256 without contacting GitHub.
+  --verify-pinned     Run --verify, then check every "# upstream" hash against
+                      the blob at the commit in .export-upstream. Needs network
+                      and an authenticated gh. Set EXPORT_UPSTREAM_PINNED_TREE
+                      to a directory of blobs to run the same check offline.
+  --self-test         Exercise the verification rules on a temporary copy of
+                      the vendored tree.
+  -h, --help          Show this help.
+
+Default manifest: upstream-xerial_sqlite-jdbc.manifest
+
+Vendored divergences
+  CHECKSUMS.sha256 records the upstream hash of every exported file on a
+  "# upstream <hash> ./path" line and the current hash on the following line.
+  A deliberate edit keeps the upstream line, updates the current hash, and
+  records a rationale in the manifest:
+
+    # divergence: <path> -- <non-empty reason>
+
+  --verify rejects an edit whose current hash differs from upstream without a
+  rationale, and rejects a rationale whose file still matches upstream. It
+  also requires both hash lines for every manifest path and passes
+  sha256sum --strict, so a malformed line fails instead of warning.
+
+  --verify-pinned additionally fetches each manifest blob at the commit in
+  .export-upstream and rejects a recorded upstream hash that does not match it.
+  Rewriting a vendored file and both of its hashes therefore fails CI.
+
+The destination must be empty, missing, or marked with .export-upstream.
+The script never edits UPSTREAM.md content outside its managed markers.
+EOF
+}
+
+die() {
+    echo "error: $*" >&2
+    exit 1
+}
+
+md_cell() {
+    printf '%s' "$1" | sed 's/|/\\|/g'
+}
+
+sha256_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    else
+        die "sha256sum or shasum is required"
+    fi
+}
+
+sha256_check() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum --strict -c "$1"
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 --strict -c "$1"
+    else
+        die "sha256sum or shasum is required"
+    fi
+}
+
+check_manifest_path() {
+    case "$1" in
+        /*|..|../*|*/../*|*/..)
+            die "manifest path must be relative and stay inside the repository: $1"
+            ;;
+    esac
+}
+
+load_manifest_files() {
+    local manifest=$1
+    local out=$2
+    local line
+
+    [ -f "$manifest" ] || die "manifest not found: $manifest"
+    : > "$out"
+    while IFS= read -r line || [ -n "$line" ]; do
+        line=${line%$'\r'}
+        case "$line" in
+            ""|"#"*)
+                continue
+                ;;
+        esac
+        check_manifest_path "$line"
+        printf '%s\n' "$line" >> "$out"
+    done < "$manifest"
+}
+
+load_divergences() {
+    local manifest=$1
+    local out=$2
+    local line rest path reason
+
+    : > "$out"
+    while IFS= read -r line || [ -n "$line" ]; do
+        line=${line%$'\r'}
+        case "$line" in
+            "# divergence:"*)
+                rest=$(printf '%s' "$line" | sed -E 's/^# divergence:[[:space:]]*//')
+                path=${rest%% *}
+                reason=$(printf '%s' "$rest" | sed -E 's/^[^ ]+[[:space:]]*(--)?[[:space:]]*//')
+                if [ -z "$path" ] || [ -z "$reason" ]; then
+                    die "malformed divergence rationale: $line"
+                fi
+                check_manifest_path "$path"
+                printf '%s\t%s\n' "$path" "$reason" >> "$out"
+                ;;
+        esac
+    done < "$manifest"
+}
+
+expand_manifest_paths() {
+    local manifest=$1
+    local out=$2
+    local entry
+
+    load_manifest_files "$manifest" "$tmp/manifest.raw"
+    [ -s "$tmp/manifest.raw" ] || die "manifest is empty: $manifest"
+
+    : > "$out"
+    while IFS= read -r entry; do
+        if [ -f "$dest/$entry" ]; then
+            printf '%s\n' "$entry" >> "$out"
+        elif [ -d "$dest/$entry" ]; then
+            (cd "$dest" && find "$entry" -type f -print) >> "$out"
+        else
+            die "manifest path not found in $dest: $entry"
+        fi
+    done < "$tmp/manifest.raw"
+
+    LC_ALL=C sort "$out" -o "$out.sorted"
+    if uniq -d "$out.sorted" | grep -q .; then
+        die "manifest contains duplicate paths: $manifest"
+    fi
+    mv "$out.sorted" "$out"
+}
+
+parse_checksums() {
+    local file=$1
+    local out=$2
+
+    awk '
+        /^# upstream / {
+            if (NF < 4) {
+                print "MALFORMED_UPSTREAM\t" $0
+                next
+            }
+            p = $4
+            sub(/^\.\//, "", p)
+            if (p in upstream) {
+                print "DUPLICATE_UPSTREAM\t" p
+            }
+            upstream[p] = $3
+            next
+        }
+        /^#/ {
+            next
+        }
+        NF == 2 {
+            p = $2
+            sub(/^\.\//, "", p)
+            if (p in current) {
+                print "DUPLICATE_CURRENT\t" p
+            }
+            current[p] = $1
+            next
+        }
+        {
+            print "MALFORMED\t" $0
+        }
+        END {
+            for (p in current) {
+                if (!(p in upstream)) {
+                    print "MISSING_UPSTREAM\t" p
+                } else {
+                    print "ENTRY\t" p "\t" current[p] "\t" upstream[p]
+                }
+            }
+            for (p in upstream) {
+                if (!(p in current)) {
+                    print "MISSING_CURRENT\t" p
+                }
+            }
+        }
+    ' "$file" > "$out"
+}
+
+verify_tree() {
+    local manifest=$1
+    local entry path current upstream saved
+    local bad=0
+
+    [ -f "$dest/.export-upstream" ] || die "not an export-upstream tree: $dest"
+
+    expand_manifest_paths "$manifest" "$tmp/manifest.paths"
+
+    (
+        cd "$dest"
+        find . -type f \
+            ! -name CHECKSUMS.sha256 \
+            ! -name .export-upstream \
+            ! -name UPSTREAM.md \
+            -print \
+            | sed 's|^\./||'
+    ) | LC_ALL=C sort > "$tmp/actual.paths"
+
+    if ! diff -u "$tmp/manifest.paths" "$tmp/actual.paths" > "$tmp/tree.diff"; then
+        cat "$tmp/tree.diff" >&2
+        die "vendored tree does not match $manifest"
+    fi
+
+    [ -f "$dest/CHECKSUMS.sha256" ] || die "missing $dest/CHECKSUMS.sha256"
+    if ! (cd "$dest" && sha256_check CHECKSUMS.sha256) > "$tmp/checksums.check" 2>&1; then
+        grep -vE ': OK$' "$tmp/checksums.check" >&2 || true
+        die "CHECKSUMS.sha256 does not match the vendored tree or contains a malformed line"
+    fi
+
+    parse_checksums "$dest/CHECKSUMS.sha256" "$tmp/checksums.tsv"
+
+    # Every manifest path needs both its "# upstream" line and its current line,
+    # even when neither is present (the parser cannot report what it never saw).
+    while IFS= read -r path; do
+        if ! awk -F '\t' -v path="$path" '$1 == "ENTRY" && $2 == path { found = 1 } END { exit !found }' "$tmp/checksums.tsv"; then
+            echo "manifest path has no checksum entry (need '# upstream' and current lines): $path" >&2
+            bad=1
+        fi
+    done < "$tmp/manifest.paths"
+
+    load_divergences "$manifest" "$tmp/divergences"
+
+    while IFS=$'\t' read -r entry path current upstream; do
+        case "$entry" in
+            ENTRY)
+                if ! grep -Fqx "$path" "$tmp/manifest.paths"; then
+                    echo "checksum entry not in manifest: $path" >&2
+                    bad=1
+                fi
+                if [ "$current" != "$upstream" ] \
+                    && ! awk -F '\t' -v path="$path" '$1 == path { found = 1 } END { exit !found }' "$tmp/divergences"; then
+                    echo "divergence without rationale in $manifest: $path" >&2
+                    bad=1
+                fi
+                ;;
+            MISSING_UPSTREAM)
+                echo "missing '# upstream' line in $dest/CHECKSUMS.sha256: $path" >&2
+                bad=1
+                ;;
+            MISSING_CURRENT)
+                echo "missing current hash line in $dest/CHECKSUMS.sha256: $path" >&2
+                bad=1
+                ;;
+            DUPLICATE_UPSTREAM)
+                echo "duplicate '# upstream' line in $dest/CHECKSUMS.sha256: $path" >&2
+                bad=1
+                ;;
+            DUPLICATE_CURRENT)
+                echo "duplicate current hash line in $dest/CHECKSUMS.sha256: $path" >&2
+                bad=1
+                ;;
+            *)
+                echo "$entry: $path" >&2
+                bad=1
+                ;;
+        esac
+    done < "$tmp/checksums.tsv"
+
+    while IFS=$'\t' read -r path saved; do
+        [ -n "$saved" ] || {
+            echo "empty divergence rationale in $manifest: $path" >&2
+            bad=1
+        }
+        if ! grep -Fqx "$path" "$tmp/manifest.paths"; then
+            echo "divergence path not in manifest: $path" >&2
+            bad=1
+            continue
+        fi
+        entry=$(awk -F '\t' -v path="$path" '$1 == "ENTRY" && $2 == path { print $3 "\t" $4 }' "$tmp/checksums.tsv")
+        if [ -z "$entry" ]; then
+            echo "divergence path has no checksums: $path" >&2
+            bad=1
+            continue
+        fi
+        current=${entry%%$'\t'*}
+        upstream=${entry#*$'\t'}
+        if [ "$current" = "$upstream" ]; then
+            echo "divergence rationale but file matches upstream: $path" >&2
+            bad=1
+        fi
+    done < "$tmp/divergences"
+
+    [ "$bad" -eq 0 ] || die "vendored upstream verification failed"
+    echo "Verified $dest against $manifest"
+}
+
+pinned_metadata() {
+    [ -f "$dest/.export-upstream" ] || die "missing $dest/.export-upstream"
+    sed -n 's/^sha=//p' "$dest/.export-upstream"
+}
+
+pinned_blob() {
+    local sha=$1
+    local path=$2
+    local out=$3
+
+    if [ -n "${EXPORT_UPSTREAM_PINNED_TREE:-}" ]; then
+        [ -f "$EXPORT_UPSTREAM_PINNED_TREE/$path" ] \
+            || die "EXPORT_UPSTREAM_PINNED_TREE has no blob for $path"
+        cp "$EXPORT_UPSTREAM_PINNED_TREE/$path" "$out"
+        return
+    fi
+
+    command -v gh >/dev/null 2>&1 || die "gh is required for --verify-pinned"
+    gh api -H "Accept: application/vnd.github.raw" \
+        "repos/$repo/contents/$path?ref=$sha" > "$out" \
+        || die "could not fetch $path at $sha (network or authentication failure)"
+}
+
+verify_pinned() {
+    local manifest=$1
+    local sha tag resolved path upstream actual blob
+    local bad=0
+
+    verify_tree "$manifest"
+
+    [ -f "$dest/.export-upstream" ] || die "missing $dest/.export-upstream"
+    sha=$(pinned_metadata)
+    [ -n "$sha" ] || die "missing sha= in $dest/.export-upstream"
+
+    if [ -z "${EXPORT_UPSTREAM_PINNED_TREE:-}" ]; then
+        tag=$(sed -n 's/^tag=//p' "$dest/.export-upstream")
+        [ -n "$tag" ] || die "missing tag= in $dest/.export-upstream"
+        gh auth status >/dev/null 2>&1 \
+            || die "gh is not authenticated; run 'gh auth login' or set GH_TOKEN"
+        resolved=$(gh api "repos/$repo/commits/$tag" --jq .sha) \
+            || die "could not resolve tag $tag in $repo"
+        [ "$resolved" = "$sha" ] \
+            || die "pinned sha $sha does not match tag $tag ($resolved)"
+    fi
+
+    # verify_tree already expanded the manifest and parsed the checksums.
+    while IFS= read -r path; do
+        upstream=$(awk -F '\t' -v path="$path" \
+            '$1 == "ENTRY" && $2 == path { print $4 }' "$tmp/checksums.tsv")
+        if [ -z "$upstream" ]; then
+            echo "no '# upstream' hash for manifest path: $path" >&2
+            bad=1
+            continue
+        fi
+        blob="$tmp/pinned.blob"
+        pinned_blob "$sha" "$path" "$blob"
+        actual=$(sha256_file "$blob")
+        if [ "$actual" != "$upstream" ]; then
+            echo "upstream hash does not match $sha: $path (recorded $upstream, commit $actual)" >&2
+            bad=1
+        fi
+    done < "$tmp/manifest.paths"
+
+    [ "$bad" -eq 0 ] || die "vendored upstream hashes do not match the pinned commit $sha"
+    echo "Verified upstream hashes against $sha"
+}
+
+self_test_reset() {
+    rm -rf "$self_root/$dest"
+    cp -a "$dest" "$self_root/$dest"
+    cp "$manifest" "$self_root/$manifest"
+}
+
+self_test_expect_pass() {
+    local root=$1
+    local label=$2
+    shift 2
+
+    if ! (cd "$root" && ./tools/export-upstream "$@") > "$tmp/self-test.out" 2>&1; then
+        cat "$tmp/self-test.out" >&2
+        die "self-test: $label was rejected"
+    fi
+}
+
+self_test_expect_fail() {
+    local root=$1
+    local label=$2
+    shift 2
+
+    if (cd "$root" && ./tools/export-upstream "$@") > "$tmp/self-test.out" 2>&1; then
+        die "self-test: $label was accepted"
+    fi
+}
+
+self_test_expect_fail_naming() {
+    local root=$1
+    local label=$2
+    local expected=$3
+    shift 3
+
+    self_test_expect_fail "$root" "$label" "$@"
+    if ! grep -Fq "$expected" "$tmp/self-test.out"; then
+        cat "$tmp/self-test.out" >&2
+        die "self-test: $label failed without naming $expected"
+    fi
+}
+
+rewrite_current_hash() {
+    local file=$1
+    local path=$2
+    local hash=$3
+
+    awk -v path="./$path" -v hash="$hash" '
+        /^#/ { print; next }
+        $2 == path { print hash "  " path; next }
+        { print }
+    ' "$file" > "$file.new"
+    mv "$file.new" "$file"
+}
+
+write_pinned_checksums() {
+    local root=$1
+    local path hash
+
+    {
+        echo '# Generated by tools/export-upstream. Do not edit by hand except for a deliberate divergence.'
+        for path in sub/A.java sub/B.java; do
+            hash=$(sha256_file "$root/$dest/$path")
+            printf '# upstream %s ./%s\n' "$hash" "$path"
+            printf '%s  ./%s\n' "$hash" "$path"
+        done
+    } > "$root/$dest/CHECKSUMS.sha256"
+}
+
+self_test_pinned() {
+    local pinned_root="$tmp/self-test-pinned"
+    local pinned_blobs="$tmp/self-test-pinned-blobs"
+    local file hash
+
+    mkdir -p "$pinned_root/tools" "$pinned_root/$dest/sub" "$pinned_blobs/sub"
+    cp "$repo_root/tools/export-upstream" "$pinned_root/tools/export-upstream"
+    chmod +x "$pinned_root/tools/export-upstream"
+
+    printf 'alpha\n' > "$pinned_root/$dest/sub/A.java"
+    printf 'beta\n' > "$pinned_root/$dest/sub/B.java"
+    cp "$pinned_root/$dest/sub/A.java" "$pinned_blobs/sub/A.java"
+    cp "$pinned_root/$dest/sub/B.java" "$pinned_blobs/sub/B.java"
+    printf 'tag=self-test\nsha=self-test\n' > "$pinned_root/$dest/.export-upstream"
+    printf 'sub/A.java\nsub/B.java\n' > "$pinned_root/$manifest"
+    write_pinned_checksums "$pinned_root"
+
+    export EXPORT_UPSTREAM_PINNED_TREE="$pinned_blobs"
+
+    self_test_expect_pass "$pinned_root" "pinned commit match" --verify-pinned
+
+    file="$pinned_root/$dest/sub/A.java"
+    printf 'weakened\n' >> "$file"
+    hash=$(sha256_file "$file")
+    rewrite_current_hash "$pinned_root/$dest/CHECKSUMS.sha256" "sub/A.java" "$hash"
+    awk -v path="./sub/A.java" -v hash="$hash" '
+        $1 == "#" && $2 == "upstream" && $4 == path { print "# upstream " hash " " path; next }
+        { print }
+    ' "$pinned_root/$dest/CHECKSUMS.sha256" > "$pinned_root/$dest/CHECKSUMS.sha256.new"
+    mv "$pinned_root/$dest/CHECKSUMS.sha256.new" "$pinned_root/$dest/CHECKSUMS.sha256"
+    self_test_expect_fail_naming "$pinned_root" "tampered file with rewritten hashes" \
+        "sub/A.java" --verify-pinned
+
+    printf 'alpha\n' > "$file"
+    rewrite_current_hash "$pinned_root/$dest/CHECKSUMS.sha256" "sub/A.java" \
+        "0000000000000000000000000000000000000000000000000000000000000000"
+    awk -v path="./sub/A.java" '
+        $1 == "#" && $2 == "upstream" && $4 == path {
+            print "# upstream 0000000000000000000000000000000000000000000000000000000000000000 " path
+            next
+        }
+        { print }
+    ' "$pinned_root/$dest/CHECKSUMS.sha256" > "$pinned_root/$dest/CHECKSUMS.sha256.new"
+    mv "$pinned_root/$dest/CHECKSUMS.sha256.new" "$pinned_root/$dest/CHECKSUMS.sha256"
+    self_test_expect_fail_naming "$pinned_root" "wrong upstream hash" \
+        "sub/A.java" --verify-pinned
+
+    unset EXPORT_UPSTREAM_PINNED_TREE
+}
+
+self_test() {
+    local path="src/test/java/org/sqlite/Utils.java"
+    local plain_path="src/test/java/org/sqlite/FetchSizeTest.java"
+    local file hash
+
+    self_root="$tmp/self-test"
+    mkdir -p "$self_root/tools"
+    cp -a "$dest" "$self_root/$dest"
+    cp "$manifest" "$self_root/$manifest"
+    cp "$repo_root/tools/export-upstream" "$self_root/tools/export-upstream"
+    chmod +x "$self_root/tools/export-upstream"
+
+    self_test_expect_pass "$self_root" "pristine tree" --verify
+
+    file="$self_root/$dest/$path"
+    printf ' ' >> "$file"
+    self_test_expect_fail "$self_root" "one-byte change" --verify
+
+    self_test_reset
+    printf 'class ExtraTest {}\n' > "$self_root/$dest/src/test/java/org/sqlite/ExtraTest.java"
+    self_test_expect_fail "$self_root" "unlisted vendored file" --verify
+
+    self_test_reset
+    rm "$self_root/$dest/$path"
+    self_test_expect_fail "$self_root" "deleted vendored file" --verify
+
+    self_test_reset
+    file="$self_root/$dest/$path"
+    printf ' ' >> "$file"
+    hash=$(sha256_file "$file")
+    rewrite_current_hash "$self_root/$dest/CHECKSUMS.sha256" "$path" "$hash"
+    self_test_expect_fail "$self_root" "divergence without rationale" --verify
+
+    printf '\n# divergence: %s -- self-test rationale\n' "$path" >> "$self_root/$manifest"
+    self_test_expect_pass "$self_root" "recorded divergence" --verify
+
+    self_test_reset
+    mv "$self_root/$manifest" "$self_root/manifest.hidden"
+    self_test_expect_fail "$self_root" "missing default manifest" --verify
+
+    # A manifest path with no checksum lines at all must not pass.
+    self_test_reset
+    sed -i "\|${plain_path}\$|d" "$self_root/$dest/CHECKSUMS.sha256"
+    self_test_expect_fail_naming "$self_root" "manifest path without checksums" \
+        "$plain_path" --verify
+
+    # Both lines are required, and each missing half fails clearly.
+    self_test_reset
+    awk -v path="./$plain_path" '$1 == "#" && $2 == "upstream" && $4 == path { next } { print }' \
+        "$self_root/$dest/CHECKSUMS.sha256" > "$self_root/$dest/CHECKSUMS.sha256.new"
+    mv "$self_root/$dest/CHECKSUMS.sha256.new" "$self_root/$dest/CHECKSUMS.sha256"
+    self_test_expect_fail_naming "$self_root" "missing upstream line" \
+        "$plain_path" --verify
+
+    self_test_reset
+    awk -v path="./$plain_path" '/^#/ { print; next } $2 == path { next } { print }' \
+        "$self_root/$dest/CHECKSUMS.sha256" > "$self_root/$dest/CHECKSUMS.sha256.new"
+    mv "$self_root/$dest/CHECKSUMS.sha256.new" "$self_root/$dest/CHECKSUMS.sha256"
+    self_test_expect_fail_naming "$self_root" "missing current line" \
+        "$plain_path" --verify
+
+    # A malformed line must fail instead of warning.
+    self_test_reset
+    printf 'garbage\n' >> "$self_root/$dest/CHECKSUMS.sha256"
+    self_test_expect_fail "$self_root" "malformed checksum line" --verify
+
+    # A directory entry expands into manifest.paths instead of stdout.
+    self_test_reset
+    printf 'LICENSE\nLICENSE.zentus\nNOTICE\nVERSION\nsrc/test/java/org/sqlite\n' \
+        > "$self_root/directory.manifest"
+    sed -n '/^# divergence:/p' "$self_root/$manifest" >> "$self_root/directory.manifest"
+    self_test_expect_pass "$self_root" "directory manifest entry" \
+        --verify --manifest directory.manifest
+
+    self_test_pinned
+
+    echo "Self-test passed"
+}
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+
+repo="xerial/sqlite-jdbc"
+dest="upstream-xerial_sqlite-jdbc"
+upstream_md="$dest/UPSTREAM.md"
+manifest="upstream-xerial_sqlite-jdbc.manifest"
+manifest_set=0
+export_all=0
+force=0
+verify=0
+verify_pinned_enabled=0
+self_test_enabled=0
+tag=""
+
+if [ "$#" -lt 1 ]; then
+    usage
+    exit 2
+fi
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --manifest)
+            [ "$#" -ge 2 ] || die "--manifest needs a value"
+            manifest="$2"
+            manifest_set=1
+            shift 2
+            ;;
+        --all)
+            export_all=1
+            shift
+            ;;
+        --force)
+            force=1
+            shift
+            ;;
+        --verify)
+            verify=1
+            shift
+            ;;
+        --verify-pinned)
+            verify=1
+            verify_pinned_enabled=1
+            shift
+            ;;
+        --self-test)
+            self_test_enabled=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -*)
+            die "unknown option: $1"
+            ;;
+        *)
+            [ -z "$tag" ] || die "unexpected argument: $1"
+            tag="$1"
+            shift
+            ;;
+    esac
+done
+
+if [ "$self_test_enabled" -eq 1 ]; then
+    [ -z "$tag" ] || die "--self-test does not take a tag"
+    [ "$export_all" -eq 0 ] || die "--self-test cannot be used with --all"
+    [ "$force" -eq 0 ] || die "--self-test cannot be used with --force"
+    [ "$verify" -eq 0 ] || die "--self-test cannot be used with --verify"
+
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    self_test
+    exit 0
+fi
+
+if [ "$verify" -eq 1 ]; then
+    [ -z "$tag" ] || die "--verify does not take a tag"
+    [ "$export_all" -eq 0 ] || die "--verify cannot be used with --all"
+    [ "$force" -eq 0 ] || die "--verify cannot be used with --force"
+
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    if [ "$verify_pinned_enabled" -eq 1 ]; then
+        verify_pinned "$manifest"
+    else
+        verify_tree "$manifest"
+    fi
+    exit 0
+fi
+
+[ -n "$tag" ] || {
+    usage
+    exit 2
+}
+
+if [ "$export_all" -eq 1 ] && [ "$manifest_set" -eq 1 ]; then
+    die "--all and --manifest cannot be used together"
+fi
+
+printf '%s' "$tag" | grep -Eq '^[A-Za-z0-9._+-]+$' \
+    || die "tag contains unsupported characters: $tag"
+
+if [ -e "$dest" ] && [ ! -d "$dest" ]; then
+    die "destination is not a directory: $dest"
+fi
+
+command -v gh >/dev/null 2>&1 || die "gh is required"
+gh auth status >/dev/null 2>&1 || die "gh is not authenticated; run 'gh auth login'"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+old_md=""
+if [ -f "$upstream_md" ]; then
+    old_md="$tmp/UPSTREAM.md.old"
+    cp "$upstream_md" "$old_md"
+fi
+
+metadata=$(gh api "repos/$repo/commits/$tag" \
+    --jq '[.sha, .commit.committer.date, .commit.author.name, .commit.author.email, (.commit.message | split("\n")[0])] | @tsv') \
+    || die "could not resolve tag $tag in $repo"
+IFS=$'\t' read -r sha commit_date author_name author_email commit_subject <<< "$metadata"
+commit_author="$author_name <$author_email>"
+
+mkdir -p "$tmp/src"
+if ! gh api "repos/$repo/tarball/$sha" \
+    | tar -xzf - -C "$tmp/src" --strip-components=1; then
+    die "could not download or extract tag $tag from $repo"
+fi
+
+if [ "$export_all" -eq 1 ]; then
+    paths_label="whole repository"
+else
+    paths=()
+    load_manifest_files "$manifest" "$tmp/manifest.paths"
+    while IFS= read -r line; do
+        paths+=("$line")
+    done < "$tmp/manifest.paths"
+
+    [ "${#paths[@]}" -gt 0 ] || die "manifest is empty: $manifest"
+
+    for path in "${paths[@]}"; do
+        [ -e "$tmp/src/$path" ] || die "path not found in tag $tag: $path"
+    done
+
+    paths_label=$(printf '%s, ' "${paths[@]}")
+    paths_label=${paths_label%, }
+fi
+
+if [ -e "$dest" ] && [ -n "$(ls -A "$dest" 2>/dev/null)" ]; then
+    if [ ! -f "$dest/.export-upstream" ] && [ "$force" -ne 1 ]; then
+        die "destination is not empty and was not created by export-upstream: $dest (pass --force)"
+    fi
+    rm -rf -- "$dest"
+fi
+
+mkdir -p "$dest"
+if [ "$export_all" -eq 1 ]; then
+    cp -a "$tmp/src/." "$dest/"
+else
+    for path in "${paths[@]}"; do
+        mkdir -p "$dest/$(dirname "$path")"
+        cp -a "$tmp/src/$path" "$dest/$path"
+    done
+fi
+
+{
+    printf 'tag=%s\n' "$tag"
+    printf 'sha=%s\n' "$sha"
+} > "$dest/.export-upstream"
+
+block="$tmp/upstream-block.md"
+{
+    echo '<!-- export-upstream:begin -->'
+    echo '# Upstream export'
+    echo
+    echo '| Field | Value |'
+    echo '|---|---|'
+    printf '| Repository | `https://github.com/%s` |\n' "$(md_cell "$repo")"
+    printf '| Tag | %s |\n' "$(md_cell "$tag")"
+    printf '| Commit | `%s` |\n' "$sha"
+    printf '| Commit date | %s |\n' "$(md_cell "$commit_date")"
+    printf '| Commit author | %s |\n' "$(md_cell "$commit_author")"
+    printf '| Commit subject | %s |\n' "$(md_cell "$commit_subject")"
+    printf '| Paths | %s |\n' "$(md_cell "$paths_label")"
+    echo '| License | Apache-2.0 and Zentus BSD. See `LICENSE`, `LICENSE.zentus`, and `NOTICE`. |'
+    echo
+    echo 'The exported upstream files are byte-identical copies at this commit and must not be edited. `export-upstream` regenerates this tree.'
+    echo '<!-- export-upstream:end -->'
+} > "$block"
+
+mkdir -p "$(dirname "$upstream_md")"
+if [ -n "$old_md" ] && [ -f "$old_md" ]; then
+    if grep -q '<!-- export-upstream:begin -->' "$old_md"; then
+        awk -v blockfile="$block" '
+            /<!-- export-upstream:begin -->/ {
+                while ((getline line < blockfile) > 0) print line
+                close(blockfile)
+                skip = 1
+                next
+            }
+            /<!-- export-upstream:end -->/ {
+                skip = 0
+                next
+            }
+            !skip {
+                print
+            }
+        ' "$old_md" > "$upstream_md.tmp"
+    else
+        cat "$old_md" > "$upstream_md.tmp"
+        printf '\n' >> "$upstream_md.tmp"
+        cat "$block" >> "$upstream_md.tmp"
+    fi
+else
+    cat "$block" > "$upstream_md.tmp"
+fi
+mv "$upstream_md.tmp" "$upstream_md"
+
+(
+    cd "$dest"
+    find . -type f \
+        ! -name CHECKSUMS.sha256 \
+        ! -name .export-upstream \
+        ! -name UPSTREAM.md \
+        -print \
+        | sed 's|^\./||'
+) | LC_ALL=C sort > "$tmp/checksum.paths"
+
+{
+    echo '# Generated by tools/export-upstream. Do not edit by hand except for a deliberate divergence.'
+    echo '# The uncommented line is the current hash; "# upstream" is the hash at the pinned tag.'
+    echo '# A deliberate divergence keeps the upstream line, updates the current line, and records'
+    echo '# "# divergence: <path> -- <reason>" in upstream-xerial_sqlite-jdbc.manifest.'
+} > "$dest/CHECKSUMS.sha256"
+while IFS= read -r path; do
+    hash=$(sha256_file "$dest/$path")
+    printf '# upstream %s ./%s\n' "$hash" "$path" >> "$dest/CHECKSUMS.sha256"
+    printf '%s  ./%s\n' "$hash" "$path" >> "$dest/CHECKSUMS.sha256"
+done < "$tmp/checksum.paths"
+
+echo "Exported tag $tag ($sha) to $dest"
+echo "Updated $upstream_md"

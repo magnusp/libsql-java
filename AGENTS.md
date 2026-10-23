@@ -29,11 +29,14 @@ mise exec -- ./mvnw -version
 
 ```text
 libsql-java/
-├── libsql-hrana-codec/       # Core protocol data structures & DirectHranaJsonCodec
-├── libsql-client/            # Low-level HTTP transport, baton state management, pipeline queue
-├── libsql-jdbc/              # Standard JDBC 4.3 driver (java.sql.* implementation)
-├── libsql-itests/            # Testcontainers (sqld) and Toxiproxy integration tests
-└── vendor/                   # Upstream specifications and documentation (Hrana v3, sqld)
+├── libsql-hrana-codec/         # Core protocol data structures & DirectHranaJsonCodec
+├── libsql-client/              # Low-level HTTP transport, baton state management, pipeline queue
+├── libsql-jdbc/                # Standard JDBC 4.3 driver (java.sql.* implementation)
+├── libsql-itests/              # Testcontainers (sqld) and Toxiproxy integration tests
+├── libsql-conformance/         # Selected xerial/sqlite-jdbc tests running against libSQL
+├── tools/                      # Maintainer scripts such as export-upstream
+├── upstream-xerial_sqlite-jdbc/  # Vendored xerial/sqlite-jdbc sources for conformance tests
+└── vendor/                     # Upstream specifications and documentation (Hrana v3, sqld)
 ```
 
 ### Module Guidelines
@@ -52,7 +55,8 @@ libsql-java/
    - Maps SQLite dynamic typing to JDBC SQL types and translates Hrana error codes to `SQLException` hierarchies.
 
 4. **`libsql-itests`**:
-   - All tests run against containerized `sqld` (`ghcr.io/tursodatabase/libsql-server:latest`).
+   - All tests run against a pinned `sqld` image (`ghcr.io/tursodatabase/libsql-server:v0.24.33`).
+   - The pin lives in the root `pom.xml` as the `libsql.image` property, and Maven passes it to both the integration and conformance test JVMs. Override it with `-Dlibsql.image=...` only for a deliberate version bump.
    - Includes HikariCP connection pool churn tests and Toxiproxy network toxicity tests.
 
 ---
@@ -84,6 +88,51 @@ To run a specific test:
 ```bash
 mise exec -- ./mvnw -pl libsql-itests -Dtest=HikariCpIntegrationIT test
 ```
+
+Under nono, set `DOCKER_CONFIG` before the command, as described in the workaround below.
+
+### nono Sandbox and Docker Config
+
+This environment may run inside a `nono` filesystem sandbox. The sandbox can block reads of `~/.docker/config.json` even when `docker info` works. Testcontainers then fails with:
+
+```text
+ServiceConfigurationError: ... EnvironmentAndSystemPropertyClientProviderStrategy could not be instantiated
+Caused by: java.io.FileNotFoundException: /home/<user>/.docker/config.json (Permission denied)
+```
+
+Check the exact path with:
+
+```bash
+nono why --self --path ~/.docker/config.json --op read
+```
+
+Do not change file permissions or the nono profile from inside the sandbox.
+
+The repository ships one shared readable Docker config at `libsql-conformance/src/test/docker-config/config.json`. It is an empty auth config, so it works only for public images such as the `sqld` and Toxiproxy images that the integration tests use. Both modules can use it.
+
+`libsql-conformance` uses the config automatically. It copies `src/test/docker-config/config.json` to `target/docker-config` and sets `DOCKER_CONFIG` for the Failsafe fork. To use a readable copy of your real Docker config instead, override the module property:
+
+```bash
+./mvnw -pl libsql-conformance -am -Ddocker.config.dir=/path/to/docker-config verify
+```
+
+Setting `DOCKER_CONFIG` in the shell is not enough for `libsql-conformance`, because its Failsafe fork receives its own value from `docker.config.dir`.
+
+`libsql-itests` has no copy step. Point `DOCKER_CONFIG` at the shared config directory in the shell, and the Failsafe fork inherits it:
+
+```bash
+DOCKER_CONFIG="$PWD/libsql-conformance/src/test/docker-config" \
+  ./mvnw -pl libsql-itests -am verify
+```
+
+The same override works for a single integration test:
+
+```bash
+DOCKER_CONFIG="$PWD/libsql-conformance/src/test/docker-config" \
+  ./mvnw -pl libsql-itests -am -Dit.test=HikariCpIntegrationIT verify
+```
+
+Use the absolute path shown. A relative `DOCKER_CONFIG` is resolved against the fork's working directory, not the shell's.
 
 ---
 
