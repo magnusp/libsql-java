@@ -122,7 +122,7 @@ public class LibsqlConnection implements Connection {
                         }
                         throw new SQLException("Unexpected response: " + ok.response());
                     }
-                    case StreamResult.Error err -> throw new SQLException(err.error().message());
+                    case StreamResult.Error err -> throw LibsqlErrorMapper.toSQLException(err.error());
                 };
             }
         } catch (LibsqlException e) {
@@ -185,7 +185,7 @@ public class LibsqlConnection implements Connection {
         }
         StreamResult sr = resp.results().get(0);
         if (sr instanceof StreamResult.Error err) {
-            throw new SQLException(err.error().message());
+            throw LibsqlErrorMapper.toSQLException(err.error());
         }
         StreamResponse response = ((StreamResult.Ok) sr).response();
         if (!(response instanceof StreamResponse.BatchResp batchResp)) {
@@ -197,7 +197,14 @@ public class LibsqlConnection implements Connection {
             HranaError error = batchResp.result().stepErrors().get(i);
             if (error != null) {
                 // JDBC stops the batch at the first failure and reports only the steps that ran.
-                throw new BatchUpdateException(error.message(), steppedUpdateCounts(results));
+                // The mapped exception is the cause, so SQLState and vendor code survive too.
+                SQLException mapped = LibsqlErrorMapper.toSQLException(error);
+                throw new BatchUpdateException(
+                        error.message(),
+                        mapped.getSQLState(),
+                        mapped.getErrorCode(),
+                        steppedUpdateCounts(results),
+                        mapped);
             }
             StmtResult result = batchResp.result().stepResults().get(i);
             if (result == null) {
@@ -251,7 +258,7 @@ public class LibsqlConnection implements Connection {
         StreamResult result = resp.results().get(0);
         if (result instanceof StreamResult.Error error) {
             closeStreamSilently();
-            throw new SQLException(error.error().message());
+            throw LibsqlErrorMapper.toSQLException(error.error());
         }
         if (!(result instanceof StreamResult.Ok ok)
                 || !(ok.response() instanceof StreamResponse.Execute)) {
@@ -382,7 +389,7 @@ public class LibsqlConnection implements Connection {
         }
         StreamResult result = resp.results().get(0);
         if (result instanceof StreamResult.Error error) {
-            throw new SQLException(error.error().message());
+            throw LibsqlErrorMapper.toSQLException(error.error());
         }
         if (!(result instanceof StreamResult.Ok ok)
                 || !(ok.response() instanceof StreamResponse.Execute)) {

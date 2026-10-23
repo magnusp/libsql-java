@@ -23,6 +23,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.net.URI;
 import java.sql.BatchUpdateException;
 import java.sql.SQLException;
+import java.sql.SQLIntegrityConstraintViolationException;
+import java.sql.SQLTransientConnectionException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -39,6 +41,7 @@ class LibsqlConnectionTest {
     private static final String SERVER_ERROR = "transaction end failed on server";
     private static final String TRANSPORT_ERROR = "Connection reset by peer";
     private static final String BATCH_FAILURE = "UNIQUE constraint failed: sample.id";
+    private static final String UNIQUE_VIOLATION = "UNIQUE constraint failed: sample.id";
 
     @Test
     void getMetaDataIsCachedPerConnection() throws SQLException {
@@ -435,6 +438,112 @@ class LibsqlConnectionTest {
                 .hasMessageContaining("neither a result nor an error");
     }
 
+    @ParameterizedTest(name = "autoCommit={0}")
+    @ValueSource(booleans = {true, false})
+    void uniqueViolationMapsToTheSameExceptionTypeAndSqlStateInBothModes(boolean autoCommit)
+            throws SQLException {
+        ScriptedClient client = new ScriptedClient((request, index) -> {
+            if ("INSERT INTO sample VALUES (1)".equals(executedSql(request))) {
+                return errorResponse(new HranaError(UNIQUE_VIOLATION, "SQLITE_CONSTRAINT_UNIQUE"));
+            }
+            return successResponse(request);
+        });
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.setAutoCommit(autoCommit);
+
+        assertThatThrownBy(() -> connection.executeStatement(new Stmt("INSERT INTO sample VALUES (1)")))
+                .isInstanceOf(SQLIntegrityConstraintViolationException.class)
+                .hasMessageContaining("UNIQUE constraint failed")
+                .satisfies(thrown -> {
+                    SQLException mapped = (SQLException) thrown;
+                    assertThat(mapped.getSQLState()).isEqualTo("23000");
+                    assertThat(mapped.getErrorCode()).isEqualTo(19);
+                });
+    }
+
+    @Test
+    void failureToBeginTheTransactionIsMapped() throws SQLException {
+        ScriptedClient client = new ScriptedClient((request, index) -> {
+            if ("BEGIN".equals(executedSql(request))) {
+                return errorResponse(new HranaError("database is locked", "SQLITE_BUSY"));
+            }
+            return successResponse(request);
+        });
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.setAutoCommit(false);
+
+        assertThatThrownBy(() -> connection.executeStatement(new Stmt("SELECT 1")))
+                .isInstanceOf(SQLTransientConnectionException.class)
+                .hasMessageContaining("database is locked")
+                .satisfies(thrown -> assertThat(((SQLException) thrown).getSQLState()).isEqualTo("08001"));
+    }
+
+    @Test
+    void aStatementErrorInsideTheTransactionIsMapped() throws SQLException {
+        ScriptedClient client = new ScriptedClient((request, index) -> {
+            if ("INSERT INTO sample VALUES (2)".equals(executedSql(request))) {
+                return errorResponse(new HranaError(UNIQUE_VIOLATION, "SQLITE_CONSTRAINT_UNIQUE"));
+            }
+            return successResponse(request);
+        });
+        LibsqlConnection connection = connectionInTransaction(client);
+
+        assertThatThrownBy(() -> connection.executeStatement(new Stmt("INSERT INTO sample VALUES (2)")))
+                .isInstanceOf(SQLIntegrityConstraintViolationException.class)
+                .satisfies(thrown -> assertThat(((SQLException) thrown).getSQLState()).isEqualTo("23000"));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"COMMIT", "ROLLBACK"})
+    void aTransactionEndErrorIsMapped(String command) throws SQLException {
+        ScriptedClient client = new ScriptedClient((request, index) -> {
+            if (command.equals(executedSql(request))) {
+                return errorResponse(new HranaError(UNIQUE_VIOLATION, "SQLITE_CONSTRAINT_UNIQUE"));
+            }
+            return successResponse(request);
+        });
+        LibsqlConnection connection = connectionInTransaction(client);
+
+        assertThatThrownBy(() -> endTransaction(connection, command))
+                .isInstanceOf(SQLIntegrityConstraintViolationException.class)
+                .satisfies(thrown -> assertThat(((SQLException) thrown).getSQLState()).isEqualTo("23000"));
+    }
+
+    @Test
+    void aBatchStepErrorKeepsTheMappedExceptionAsTheCause() throws SQLException {
+        ScriptedClient client = new ScriptedClient(
+                (request, index) -> batchResponse(request, 1, new ArrayList<>()));
+        LibsqlConnection connection = connectionInTransaction(client);
+
+        assertThatThrownBy(() -> connection.executeBatch(List.of(
+                new Stmt("INSERT INTO sample VALUES (1)"),
+                new Stmt("INSERT INTO sample VALUES (2)"),
+                new Stmt("INSERT INTO sample VALUES (3)"))))
+                .isInstanceOf(BatchUpdateException.class)
+                .satisfies(thrown -> {
+                    BatchUpdateException batch = (BatchUpdateException) thrown;
+                    assertThat(batch.getSQLState()).isEqualTo("23000");
+                    assertThat(batch.getErrorCode()).isEqualTo(19);
+                    assertThat(batch.getCause())
+                            .isInstanceOf(SQLIntegrityConstraintViolationException.class);
+                });
+    }
+
+    @Test
+    void aConstraintErrorWithoutACodeFallsBackToMessageCategorization() throws SQLException {
+        ScriptedClient client = new ScriptedClient((request, index) -> {
+            if ("INSERT INTO sample VALUES (2)".equals(executedSql(request))) {
+                return errorResponse(new HranaError(UNIQUE_VIOLATION, null));
+            }
+            return successResponse(request);
+        });
+        LibsqlConnection connection = connectionInTransaction(client);
+
+        assertThatThrownBy(() -> connection.executeStatement(new Stmt("INSERT INTO sample VALUES (2)")))
+                .isInstanceOf(SQLIntegrityConstraintViolationException.class)
+                .satisfies(thrown -> assertThat(((SQLException) thrown).getSQLState()).isEqualTo("23000"));
+    }
+
     private static int[] countsOfStepsThatRan(int failAt) {
         int[] counts = new int[failAt];
         for (int i = 0; i < counts.length; i++) {
@@ -575,6 +684,30 @@ class LibsqlConnectionTest {
         private ScriptedClient(Handler handler) {
             super(CONFIG);
             this.handler = handler;
+        }
+
+        /**
+         * Mirrors the real client's one-shot close path, which does not go through {@link
+         * #sendPipeline(PipelineReqBody, URI)}: it wraps a server error in a {@link LibsqlException}
+         * so the connection's mapper sees the protocol error.
+         */
+        @Override
+        public StmtResult executeOneShot(Stmt stmt) {
+            PipelineReqBody request = new PipelineReqBody(null, List.of(
+                    new StreamRequest.Execute(stmt),
+                    StreamRequest.Close.INSTANCE));
+            requests.add(request);
+            PipelineRespBody response = handler.handle(request, requests.size() - 1);
+            StreamResult first = response.results().get(0);
+            return switch (first) {
+                case StreamResult.Ok ok -> {
+                    if (ok.response() instanceof StreamResponse.Execute exec) {
+                        yield exec.result();
+                    }
+                    throw new LibsqlException("Unexpected stream response: " + ok.response(), null, 200);
+                }
+                case StreamResult.Error err -> throw new LibsqlException(err.error());
+            };
         }
 
         @Override
