@@ -27,7 +27,7 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     private static final Pattern VARCHAR_TYPE = Pattern.compile(".*(CHAR|CLOB|TEXT|BLOB).*");
     private static final Pattern FLOAT_TYPE = Pattern.compile(".*(REAL|FLOA|DOUB|DEC|NUM).*");
     private static final Pattern NAMED_PRIMARY_KEY = Pattern.compile(
-            "\\bCONSTRAINT\\s+(\"[^\"]+\"|`[^`]+`|\\[[^\\]]+\\]|'[^']+'|[^\\s]+)\\s+PRIMARY\\s+KEY\\b",
+            "\\bCONSTRAINT\\s*(\"[^\"]+\"|`[^`]+`|\\[[^\\]]+\\]|'[^']+'|[^\\s]+)\\s*PRIMARY\\s+KEY\\b",
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     private static final Pattern NAMED_FOREIGN_KEY = Pattern.compile(
             "\\bCONSTRAINT\\s+(\"[^\"]+\"|`[^`]+`|\\[[^\\]]+\\]|'[^']+'|[^\\s]+)\\s+FOREIGN\\s+KEY\\b",
@@ -89,6 +89,83 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
                     typeInfoRow("BLOB", Types.BLOB, 0, 1, 0)),
             0,
             null);
+
+    private static final StmtResult PROCEDURES_RESULT = emptyMetadataResult(List.of(
+            new Col("PROCEDURE_CAT", "TEXT"),
+            new Col("PROCEDURE_SCHEM", "TEXT"),
+            new Col("PROCEDURE_NAME", "TEXT"),
+            new Col("UNDEF1", "TEXT"),
+            new Col("UNDEF2", "TEXT"),
+            new Col("UNDEF3", "TEXT"),
+            new Col("REMARKS", "TEXT"),
+            new Col("PROCEDURE_TYPE", "INTEGER")));
+
+    private static final StmtResult PROCEDURE_COLUMNS_RESULT = emptyMetadataResult(List.of(
+            new Col("PROCEDURE_CAT", "TEXT"),
+            new Col("PROCEDURE_SCHEM", "TEXT"),
+            new Col("PROCEDURE_NAME", "TEXT"),
+            new Col("COLUMN_NAME", "TEXT"),
+            new Col("COLUMN_TYPE", "INTEGER"),
+            new Col("DATA_TYPE", "INTEGER"),
+            new Col("TYPE_NAME", "TEXT"),
+            new Col("PRECISION", "INTEGER"),
+            new Col("LENGTH", "INTEGER"),
+            new Col("SCALE", "INTEGER"),
+            new Col("RADIX", "INTEGER"),
+            new Col("NULLABLE", "INTEGER"),
+            new Col("REMARKS", "TEXT")));
+
+    private static final StmtResult COLUMN_PRIVILEGES_RESULT = emptyMetadataResult(List.of(
+            new Col("TABLE_CAT", "TEXT"),
+            new Col("TABLE_SCHEM", "TEXT"),
+            new Col("TABLE_NAME", "TEXT"),
+            new Col("COLUMN_NAME", "TEXT"),
+            new Col("GRANTOR", "TEXT"),
+            new Col("GRANTEE", "TEXT"),
+            new Col("PRIVILEGE", "TEXT"),
+            new Col("IS_GRANTABLE", "TEXT")));
+
+    private static final StmtResult TABLE_PRIVILEGES_RESULT = emptyMetadataResult(List.of(
+            new Col("TABLE_CAT", "TEXT"),
+            new Col("TABLE_SCHEM", "TEXT"),
+            new Col("TABLE_NAME", "TEXT"),
+            new Col("GRANTOR", "TEXT"),
+            new Col("GRANTEE", "TEXT"),
+            new Col("PRIVILEGE", "TEXT"),
+            new Col("IS_GRANTABLE", "TEXT")));
+
+    private static final StmtResult BEST_ROW_IDENTIFIER_RESULT = emptyMetadataResult(List.of(
+            new Col("SCOPE", "INTEGER"),
+            new Col("COLUMN_NAME", "TEXT"),
+            new Col("DATA_TYPE", "INTEGER"),
+            new Col("TYPE_NAME", "TEXT"),
+            new Col("COLUMN_SIZE", "INTEGER"),
+            new Col("BUFFER_LENGTH", "INTEGER"),
+            new Col("DECIMAL_DIGITS", "INTEGER"),
+            new Col("PSEUDO_COLUMN", "INTEGER")));
+
+    private static final StmtResult VERSION_COLUMNS_RESULT = emptyMetadataResult(List.of(
+            new Col("SCOPE", "INTEGER"),
+            new Col("COLUMN_NAME", "TEXT"),
+            new Col("DATA_TYPE", "INTEGER"),
+            new Col("TYPE_NAME", "TEXT"),
+            new Col("COLUMN_SIZE", "INTEGER"),
+            new Col("BUFFER_LENGTH", "INTEGER"),
+            new Col("DECIMAL_DIGITS", "INTEGER"),
+            new Col("PSEUDO_COLUMN", "INTEGER")));
+
+    private static final StmtResult UDTS_RESULT = emptyMetadataResult(List.of(
+            new Col("TYPE_CAT", "TEXT"),
+            new Col("TYPE_SCHEM", "TEXT"),
+            new Col("TYPE_NAME", "TEXT"),
+            new Col("CLASS_NAME", "TEXT"),
+            new Col("DATA_TYPE", "INTEGER"),
+            new Col("REMARKS", "TEXT"),
+            new Col("BASE_TYPE", "INTEGER")));
+
+    private static StmtResult emptyMetadataResult(List<Col> columns) {
+        return new StmtResult(columns, List.of(), 0, null);
+    }
 
     private final LibsqlConnection connection;
     private String cachedDatabaseProductVersion;
@@ -408,13 +485,22 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     public ResultSet getColumns(String catalog, String schemaPattern, String tableNamePattern, String columnNamePattern) throws SQLException {
         String tablePattern = tableNamePattern == null || tableNamePattern.isEmpty() ? "%" : tableNamePattern;
         String columnPattern = columnNamePattern == null || columnNamePattern.isEmpty() ? "%" : columnNamePattern;
-        String sql = "SELECT m.name AS TABLE_NAME, m.sql AS CREATE_SQL, p.cid AS CID, p.name AS COLUMN_NAME, "
-                + "p.type AS DECLARED_TYPE, p.\"notnull\" AS NOT_NULL, p.dflt_value AS COLUMN_DEF, p.pk AS PK, "
-                + "p.hidden AS HIDDEN FROM sqlite_master m JOIN pragma_table_xinfo(m.name) p "
-                + "WHERE m.type IN ('table', 'view')"
-                + " AND m.name LIKE '" + escapeLiteral(tablePattern) + "' ESCAPE '\\'"
+        String sql = "WITH t(TABLE_NAME, CREATE_SQL, TABLE_RANK) AS ("
+                + " SELECT 'sqlite_schema' AS TABLE_NAME, NULL AS CREATE_SQL, 1 AS TABLE_RANK"
+                + " UNION ALL SELECT NAME, SQL, 1 FROM sqlite_schema"
+                + " WHERE NAME LIKE 'sqlite\\_%' ESCAPE '\\'"
+                + " UNION ALL SELECT NAME, SQL, 2 FROM sqlite_schema"
+                + " WHERE NAME NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND UPPER(TYPE) = 'TABLE'"
+                + " UNION ALL SELECT NAME, SQL, 3 FROM sqlite_schema"
+                + " WHERE NAME NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND UPPER(TYPE) = 'VIEW'"
+                + " UNION ALL SELECT NAME, NULL, 0 FROM sqlite_temp_master"
+                + ") SELECT t.TABLE_NAME AS TABLE_NAME, t.CREATE_SQL AS CREATE_SQL, p.cid AS CID, "
+                + "p.name AS COLUMN_NAME, p.type AS DECLARED_TYPE, p.\"notnull\" AS NOT_NULL, "
+                + "p.dflt_value AS COLUMN_DEF, p.pk AS PK, p.hidden AS HIDDEN "
+                + "FROM t JOIN pragma_table_xinfo(t.TABLE_NAME) p "
+                + "WHERE t.TABLE_NAME LIKE '" + escapeLiteral(tablePattern) + "' ESCAPE '\\'"
                 + " AND p.name LIKE '" + escapeLiteral(columnPattern) + "' ESCAPE '\\'"
-                + " ORDER BY m.name, p.cid";
+                + " ORDER BY t.TABLE_RANK, t.TABLE_NAME, p.cid";
         // getColumns synthesizes its column labels, so the raw SQL must not drive column-origin
         // resolution for the result set.
         return executeMetadataQuery(sql, null, LibsqlDatabaseMetaData::columnsResult);
@@ -576,6 +662,9 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
                         Value.of(primaryKeyName(text(values.get(2)))))));
             }
         }
+        // xerial orders getPrimaryKeys by column name, not by the declared key sequence.
+        rows.sort(Comparator.comparing(
+                row -> text(row.values().get(3)), Comparator.nullsFirst(Comparator.naturalOrder())));
         return new StmtResult(PRIMARY_KEY_COLUMNS, rows, 0, null);
     }
 
@@ -822,7 +911,7 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
         String sql = "SELECT p.name AS COLUMN_NAME, p.pk AS KEY_SEQ, s.sql AS CREATE_SQL "
                 + "FROM pragma_table_info('" + escapedTable + "') p "
                 + "LEFT JOIN sqlite_schema s ON lower(s.name) = lower('" + escapedTable + "') "
-                + "WHERE p.pk > 0 ORDER BY p.pk";
+                + "WHERE p.pk > 0";
         return executeMetadataQuery(sql, null, raw -> primaryKeysResult(raw, table));
     }
 
@@ -840,14 +929,14 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
         return connection;
     }
 
-    @Override public ResultSet getProcedures(String catalog, String schemaPattern, String procedureNamePattern) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
-    @Override public ResultSet getProcedureColumns(String catalog, String schemaPattern, String procedureNamePattern, String columnNamePattern) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override public ResultSet getProcedures(String catalog, String schemaPattern, String procedureNamePattern) throws SQLException { return metadataResult(PROCEDURES_RESULT); }
+    @Override public ResultSet getProcedureColumns(String catalog, String schemaPattern, String procedureNamePattern, String columnNamePattern) throws SQLException { return metadataResult(PROCEDURE_COLUMNS_RESULT); }
     @Override public ResultSet getSchemas() throws SQLException { return executeMetadataQuery("SELECT NULL AS TABLE_SCHEM, NULL AS TABLE_CATALOG WHERE 0"); }
     @Override public ResultSet getCatalogs() throws SQLException { return executeMetadataQuery("SELECT NULL AS TABLE_CAT WHERE 0"); }
-    @Override public ResultSet getColumnPrivileges(String catalog, String schema, String table, String columnNamePattern) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
-    @Override public ResultSet getTablePrivileges(String catalog, String schemaPattern, String tableNamePattern) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
-    @Override public ResultSet getBestRowIdentifier(String catalog, String schema, String table, int scope, boolean nullable) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
-    @Override public ResultSet getVersionColumns(String catalog, String schema, String table) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override public ResultSet getColumnPrivileges(String catalog, String schema, String table, String columnNamePattern) throws SQLException { return metadataResult(COLUMN_PRIVILEGES_RESULT); }
+    @Override public ResultSet getTablePrivileges(String catalog, String schemaPattern, String tableNamePattern) throws SQLException { return metadataResult(TABLE_PRIVILEGES_RESULT); }
+    @Override public ResultSet getBestRowIdentifier(String catalog, String schema, String table, int scope, boolean nullable) throws SQLException { return metadataResult(BEST_ROW_IDENTIFIER_RESULT); }
+    @Override public ResultSet getVersionColumns(String catalog, String schema, String table) throws SQLException { return metadataResult(VERSION_COLUMNS_RESULT); }
     @Override
     public ResultSet getImportedKeys(String catalog, String schema, String table) throws SQLException {
         return executeMetadataQuery(
@@ -869,6 +958,13 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
             String foreignSchema,
             String foreignTable)
             throws SQLException {
+        if (requestsNamespace(parentCatalog)
+                || requestsNamespace(parentSchema)
+                || requestsNamespace(foreignCatalog)
+                || requestsNamespace(foreignSchema)) {
+            // The server reports no catalog and no schema, so a specific request matches nothing.
+            return metadataResult(emptyMetadataResult(FOREIGN_KEY_COLUMNS));
+        }
         if (parentTable == null) {
             return getExportedKeys(foreignCatalog, foreignSchema, foreignTable);
         }
@@ -879,6 +975,10 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
                 exportedKeysSql(parentTable, foreignTable),
                 null,
                 raw -> exportedKeysResult(raw, parentCatalog, parentSchema, foreignCatalog, foreignSchema));
+    }
+
+    private static boolean requestsNamespace(String name) {
+        return name != null && !name.isEmpty();
     }
 
     @Override
@@ -911,7 +1011,7 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     @Override public boolean deletesAreDetected(int type) throws SQLException { return false; }
     @Override public boolean insertsAreDetected(int type) throws SQLException { return false; }
     @Override public boolean supportsBatchUpdates() throws SQLException { return true; }
-    @Override public ResultSet getUDTs(String catalog, String schemaPattern, String typeNamePattern, int[] types) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override public ResultSet getUDTs(String catalog, String schemaPattern, String typeNamePattern, int[] types) throws SQLException { return metadataResult(UDTS_RESULT); }
     @Override public boolean supportsSavepoints() throws SQLException { return false; }
     @Override public boolean supportsNamedParameters() throws SQLException { return false; }
     @Override public boolean supportsMultipleOpenResults() throws SQLException { return false; }
