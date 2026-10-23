@@ -68,7 +68,7 @@ public abstract class SqldContainerBase {
             .withEnv("SQLD_NODE", "primary")
             .withEnv("SQLD_DISABLE_INTELLIGENT_THROTTLING", "true")
             .withEnv("SQLD_CONNECTION_CREATION_TIMEOUT_SEC", "30")
-            .waitingFor(Wait.forHttp("/v3/pipeline")
+            .waitingFor(Wait.forHttp("/v2/pipeline")
                     .forPort(PORT)
                     .forStatusCode(405)
                     .withStartupTimeout(Duration.ofSeconds(60)));
@@ -110,11 +110,14 @@ private String getDriverJdbcUrl() {
 * **`SQLD_CONNECTION_CREATION_TIMEOUT_SEC=30`**: Extends the SQLite file connection creation timeout to avoid transient lock timeouts during heavy parallel integration test runs.
 
 ### B. Healthcheck & Wait Strategy
-The driver talks Hrana 3 to `sqld` at `/v3/pipeline` (see `LibsqlHttpClient`, which
-posts pipeline requests to `base + "/v3/pipeline"`). Because `/v3/pipeline` requires
-an HTTP `POST` request with a JSON body, standard `GET /` health checks can be misleading:
-* A `GET` request to `/v3/pipeline` returns **HTTP 405 Method Not Allowed**, which confirms the HTTP server and routing engine are fully initialized and listening.
-* `Wait.forHttp("/v3/pipeline").forPort(PORT).forStatusCode(405)` with a 60-second startup timeout provides a fast and reliable readiness probe.
+The test containers probe `/v2/pipeline` for readiness, matching the code in
+`SqldContainerBase`, `NetworkToxicityIT`, `NamespacePathIT`, and
+`XerialTestServer`. The driver itself talks Hrana 3 to `sqld` at `/v3/pipeline`
+(see `LibsqlHttpClient`, which posts pipeline requests to
+`base + "/v3/pipeline"`). Both endpoints require an HTTP `POST` request with a
+JSON body, so standard `GET /` health checks can be misleading:
+* A `GET` request to `/v2/pipeline` returns **HTTP 405 Method Not Allowed**, which confirms the HTTP server and routing engine are fully initialized and listening.
+* `Wait.forHttp("/v2/pipeline").forPort(PORT).forStatusCode(405)` with a 60-second startup timeout provides a fast and reliable readiness probe.
 
 ---
 
@@ -149,7 +152,7 @@ public class NetworkToxicityIT {
             .withEnv("SQLD_NODE", "primary")
             .withEnv("SQLD_DISABLE_INTELLIGENT_THROTTLING", "true")
             .withEnv("SQLD_CONNECTION_CREATION_TIMEOUT_SEC", "30")
-            .waitingFor(Wait.forHttp("/v3/pipeline")
+            .waitingFor(Wait.forHttp("/v2/pipeline")
                     .forPort(8080)
                     .forStatusCode(405)
                     .withStartupTimeout(Duration.ofSeconds(60)));
