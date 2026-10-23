@@ -74,7 +74,7 @@ public class LibsqlResultSet implements ResultSet {
     private int fetchSize = 0;
     private LibsqlResultSetMetaData metadata;
 
-    // Mitigation for Bug 6: O(1) column label lookup
+    // O(1) column label lookup; the map is built lazily on first use.
     private Map<String, Integer> columnNameToIndex;
 
     public LibsqlResultSet(Statement statement, StmtResult result) {

@@ -60,7 +60,7 @@ public class LibsqlHttpClient {
     }
 
     public StmtResult executeOneShot(Stmt stmt) {
-        // Mitigation for Bug 1: pipeline [execute, close] in a single roundtrip to prevent 128-stream 10s stall
+        // One-shot: [execute, close] in one round trip, so no idle stream is left for the server to reap.
         PipelineReqBody req = new PipelineReqBody(
                 null,
                 List.of(

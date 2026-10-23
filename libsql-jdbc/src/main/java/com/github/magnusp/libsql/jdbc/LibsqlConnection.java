@@ -129,7 +129,7 @@ public class LibsqlConnection implements Connection {
             checkClosed();
             try {
                 if (autoCommit) {
-                    // One-shot execution with single-roundtrip close (prevents Bug 1 128-stream 10s stall)
+                    // One-shot: single-round-trip close, so no idle stream is left for the server to reap.
                     return client.executeOneShot(stmt);
                 } else {
                     ensureTransactionStarted();
