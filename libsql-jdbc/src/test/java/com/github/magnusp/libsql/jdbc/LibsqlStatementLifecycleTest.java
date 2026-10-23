@@ -126,6 +126,73 @@ class LibsqlStatementLifecycleTest {
     }
 
     @Test
+    void closingQueryResultSetClosesCloseOnCompletionStatement() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(ROWS);
+        Statement statement = connection.createStatement();
+        statement.closeOnCompletion();
+
+        ResultSet resultSet = statement.executeQuery("select value from t");
+        resultSet.close();
+
+        assertThat(resultSet.isClosed()).isTrue();
+        assertThat(statement.isClosed()).isTrue();
+    }
+
+    @Test
+    void closingExecuteResultSetClosesCloseOnCompletionStatement() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(ROWS);
+        Statement statement = connection.createStatement();
+        statement.closeOnCompletion();
+
+        assertThat(statement.execute("select value from t")).isTrue();
+        ResultSet resultSet = statement.getResultSet();
+        resultSet.close();
+
+        assertThat(resultSet.isClosed()).isTrue();
+        assertThat(statement.isClosed()).isTrue();
+    }
+
+    @Test
+    void closingPreparedResultSetClosesCloseOnCompletionStatement() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(ROWS);
+        LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "select value from t");
+        statement.closeOnCompletion();
+
+        ResultSet resultSet = statement.executeQuery();
+        resultSet.close();
+
+        assertThat(resultSet.isClosed()).isTrue();
+        assertThat(statement.isClosed()).isTrue();
+    }
+
+    @Test
+    void closingResultSetLeavesStatementWithoutCloseOnCompletionOpen() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(ROWS);
+        Statement statement = connection.createStatement();
+
+        ResultSet resultSet = statement.executeQuery("select value from t");
+        resultSet.close();
+
+        assertThat(resultSet.isClosed()).isTrue();
+        assertThat(statement.isClosed()).isFalse();
+    }
+
+    @Test
+    void metadataStatementClosesWithoutCloseOnCompletion() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(ROWS);
+
+        ResultSet resultSet = connection.getMetaData().getTableTypes();
+        LibsqlStatement statement = (LibsqlStatement) resultSet.getStatement();
+        assertThat(statement.isCloseOnCompletion()).isFalse();
+
+        resultSet.close();
+
+        assertThat(resultSet.isClosed()).isTrue();
+        assertThat(statement.isClosed()).isTrue();
+    }
+
+    @Test
     void executeAndGetConnectionStillWorkAfterClose() throws SQLException {
         RecordingConnection connection = new RecordingConnection(ROWS);
         Statement statement = connection.createStatement();
