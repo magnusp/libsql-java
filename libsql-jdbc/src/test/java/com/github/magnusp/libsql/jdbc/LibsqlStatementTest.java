@@ -181,10 +181,21 @@ class LibsqlStatementTest {
                         .containsExactly(1, 0));
     }
 
+    @Test
+    void plainStatementBindsNullForUnboundPlaceholders() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(THREE_ROWS);
+        LibsqlStatement statement = new LibsqlStatement(connection);
+
+        statement.execute("insert into t values (?)");
+
+        assertThat(connection.executedStatements.get(0).args()).containsExactly(Value.ofNull());
+    }
+
     private static final class RecordingConnection extends LibsqlConnection {
         private final StmtResult result;
         private final List<StmtResult> batchResults;
         private final List<String> executedSql = new ArrayList<>();
+        private final List<Stmt> executedStatements = new ArrayList<>();
 
         private RecordingConnection(StmtResult result) {
             this(result, List.of());
@@ -199,6 +210,7 @@ class LibsqlStatementTest {
         @Override
         public StmtResult executeStatement(Stmt stmt) {
             executedSql.add(stmt.sql());
+            executedStatements.add(stmt);
             return result;
         }
 

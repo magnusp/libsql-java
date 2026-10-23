@@ -7,9 +7,14 @@ import com.github.magnusp.libsql.hrana.codec.StmtResult;
 import com.github.magnusp.libsql.hrana.codec.Value;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayInputStream;
+import java.io.StringReader;
+import java.nio.charset.StandardCharsets;
+import java.sql.ParameterMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -148,9 +153,115 @@ class LibsqlPreparedStatementTest {
         }
     }
 
+    @Test
+    void parameterCountComesFromThePlaceholders() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "select ?, ?, ?")) {
+            assertThat(statement.getParameterMetaData().getParameterCount()).isEqualTo(3);
+        }
+        try (LibsqlPreparedStatement statement = new LibsqlPreparedStatement(
+                connection, "select '?', \"?\", ? -- trailing ?\n")) {
+            assertThat(statement.getParameterMetaData().getParameterCount()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void parameterTypesAreUnknownWithoutADescription() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "insert into t values (?)")) {
+            ParameterMetaData meta = statement.getParameterMetaData();
+
+            assertThat(meta.getParameterType(1)).isEqualTo(Types.OTHER);
+            assertThat(meta.getParameterTypeName(1)).isEqualTo("OTHER");
+            assertThat(meta.getParameterMode(1)).isEqualTo(ParameterMetaData.parameterModeIn);
+        }
+    }
+
+    @Test
+    void clearParametersBindsNullArguments() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "insert into t values (?)")) {
+            statement.setString(1, "value");
+            statement.clearParameters();
+
+            assertThat(statement.executeUpdate()).isEqualTo(1);
+        }
+
+        assertThat(connection.executed.get(0).args()).containsExactly(Value.ofNull());
+    }
+
+    @Test
+    void unsetParametersBindNullArguments() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "insert into t values (?, ?)")) {
+            statement.setInt(1, 7);
+
+            statement.executeUpdate();
+        }
+
+        assertThat(connection.executed.get(0).args())
+                .containsExactly(Value.of(7L), Value.ofNull());
+    }
+
+    @Test
+    void streamSettersBindLocalConversions() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        byte[] bytes = {1, 2, 3};
+        String supplementary = "\uD840\uDC40 stream";
+        try (LibsqlPreparedStatement statement = new LibsqlPreparedStatement(
+                connection, "insert into t values (?, ?, ?, ?, ?)")) {
+            statement.setClob(1, new StringReader("clob"));
+            statement.setBlob(2, new ByteArrayInputStream(bytes));
+            statement.setBinaryStream(3, new ByteArrayInputStream(bytes), bytes.length);
+            statement.setAsciiStream(
+                    4,
+                    new ByteArrayInputStream("ascii".getBytes(StandardCharsets.US_ASCII)),
+                    "ascii".length());
+            statement.setUnicodeStream(
+                    5,
+                    new ByteArrayInputStream(supplementary.getBytes(StandardCharsets.UTF_8)),
+                    supplementary.getBytes(StandardCharsets.UTF_8).length);
+
+            statement.executeUpdate();
+        }
+
+        assertThat(connection.executed.get(0).args())
+                .containsExactly(
+                        Value.of("clob"),
+                        Value.of(bytes),
+                        Value.of(bytes),
+                        Value.of("ascii"),
+                        Value.of(supplementary));
+    }
+
+    @Test
+    void streamSettersWithoutALengthReadToEndOfStream() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        byte[] bytes = {4, 5, 6};
+        try (LibsqlPreparedStatement statement = new LibsqlPreparedStatement(
+                connection, "insert into t values (?, ?, ?, ?)")) {
+            statement.setClob(1, new StringReader("clob"));
+            statement.setBlob(2, new ByteArrayInputStream(bytes));
+            statement.setBinaryStream(3, new ByteArrayInputStream(bytes));
+            statement.setAsciiStream(
+                    4, new ByteArrayInputStream("ascii".getBytes(StandardCharsets.US_ASCII)));
+
+            statement.executeUpdate();
+        }
+
+        assertThat(connection.executed.get(0).args())
+                .containsExactly(Value.of("clob"), Value.of(bytes), Value.of(bytes),
+                        Value.of("ascii"));
+    }
+
     private static final class RecordingConnection extends LibsqlConnection {
         private final StmtResult result;
         private final List<String> executedSql = new ArrayList<>();
+        private final List<Stmt> executed = new ArrayList<>();
         private int executeCalls;
 
         private RecordingConnection(StmtResult result) {
@@ -162,6 +273,7 @@ class LibsqlPreparedStatementTest {
         public StmtResult executeStatement(Stmt stmt) {
             executeCalls++;
             executedSql.add(stmt.sql());
+            executed.add(stmt);
             return result;
         }
     }
