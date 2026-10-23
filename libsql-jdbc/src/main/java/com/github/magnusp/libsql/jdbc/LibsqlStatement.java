@@ -86,11 +86,17 @@ public class LibsqlStatement implements Statement {
             throw new SQLException("Query did not produce a ResultSet: " + sql);
         }
         LibsqlResultSet resultSet = new LibsqlResultSet(this, result, sql, false);
-        assignResultSet(resultSet, true);
+        assignResultSet(resultSet, result, sql, true);
         return resultSet;
     }
 
     protected void assignResultSet(LibsqlResultSet resultSet, boolean requested)
+            throws SQLException {
+        assignResultSet(resultSet, null, null, requested);
+    }
+
+    protected void assignResultSet(
+            LibsqlResultSet resultSet, StmtResult result, String sql, boolean requested)
             throws SQLException {
         if (!isClosed()) {
             beforeResultSetAssignment();
@@ -103,6 +109,7 @@ public class LibsqlStatement implements Statement {
                 updateCount = -1;
                 return;
             }
+            updateGeneratedKeys(sql, result);
             currentResultSet = resultSet;
             updateCount = -1;
             resultSetRequested = requested;
@@ -149,8 +156,21 @@ public class LibsqlStatement implements Statement {
     }
 
     private StmtResult executeSql(String sql) throws SQLException {
-        closeCurrentResultSet();
+        beginExecution();
         return connection.executeStatement(new Stmt(sql));
+    }
+
+    /**
+     * Resets the state every execution path starts from: the previous result set is closed and the
+     * previous generated keys are discarded. Without this, a path that does not produce keys of
+     * its own would report the keys of the statement before it.
+     */
+    protected void beginExecution() throws SQLException {
+        synchronized (stateLock) {
+            closeCurrentResultSet();
+            clearGeneratedKeys();
+            updateCount = -1;
+        }
     }
 
     protected void closeCurrentResultSet() throws SQLException {
@@ -186,15 +206,49 @@ public class LibsqlStatement implements Statement {
                     && result != null
                     && result.lastInsertRowid() != null
                     && isInsertSql(sql)) {
-                long rowid = result.lastInsertRowid();
-                StmtResult keys = new StmtResult(
-                        List.of(new Col("last_insert_rowid()", null)),
-                        List.of(new Row(List.of(Value.of(rowid)))),
-                        0,
-                        rowid);
-                generatedKeys = new LibsqlResultSet(this, keys);
+                generatedKeys = generatedKeysResultSet(List.of(result.lastInsertRowid()));
             }
         }
+    }
+
+    /**
+     * Builds the generated keys for a batch from the {@code BatchResult} step results. Each insert
+     * step contributes one row, matching the java.sql shape of a result set with one row per
+     * generated key. Steps that are not inserts contribute nothing because Hrana leaves {@code
+     * last_insert_rowid} undefined for them.
+     */
+    private void updateBatchGeneratedKeys(List<Stmt> statements, List<StmtResult> results)
+            throws SQLException {
+        synchronized (stateLock) {
+            clearGeneratedKeys();
+            List<Long> rowids = new ArrayList<>();
+            for (int i = 0; i < results.size(); i++) {
+                StmtResult result = results.get(i);
+                String sql = statements.get(i).sql();
+                if (result != null
+                        && result.lastInsertRowid() != null
+                        && sql != null
+                        && isInsertSql(sql)) {
+                    rowids.add(result.lastInsertRowid());
+                }
+            }
+            if (!rowids.isEmpty()) {
+                generatedKeys = generatedKeysResultSet(rowids);
+            }
+        }
+    }
+
+    private LibsqlResultSet generatedKeysResultSet(List<Long> rowids) {
+        List<Row> rows = new ArrayList<>(rowids.size());
+        for (Long rowid : rowids) {
+            rows.add(new Row(List.of(Value.of(rowid))));
+        }
+        StmtResult keys = new StmtResult(
+                List.of(new Col("last_insert_rowid()", null)),
+                rows,
+                0,
+                rowids.get(rowids.size() - 1));
+        return new LibsqlResultSet(this, keys);
     }
 
     protected void clearGeneratedKeys() throws SQLException {
@@ -357,11 +411,31 @@ public class LibsqlStatement implements Statement {
         batchStatements.clear();
     }
 
+    /**
+     * Executes the batch and reports one update count per step. The generated keys and the update
+     * count are rebuilt from the step results, so neither can leak from an earlier execution. The
+     * update count is the total affected rows across the batch; JDBC leaves {@code getUpdateCount}
+     * unspecified after a batch, and xerial leaves the previous value in place.
+     */
     @Override
     public int[] executeBatch() throws SQLException {
         checkClosed();
+        List<Stmt> statements = new ArrayList<>(batchStatements);
         try {
-            return connection.executeBatch(batchStatements);
+            beginExecution();
+            List<StmtResult> results = connection.executeBatchResults(statements);
+            int[] updateCounts = new int[results.size()];
+            long affectedRows = 0;
+            for (int i = 0; i < results.size(); i++) {
+                updateCounts[i] = (int) results.get(i).affectedRowCount();
+                affectedRows += results.get(i).affectedRowCount();
+            }
+            synchronized (stateLock) {
+                updateBatchGeneratedKeys(statements, results);
+                updateCount = affectedRows;
+                resultSetRequested = false;
+            }
+            return updateCounts;
         } finally {
             clearBatch();
         }
