@@ -219,6 +219,98 @@ class LibsqlStatementLifecycleTest {
         assertThat(connection.executeCalls).isZero();
     }
 
+    @Test
+    void addBatchAfterCloseThrows() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(ROWS);
+        Statement statement = connection.createStatement();
+        statement.close();
+
+        assertThatThrownBy(() -> statement.addBatch("insert into t(value) values (1)"))
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Statement is closed");
+        assertThat(connection.executeCalls).isZero();
+    }
+
+    @Test
+    void preparedAddBatchAfterCloseThrows() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(ROWS);
+        LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "insert into t(value) values (?)");
+        statement.setLong(1, 1L);
+        statement.close();
+
+        assertThatThrownBy(statement::addBatch)
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Statement is closed");
+        assertThat(connection.executeCalls).isZero();
+    }
+
+    @Test
+    void getGeneratedKeysAfterCloseThrows() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(ROWS);
+        Statement statement = connection.createStatement();
+        statement.execute("insert into t(value) values (1)");
+        statement.close();
+
+        assertThatThrownBy(statement::getGeneratedKeys)
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Statement is closed");
+    }
+
+    @Test
+    void preparedGetGeneratedKeysAfterCloseThrows() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(ROWS);
+        LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "insert into t(value) values (1)");
+        statement.execute();
+        statement.close();
+
+        assertThatThrownBy(statement::getGeneratedKeys)
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Statement is closed");
+    }
+
+    @Test
+    void getResultSetAfterCloseThrows() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(ROWS);
+        Statement statement = connection.createStatement();
+        statement.execute("select value from t");
+        statement.close();
+
+        assertThatThrownBy(statement::getResultSet)
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Statement is closed");
+    }
+
+    @Test
+    void getResultSetAfterPostCloseExecuteThrows() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(ROWS);
+        Statement statement = connection.createStatement();
+        statement.close();
+
+        assertThat(statement.execute("select value from t")).isTrue();
+        assertThat(connection.executeCalls).isEqualTo(1);
+        assertThatThrownBy(statement::getResultSet)
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Statement is closed");
+    }
+
+    @Test
+    void preparedGetResultSetAfterPostCloseExecuteAttemptThrows() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(ROWS);
+        LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "select value from t");
+        statement.close();
+
+        assertThatThrownBy(statement::execute)
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Statement is closed");
+        assertThatThrownBy(statement::getResultSet)
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Statement is closed");
+        assertThat(connection.executeCalls).isZero();
+    }
+
     private static final class RecordingConnection extends LibsqlConnection {
         private final StmtResult result;
         private int executeCalls;
