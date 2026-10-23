@@ -11,6 +11,7 @@ import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.RowIdLifetime;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -839,14 +840,14 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
         return connection;
     }
 
-    @Override public ResultSet getProcedures(String catalog, String schemaPattern, String procedureNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public ResultSet getProcedureColumns(String catalog, String schemaPattern, String procedureNamePattern, String columnNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
+    @Override public ResultSet getProcedures(String catalog, String schemaPattern, String procedureNamePattern) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override public ResultSet getProcedureColumns(String catalog, String schemaPattern, String procedureNamePattern, String columnNamePattern) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public ResultSet getSchemas() throws SQLException { return executeMetadataQuery("SELECT NULL AS TABLE_SCHEM, NULL AS TABLE_CATALOG WHERE 0"); }
     @Override public ResultSet getCatalogs() throws SQLException { return executeMetadataQuery("SELECT NULL AS TABLE_CAT WHERE 0"); }
-    @Override public ResultSet getColumnPrivileges(String catalog, String schema, String table, String columnNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public ResultSet getTablePrivileges(String catalog, String schemaPattern, String tableNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public ResultSet getBestRowIdentifier(String catalog, String schema, String table, int scope, boolean nullable) throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public ResultSet getVersionColumns(String catalog, String schema, String table) throws SQLException { throw new UnsupportedOperationException(); }
+    @Override public ResultSet getColumnPrivileges(String catalog, String schema, String table, String columnNamePattern) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override public ResultSet getTablePrivileges(String catalog, String schemaPattern, String tableNamePattern) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override public ResultSet getBestRowIdentifier(String catalog, String schema, String table, int scope, boolean nullable) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override public ResultSet getVersionColumns(String catalog, String schema, String table) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override
     public ResultSet getImportedKeys(String catalog, String schema, String table) throws SQLException {
         return executeMetadataQuery(
@@ -910,14 +911,14 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     @Override public boolean deletesAreDetected(int type) throws SQLException { return false; }
     @Override public boolean insertsAreDetected(int type) throws SQLException { return false; }
     @Override public boolean supportsBatchUpdates() throws SQLException { return true; }
-    @Override public ResultSet getUDTs(String catalog, String schemaPattern, String typeNamePattern, int[] types) throws SQLException { throw new UnsupportedOperationException(); }
+    @Override public ResultSet getUDTs(String catalog, String schemaPattern, String typeNamePattern, int[] types) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public boolean supportsSavepoints() throws SQLException { return false; }
     @Override public boolean supportsNamedParameters() throws SQLException { return false; }
     @Override public boolean supportsMultipleOpenResults() throws SQLException { return false; }
     @Override public boolean supportsGetGeneratedKeys() throws SQLException { return true; }
-    @Override public ResultSet getSuperTypes(String catalog, String schemaPattern, String typeNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public ResultSet getSuperTables(String catalog, String schemaPattern, String tableNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public ResultSet getAttributes(String catalog, String schemaPattern, String typeNamePattern, String attributeNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
+    @Override public ResultSet getSuperTypes(String catalog, String schemaPattern, String typeNamePattern) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override public ResultSet getSuperTables(String catalog, String schemaPattern, String tableNamePattern) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override public ResultSet getAttributes(String catalog, String schemaPattern, String typeNamePattern, String attributeNamePattern) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public boolean supportsResultSetHoldability(int holdability) throws SQLException { return holdability == ResultSet.CLOSE_CURSORS_AT_COMMIT; }
     @Override public int getResultSetHoldability() throws SQLException { return ResultSet.CLOSE_CURSORS_AT_COMMIT; }
     @Override public int getDatabaseMajorVersion() throws SQLException {
@@ -937,10 +938,10 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     @Override public ResultSet getSchemas(String catalog, String schemaPattern) throws SQLException { return getSchemas(); }
     @Override public boolean supportsStoredFunctionsUsingCallSyntax() throws SQLException { return false; }
     @Override public boolean autoCommitFailureClosesAllResultSets() throws SQLException { return false; }
-    @Override public ResultSet getClientInfoProperties() throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public ResultSet getFunctions(String catalog, String schemaPattern, String functionNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public ResultSet getFunctionColumns(String catalog, String schemaPattern, String functionNamePattern, String columnNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
-    @Override public ResultSet getPseudoColumns(String catalog, String schemaPattern, String tableNamePattern, String columnNamePattern) throws SQLException { throw new UnsupportedOperationException(); }
+    @Override public ResultSet getClientInfoProperties() throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override public ResultSet getFunctions(String catalog, String schemaPattern, String functionNamePattern) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override public ResultSet getFunctionColumns(String catalog, String schemaPattern, String functionNamePattern, String columnNamePattern) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override public ResultSet getPseudoColumns(String catalog, String schemaPattern, String tableNamePattern, String columnNamePattern) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public boolean generatedKeyAlwaysReturned() throws SQLException { return false; }
 
     @Override
