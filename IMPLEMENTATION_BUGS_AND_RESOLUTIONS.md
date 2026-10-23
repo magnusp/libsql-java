@@ -6,7 +6,7 @@ This document compiles the critical bugs, performance bottlenecks, and concurren
 
 ## Table of Contents
 1. [Bug 1: One-Shot Query Hrana Stream Leak (The "128-Write 10-Second Stall")](#1-bug-1-one-shot-query-hrana-stream-leak-the-128-write-10-second-stall)
-2. [Bug 2: SQLite WAL Lock Upgrade Deadlocks (`SQLITE_BUSY`)](#2-bug-2-sqlite-wal-lock-upgrade-deadlocks-sqlite_busy)
+2. [Bug 2: Transaction Lifecycle over Hrana (Lazy Begin and WAL Locks)](#2-bug-2-transaction-lifecycle-over-hrana-lazy-begin-and-wal-locks)
 3. [Bug 3: Transient Connection Starvation & Unhandled HTTP 429](#3-bug-3-transient-connection-starvation--unhandled-http-429)
 4. [Bug 4: Per-Connection `HttpClient` Instantiation (Missing HTTP Keep-Alive Pool)](#4-bug-4-per-connection-httpclient-instantiation-missing-http-keep-alive-pool)
 5. [Bug 5: Jackson Databind Reflection & Excessive Object Allocation Sprawl](#5-bug-5-jackson-databind-reflection--excessive-object-allocation-sprawl)
@@ -41,7 +41,7 @@ During single-writer autocommit performance tests and batch write benchmarks:
 ### Resolution
 Pipelines for one-shot / autocommit queries were updated to append an explicit `CloseStreamReq` in the same HTTP roundtrip:
 ```java
-// HranaHttpClient.java
+// LibsqlHttpClient.java
 public StmtResult executeOneShot(Stmt stmt, Duration customTimeout) throws SQLException {
     PipelineRespBody resp = sendPipeline(
         null,
@@ -55,31 +55,36 @@ Because the stream is closed immediately on the server upon query completion, no
 
 ---
 
-## 2. Bug 2: SQLite WAL Lock Upgrade Deadlocks (`SQLITE_BUSY`)
+## 2. Bug 2: Transaction Lifecycle over Hrana (Lazy Begin and WAL Locks)
 
 ### Symptoms
-When multiple concurrent worker threads (or HikariCP pool connections) performed transactions:
-- Threads began transactions concurrently, performed reads, and then attempted writes.
-- The server abruptly aborted transactions with:
+- When multiple concurrent worker threads (or HikariCP pool connections) performed transactions, threads that read first and then attempted writes were aborted with:
   ```text
   SQLITE_BUSY: database is locked
   ```
+- A non-auto-commit connection that sat idle held a server stream. Once sqld expired it, the next statement failed on a stale baton, and `commit()`, `rollback()`, and `setAutoCommit(true)` sent the same dead baton again.
+- A failing statement, `BEGIN`, `COMMIT`, `ROLLBACK`, or batch step inside a transaction produced a plain `SQLException`, losing the SQLState and vendor code that auto-commit preserved.
 
 ### Root Cause
 1. In SQLite WAL mode, multiple connections can hold concurrent `SHARED` locks to read simultaneously.
 2. If a transaction starts with standard `BEGIN` (which defaults to `BEGIN DEFERRED`), SQLite waits until the first `INSERT`/`UPDATE` to upgrade from `SHARED` to `RESERVED`/`EXCLUSIVE`.
 3. If two concurrent transactions read first and both attempt to write later, both hold `SHARED` locks and try to upgrade. SQLite cannot grant either without deadlocking, returning immediate `SQLITE_BUSY` errors.
+4. Earlier driver versions began the transaction in `setAutoCommit(false)` and began the next one in `commit()`/`rollback()`, so an idle connection always held a stream. Hrana over HTTP has no connection with which the server can notice an abandoned stream, so it expires idle streams (`vendor/HRANA_3_SPEC.md`, "Hrana over HTTP"), and the driver did not detect a dead baton.
+5. The in-transaction path read `StreamResult.Error` and threw it directly, while the auto-commit path went through `LibsqlErrorMapper`.
 
-### Resolution
-In `LibsqlConnection.java`, transaction initialization distinguishes read-only transactions from read-write transactions:
-- Read-write transactions explicitly issue **`BEGIN IMMEDIATE`** at the start of the transaction pipeline:
-  ```java
-  boolean startingTx = (baton == null);
-  if (startingTx) {
-      requests.add(new ExecuteReq(new Stmt(readOnly ? "BEGIN DEFERRED" : "BEGIN IMMEDIATE")));
-  }
-  ```
-- `BEGIN IMMEDIATE` acquires the SQLite write lock before any statements execute, converting potential concurrency deadlocks into orderly queue waiting.
+### Implemented Contract
+`LibsqlConnection` derives the transaction state from the baton: `beginPending()` is true when auto-commit is off and `baton == null`.
+
+- **Lazy begin.** `setAutoCommit(false)` only sets the flag and sends nothing. The next `executeStatement` or `executeBatchResults` calls `beginTransaction()`, which sends the begin statement on a new stream (`baton == null`) as its own pipeline, then runs the statement on the baton it returns. The begin is never pipelined with the statement, so a failed `BEGIN` cannot be followed by that statement running outside a transaction.
+- **Configured begin mode.** `transactionMode` defaults to `TransactionMode.DEFERRED` (`BEGIN`). `setTransactionMode(IMMEDIATE)` sends `BEGIN IMMEDIATE`, and `EXCLUSIVE` sends `BEGIN EXCLUSIVE`. The mode is read when the transaction begins, so changing it between transactions affects the next begin. It is set through `LibsqlConnection.setTransactionMode` (reachable with `Connection.unwrap`) and matches xerial's `SQLiteConfig.setTransactionMode`; it is not a JDBC URL property.
+- **Commit and rollback close the stream.** `commit()` and `rollback()` send `COMMIT`/`ROLLBACK` on the current baton and then close that stream with a `close` request. Neither begins the next transaction. With no work done (`beginPending()`), both send nothing and leave auto-commit off, as in xerial.
+- **The next statement begins a new stream.** After commit or rollback the baton is null, so the next statement sends `BEGIN` with a null baton and then the statement on the new baton. No transaction is re-begun eagerly.
+- **Idle streams.** Because of the two points above, an idle non-auto-commit connection holds no Hrana stream: nothing is open after `setAutoCommit(false)`, and commit or rollback closes what was open. Idle pooled connections therefore do not consume sqld's 128-stream pool and hold no baton for the 10-second idle expiry to kill. The driver does not detect an expired baton, so a transaction left open and idle for longer than the server timeout can still fail with a stale baton; keep transactions short and retry the work in a fresh one.
+- **Mapped in-transaction errors.** Every in-transaction `HranaError` goes through `LibsqlErrorMapper` at the four sites: `executeStatement`, `executeBatchResults`, `beginTransaction`, and `endTransaction`. A constraint violation is `SQLIntegrityConstraintViolationException` with SQLState `23000` and vendor code `19`, the same as in auto-commit. Busy or locked is `SQLTransientConnectionException` (`08001`, `5`), syntax is `SQLSyntaxErrorException` (`42000`, `1`), auth is `SQLInvalidAuthorizationSpecException` (`28000`), and the fallback is `SQLException` (`HY000`). Because Hrana leaves `Error.code` unstable, a missing or unrecognized code falls back to the message text for the constraint category. A failed batch step throws `BatchUpdateException` with the counts of the steps that ran, the mapped SQLState and vendor code, and the mapped exception as its cause.
+- **Failure state.** A failed `BEGIN` closes the stream it opened, leaves the baton null, and keeps auto-commit off; `commit()` and `rollback()` then send nothing, and the next statement retries the begin on a new stream. A failed `COMMIT` or `ROLLBACK` keeps the baton, so the caller can retry the command or roll back on the same stream.
+
+### Consequence for WAL Lock Upgrades
+The default `BEGIN` is deferred, matching SQLite and xerial: no write lock is taken until the first write, so two readers that both upgrade can still see `SQLITE_BUSY`. The driver no longer converts that into orderly queue waiting by default. A caller that needs the write lock at transaction start selects `IMMEDIATE` or `EXCLUSIVE` with `setTransactionMode`, which acquires the lock when the lazily begun transaction starts. This is the timing divergence from xerial: an `IMMEDIATE` or `EXCLUSIVE` transaction does not take its lock at `setAutoCommit(false)`, because the server would expire the idle stream.
 
 ---
 
@@ -96,7 +101,7 @@ or returned Hrana error envelopes with error code `"busy"` / `"database_locked"`
 `sqld` serializes write transactions and limits internal connection slots. Under load bursts, `sqld`'s connection opening or lock acquisition times out, responding with HTTP 429 or `SQLITE_BUSY`. Without client-side retry handling, these transient delays crashed application threads.
 
 ### Resolution
-Implemented automated retry with exponential backoff and jitter in `HranaHttpClient.java`:
+Implemented automated retry with exponential backoff and jitter in `LibsqlHttpClient.java`:
 1. Check if the HTTP status is `429` or if the response envelope contains a busy error code (`"busy"`, `"database_locked"`, `"SQLITE_BUSY"`, or message `"timed out while opening database connection"`).
 2. Only retry if the request is idempotent or at transaction initiation (`baton == null`), avoiding corrupted intermediate state.
 3. Apply jittered exponential backoff up to a configurable `busyTimeout` (default: 5000 ms):
@@ -151,7 +156,7 @@ All JDBC connections share the pooled HTTP client, allowing HTTP/1.1 persistent 
 2. Frequent recreation of `ObjectMapper` or databind trees consumed memory and triggered frequent garbage collections.
 
 ### Resolution
-1. **Replaced Databind with Streaming JSON Codec**: Created `HranaJsonCodec.java` using low-level Jackson streaming (`JsonParser` / `JsonGenerator`) with zero reflection and zero intermediate JSON tree nodes (`JsonNode`).
+1. **Replaced Databind with Streaming JSON Codec**: Created `DirectHranaJsonCodec.java` using low-level Jackson streaming (`JsonParser` / `JsonGenerator`) with zero reflection and zero intermediate JSON tree nodes (`JsonNode`).
 2. **Flyweight Singletons**:
    - `Value.NullValue` replaced repeated allocation of null tokens.
    - Small integer flyweights and cached boolean constants were reused.
@@ -231,7 +236,7 @@ The driver holds no session stream open in auto-commit. Hrana over HTTP closes s
 ### Supported ways to read the rowid
 
 - Call `Statement.getGeneratedKeys()` after the insert. The driver builds the key from `StmtResult.last_insert_rowid` for `INSERT`, `REPLACE`, and `INSERT` nested under a `WITH` clause, so it needs no extra round trip and is the portable JDBC route.
-- Run the insert and `select last_insert_rowid()` inside one explicit transaction. With auto-commit off, the connection holds the baton and both statements run on the same stream, so the query sees the insert.
+- Run the insert and `select last_insert_rowid()` inside one explicit transaction. With auto-commit off, the first statement begins the transaction lazily (see Bug 2), the connection then holds the baton, and both statements run on the same stream, so the query sees the insert.
 
 ```java
 // Generated keys: no extra round trip, works in auto-commit.
