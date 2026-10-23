@@ -1,12 +1,14 @@
 package com.github.magnusp.libsql.itest;
 
 import com.github.magnusp.libsql.jdbc.LibsqlConnection;
+import org.assertj.core.api.ThrowableAssert;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.SQLIntegrityConstraintViolationException;
 import java.sql.Statement;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -168,6 +170,30 @@ public class TransactionLifecycleIT extends SqldContainerBase {
                 assertThat(rows.getInt(1)).isEqualTo(1);
             }
         }
+    }
+
+    @Test
+    void uniqueViolationKeepsItsMappedSqlStateInBothModes() throws Exception {
+        String url = getDriverJdbcUrl();
+        try (Connection connection = DriverManager.getConnection(url)) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("CREATE TABLE unique_state (id INTEGER PRIMARY KEY)");
+                statement.executeUpdate("INSERT INTO unique_state (id) VALUES (1)");
+            }
+
+            assertMappedUniqueViolation(() -> insertRow(connection, "unique_state", 1));
+
+            connection.setAutoCommit(false);
+            assertMappedUniqueViolation(() -> insertRow(connection, "unique_state", 1));
+            connection.rollback();
+        }
+    }
+
+    private static void assertMappedUniqueViolation(ThrowableAssert.ThrowingCallable call) {
+        assertThatThrownBy(call)
+                .isInstanceOf(SQLIntegrityConstraintViolationException.class)
+                .hasMessageContaining("UNIQUE constraint failed")
+                .satisfies(thrown -> assertThat(((SQLException) thrown).getSQLState()).isEqualTo("23000"));
     }
 
     private static void assertWriteIsBlockedUntilReleased(
