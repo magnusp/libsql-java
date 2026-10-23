@@ -4,6 +4,149 @@ This module runs a selected subset of the xerial `sqlite-jdbc` test sources agai
 libSQL over the Hrana protocol. It is a compatibility check for the JDBC driver, not a
 claim that a `jdbc:sqlite:` URL is served by a local SQLite file.
 
+## Conformance status
+
+This section is the canonical answer to "have we reached conformance with
+xerial?". The short answer is: yes for the selected subset below, verified
+against the reference probe; no for full xerial parity, and full parity is
+not the goal. The exclusions are deliberate compromises of running SQLite
+semantics remotely over Hrana, plus one that turns on the server build. They
+are grouped below. Per-test selection, rejection,
+and test-copy divergence edits are recorded in
+[`../upstream-xerial_sqlite-jdbc.manifest`](../upstream-xerial_sqlite-jdbc.manifest).
+The driver-contract divergences that follow from the remote model are described
+below.
+
+### Selected subset and reference probe
+
+The suite vendors the pinned xerial `sqlite-jdbc` 3.53.4.0 test tree and
+selects the tests that exercise JDBC behavior through ordinary SQL, so the
+Hrana transport can satisfy them unchanged. The manifest selects 13 test
+classes plus the shared `Utils` support class: `ResultSetTest`,
+`InsertQueryTest`, `FetchSizeTest`, `CachedRowSetTest`, `JSON1Test`,
+`MetadataLeakTest`, `PreparedStatementThreadTest`,
+`ResultSetWithoutResultsTest`, `RSMetaDataTest`, `DBMetaDataTest`,
+`StatementTest`, `PrepStmtTest`, and `SavepointTest`. The remaining 26
+classes in the pinned tree stay upstream for the reasons in the manifest.
+
+The reference probe is the `xerial-control` Maven profile defined in
+[`pom.xml`](pom.xml): it runs the same vendored manifest against the pinned
+xerial 3.53.4.0 driver instead of the libSQL driver. Both drivers are on the test class path, so the control run removes
+every visible driver and registers the xerial driver explicitly, and the
+build rejects a hand-set `conformance.control.driver` so the probe can only
+be selected through the profile. Run it with:
+
+```bash
+./mvnw -pl libsql-conformance -am -Pxerial-control verify
+```
+
+Run the libSQL conformance suite itself, against the pinned sqld image,
+with:
+
+```bash
+./mvnw -pl libsql-conformance -am verify
+```
+
+Last green result: 272 tests, 7 skipped, with `SavepointTest` included. The
+parity queue (#54) closed at 268 tests, 7 skipped.
+
+### Three-layer contract
+
+When the layers disagree, the contract is:
+
+1. Hrana 3 is the source of truth for transport, values, metadata,
+   batching, transactions, and error reporting. The protocol is specified
+   in [`../vendor/HRANA_3_SPEC.md`](../vendor/HRANA_3_SPEC.md); where
+   xerial behavior would require a primitive Hrana does not expose, the
+   Hrana behavior wins.
+2. `java.sql` is the source of truth for the JDBC surface. Where JDBC
+   makes a feature optional or defines the observable behavior, the
+   driver follows `java.sql`, even when xerial chooses differently.
+3. xerial is a behavioral reference and the conformance foundation, never
+   a copy target. Its tests define the selected subset and the control
+   probe; its driver internals, configuration surface, and native
+   behaviors are not reproduced.
+
+### Compromise categories
+
+Full parity is impossible without changing what the driver is: a remote
+Hrana client with no local file, no shared connection, and no native
+library. Three of the four categories below follow from that model; the
+fourth, build-flag dependence, turns on the server build. Each category has a
+concrete example:
+
+| Category | Why parity is impossible | Example |
+|---|---|---|
+| Native extension API | The test registers JVM callbacks or loads native code in-process; Hrana exposes no equivalent primitive, so this cannot be reversed without a new Hrana or native primitive. | `UDFTest` registers JVM user-defined functions through sqlite-jdbc's native extension API. |
+| sqlite-jdbc configuration surface | The test exercises xerial's own configuration, `DataSource`, loading, or source conventions instead of portable JDBC over SQL; libSQL provides no counterpart. | `SQLiteConfigTest` tests the `SQLiteConfig` object, not the JDBC API. |
+| Remote-model semantics | The test asserts local-file or in-process SQLite semantics (file locking and multi-connection waits, shared cache, native error wording and codes, or a deliberate driver-contract divergence) that a single remote sqld server over Hrana cannot reproduce; see "Hrana over HTTP" in `../vendor/HRANA_3_SPEC.md` for the baton and stream-expiry model behind this. | `TransactionTest` asserts SQLite file-locking and multi-connection wait behavior. |
+| Build-flag dependence | The test passes only when the server binary is built with a compile-time option that the pinned sqld image does not guarantee; this is addressable by pinning the server build, not by driver work. | `MathFunctionsTest` requires the server binary to be compiled with `SQLITE_ENABLE_MATH_FUNCTIONS`. |
+
+The first three categories are permanent: the class stays upstream unless
+the underlying Hrana, sqld, or sqlite-jdbc surface changes. Build-flag
+dependence is the exception: the class stays upstream only until the sqld
+build is pinned to enable the flag.
+
+### Driver-contract divergences
+
+Hrana over HTTP has no connection. A stream is identified only by the `baton`
+in the pipeline request: `baton: null` creates a new stream, and the server
+closes streams after a short period of inactivity because there is no
+connection that would let it detect an abandoned stream
+([`../vendor/HRANA_3_SPEC.md`](../vendor/HRANA_3_SPEC.md), "Hrana over HTTP").
+xerial `sqlite-jdbc` owns one SQLite connection per JDBC connection, so two
+observable divergences follow from the remote model. Unlike the rejected
+categories above, these occur in selected tests. They are driver behavior
+rather than edits to a vendored test, so they are described here and are not
+recorded as `# divergence:` lines.
+
+#### Auto-commit holds no stream
+
+An auto-commit statement runs as a one-shot pipeline that executes the
+statement and closes the stream in the same round trip. The driver keeps no
+session stream open between statements, so an idle connection consumes no
+server stream slot and holds no baton for the idle expiry to invalidate.
+Keeping one open only to preserve session state would reintroduce stale-baton
+failures on idle connections.
+
+Because `StmtResult.last_insert_rowid` describes the insert on one stream and
+nothing else, a later `SELECT last_insert_rowid()` runs on a fresh stream and
+returns `0`, even when the same `Statement` inserted a row immediately before.
+xerial returns that insert's rowid instead. Use `Statement.getGeneratedKeys()`
+after the insert, which the driver builds from `StmtResult.last_insert_rowid`
+with no extra round trip, or run the insert and the query inside one explicit
+transaction so both run on the same stream. `LibsqlGeneratedKeysTest` pins the
+generated-keys path.
+
+#### Transactions begin lazily
+
+`setAutoCommit(false)` sends nothing. The next statement begins the
+transaction on a new stream with `BEGIN`, `BEGIN IMMEDIATE`, or
+`BEGIN EXCLUSIVE` according to
+`LibsqlConnection.setTransactionMode(TransactionMode)` (default `DEFERRED`),
+sent as its own pipeline so a failed begin cannot be followed by the
+statement running outside a transaction. `commit()` and `rollback()` close
+the stream and do not begin the next transaction, so an idle non-auto-commit
+connection likewise holds no stream.
+
+The divergence is timing only: an `IMMEDIATE` or `EXCLUSIVE` transaction takes
+its write lock when the first statement begins it, not at
+`setAutoCommit(false)`. Select that mode when the lock must be held from
+transaction start; with the default `DEFERRED`, two readers that both upgrade
+can still see `SQLITE_BUSY`, as in SQLite. A transaction left open and idle
+longer than the server timeout can still fail on a stale baton, so keep
+transactions short and retry the work in a fresh one.
+
+### Savepoint support
+
+Savepoints were the last addressable JDBC-surface gap. The driver now
+implements `Connection.setSavepoint()`, `setSavepoint(String)`,
+`rollback(Savepoint)`, and `releaseSavepoint(Savepoint)` as SQLite
+`SAVEPOINT`, `RELEASE`, and `ROLLBACK TO` statements over Hrana, and
+`DatabaseMetaData.supportsSavepoints()` returns `true`. `SavepointTest` is
+selected, so no JDBC-surface gap remains. No new server primitive was
+needed.
+
 ## URL mapping
 
 The conformance driver maps `jdbc:sqlite:` URLs to sqld namespaces so the vendored
@@ -33,53 +176,4 @@ are deleted during suite shutdown and the shared sqld container is stopped. In-m
 namespaces are not retained.
 
 The conformance copy of an upstream test diverges from xerial where Hrana connection
-lifecycle makes the original behavior impossible; each divergence is recorded in
-`../upstream-xerial_sqlite-jdbc.manifest`.
-
-## Divergences from a local SQLite connection
-
-Hrana over HTTP has no connection. A stream is identified only by the `baton`
-in the pipeline request: `baton: null` creates a new stream, and the server
-closes streams after a short period of inactivity because there is no
-connection that would let it detect an abandoned stream
-(`../vendor/HRANA_3_SPEC.md`, "Hrana over HTTP"). Two observable divergences
-from xerial `sqlite-jdbc`, which owns one SQLite connection per JDBC
-connection, follow from that model. Per-test divergences in the vendored
-suite are recorded separately in `../upstream-xerial_sqlite-jdbc.manifest`.
-
-### Auto-commit holds no stream
-
-An auto-commit statement runs as a one-shot pipeline that executes the
-statement and closes the stream in the same round trip. The driver keeps no
-session stream open between statements, so an idle connection consumes no
-server stream slot and holds no baton for the idle expiry to invalidate.
-Keeping one open only to preserve session state would reintroduce
-stale-baton failures on idle connections.
-
-Because `StmtResult.last_insert_rowid` describes the insert on one stream
-and nothing else, a later `SELECT last_insert_rowid()` runs on a fresh
-stream and returns `0`, even when the same `Statement` inserted a row
-immediately before. xerial returns that insert's rowid instead. Use
-`Statement.getGeneratedKeys()` after the insert, which the driver builds
-from `StmtResult.last_insert_rowid` with no extra round trip, or run the
-insert and the query inside one explicit transaction so both run on the
-same stream. `LibsqlGeneratedKeysTest` pins the generated-keys path.
-
-### Transactions begin lazily
-
-`setAutoCommit(false)` sends nothing. The next statement begins the
-transaction on a new stream with `BEGIN`, `BEGIN IMMEDIATE`, or
-`BEGIN EXCLUSIVE` according to
-`LibsqlConnection.setTransactionMode(TransactionMode)` (default `DEFERRED`),
-sent as its own pipeline so a failed begin cannot be followed by the
-statement running outside a transaction. `commit()` and `rollback()` close
-the stream and do not begin the next transaction, so an idle non-auto-commit
-connection likewise holds no stream.
-
-The divergence is timing only: an `IMMEDIATE` or `EXCLUSIVE` transaction
-takes its write lock when the first statement begins it, not at
-`setAutoCommit(false)`. Select that mode when the lock must be held from
-transaction start; with the default `DEFERRED`, two readers that both
-upgrade can still see `SQLITE_BUSY`, as in SQLite. A transaction left open
-and idle longer than the server timeout can still fail on a stale baton,
-so keep transactions short and retry the work in a fresh one.
+lifecycle makes the original behavior impossible.
