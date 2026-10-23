@@ -9,7 +9,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Pattern;
 
 /**
  * Resolves the origin table of each result column in a SQLite statement.
@@ -49,15 +48,6 @@ final class SqlTableReference {
             return index >= 0 && index < tables.size() ? tables.get(index) : null;
         }
     }
-
-    private enum Type {
-        WORD,
-        IDENT,
-        LITERAL,
-        SYMBOL
-    }
-
-    private record Token(Type type, String text, int depth) {}
 
     private record ColumnRef(List<String> parts) {
         String column() {
@@ -121,9 +111,6 @@ final class SqlTableReference {
         }
     }
 
-    private static final Pattern UNQUOTED_IDENTIFIER =
-            Pattern.compile("[A-Za-z_\\x80-\\uFFFF][A-Za-z0-9_$\\x80-\\uFFFF]*");
-
     private static final Set<String> FROM_END = Set.of(
             "WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "OFFSET", "WINDOW", "RETURNING",
             "UNION", "INTERSECT", "EXCEPT");
@@ -144,7 +131,7 @@ final class SqlTableReference {
         if (sql == null || sql.isBlank()) {
             return null;
         }
-        List<Token> tokens = tokenize(sql);
+        List<SqlTokenizer.Token> tokens = SqlTokenizer.tokenize(sql);
         if (tokens == null) {
             return null;
         }
@@ -167,11 +154,11 @@ final class SqlTableReference {
 
     private static final class Parser {
 
-        private final List<Token> tokens;
+        private final List<SqlTokenizer.Token> tokens;
         private final Schema schema;
         private final Set<String> resolvingViews;
 
-        private Parser(List<Token> tokens, Schema schema, Set<String> resolvingViews) {
+        private Parser(List<SqlTokenizer.Token> tokens, Schema schema, Set<String> resolvingViews) {
             this.tokens = tokens;
             this.schema = schema;
             this.resolvingViews = resolvingViews;
@@ -179,14 +166,17 @@ final class SqlTableReference {
 
         private Resolution parseStatement(int start, int end, int depth, Map<String, Source> scope)
                 throws SQLException {
-            int index = skipSymbols(start, end, depth, ";");
-            while (end > index && isSymbolAt(end - 1, ";", depth)) {
+            int index = start;
+            while (index < end && SqlTokenizer.isSymbolAt(tokens, index, ";", depth)) {
+                index++;
+            }
+            while (end > index && SqlTokenizer.isSymbolAt(tokens, end - 1, ";", depth)) {
                 end--;
             }
             if (index >= end) {
                 return null;
             }
-            String keyword = wordAt(index, depth);
+            String keyword = SqlTokenizer.wordAt(tokens, index, depth);
             if (keyword == null) {
                 return null;
             }
@@ -202,37 +192,37 @@ final class SqlTableReference {
                 throws SQLException {
             Map<String, Source> ctes = new HashMap<>(scope);
             int index = start + 1;
-            if (isWordAt(index, depth, "RECURSIVE")) {
+            if (SqlTokenizer.isWordAt(tokens, index, depth, "RECURSIVE")) {
                 index++;
             }
             while (index < end) {
-                String name = identifier(index);
+                String name = SqlTokenizer.identifierAt(tokens, index);
                 if (name == null) {
                     return null;
                 }
                 index++;
                 List<String> columns = null;
-                if (isSymbolAt(index, "(", depth)) {
-                    int close = matchingParen(index);
+                if (SqlTokenizer.isSymbolAt(tokens, index, "(", depth)) {
+                    int close = SqlTokenizer.matchingParen(tokens, index);
                     if (close < 0 || close >= end) {
                         return null;
                     }
-                    columns = identifiers(index + 1, close, depth + 1);
+                    columns = SqlTokenizer.identifiers(tokens, index + 1, close, depth + 1);
                     index = close + 1;
                 }
-                if (!isWordAt(index, depth, "AS")) {
+                if (!SqlTokenizer.isWordAt(tokens, index, depth, "AS")) {
                     return null;
                 }
                 index++;
-                if (isWordAt(index, depth, "NOT")) {
+                if (SqlTokenizer.isWordAt(tokens, index, depth, "NOT")) {
                     index += 2;
-                } else if (isWordAt(index, depth, "MATERIALIZED")) {
+                } else if (SqlTokenizer.isWordAt(tokens, index, depth, "MATERIALIZED")) {
                     index++;
                 }
-                if (!isSymbolAt(index, "(", depth)) {
+                if (!SqlTokenizer.isSymbolAt(tokens, index, "(", depth)) {
                     return null;
                 }
-                int close = matchingParen(index);
+                int close = SqlTokenizer.matchingParen(tokens, index);
                 if (close < 0 || close >= end) {
                     return null;
                 }
@@ -260,7 +250,7 @@ final class SqlTableReference {
                                     null));
                 }
                 index = close + 1;
-                if (isSymbolAt(index, ",", depth)) {
+                if (SqlTokenizer.isSymbolAt(tokens, index, ",", depth)) {
                     index++;
                     continue;
                 }
@@ -275,16 +265,17 @@ final class SqlTableReference {
         private Resolution parseSelect(int start, int end, int depth, Map<String, Source> scope)
                 throws SQLException {
             int index = start + 1;
-            while (isWordAt(index, depth, "ALL") || isWordAt(index, depth, "DISTINCT")) {
+            while (SqlTokenizer.isWordAt(tokens, index, depth, "ALL")
+                    || SqlTokenizer.isWordAt(tokens, index, depth, "DISTINCT")) {
                 index++;
             }
-            int setOperator = indexOfAnyWord(index, end, depth, SET_OPERATORS);
+            int setOperator = SqlTokenizer.indexOfAnyWord(tokens, index, end, depth, SET_OPERATORS);
             int selectEnd = setOperator >= 0 ? setOperator : end;
-            int fromIndex = indexOfWord(index, selectEnd, depth, "FROM");
+            int fromIndex = SqlTokenizer.indexOfWord(tokens, index, selectEnd, depth, "FROM");
             int listEnd = fromIndex >= 0 ? fromIndex : selectEnd;
             FromClause from = FromClause.of(List.of());
             if (fromIndex >= 0) {
-                int fromEnd = indexOfAnyWord(fromIndex + 1, selectEnd, depth, FROM_END);
+                int fromEnd = SqlTokenizer.indexOfAnyWord(tokens, fromIndex + 1, selectEnd, depth, FROM_END);
                 if (fromEnd < 0) {
                     fromEnd = selectEnd;
                 }
@@ -317,7 +308,7 @@ final class SqlTableReference {
                 }
                 index = parsed.next();
                 index = skipIndexModifiers(index, end, depth);
-                if (isWordAt(index, depth, "USING")) {
+                if (SqlTokenizer.isWordAt(tokens, index, depth, "USING")) {
                     List<String> merged = usingColumns(index, end, depth);
                     dropStarColumns(merged, starStart, starLabels, starTables);
                     for (String column : merged) {
@@ -327,13 +318,13 @@ final class SqlTableReference {
                     }
                 }
                 index = skipJoinCondition(index, end, depth);
-                if (isSymbolAt(index, ",", depth)) {
+                if (SqlTokenizer.isSymbolAt(tokens, index, ",", depth)) {
                     natural = false;
                     index++;
                     continue;
                 }
                 if (index < end && isJoinStart(index, end, depth)) {
-                    natural = isWordAt(index, depth, "NATURAL");
+                    natural = SqlTokenizer.isWordAt(tokens, index, depth, "NATURAL");
                     index = skipToJoin(index, end, depth);
                     if (index < 0) {
                         break;
@@ -349,35 +340,35 @@ final class SqlTableReference {
         private SourceList parseSource(int start, int end, int depth, Map<String, Source> scope)
                 throws SQLException {
             int index = start;
-            if (isSymbolAt(index, "(", depth)) {
-                int close = matchingParen(index);
+            if (SqlTokenizer.isSymbolAt(tokens, index, "(", depth)) {
+                int close = SqlTokenizer.matchingParen(tokens, index);
                 if (close < 0 || close >= end) {
                     return null;
                 }
                 int innerDepth = depth + 1;
-                String innerKeyword = wordAt(index + 1, innerDepth);
+                String innerKeyword = SqlTokenizer.wordAt(tokens, index + 1, innerDepth);
                 if ("SELECT".equals(innerKeyword) || "WITH".equals(innerKeyword)) {
                     Resolution inner = parseStatement(index + 1, close, innerDepth, scope);
                     index = close + 1;
                     String alias = null;
-                    if (isWordAt(index, depth, "AS")) {
+                    if (SqlTokenizer.isWordAt(tokens, index, depth, "AS")) {
                         index++;
-                        alias = identifier(index);
+                        alias = SqlTokenizer.identifierAt(tokens, index);
                         if (alias == null) {
                             return null;
                         }
                         index++;
                     } else if (isAlias(index, depth)) {
-                        alias = identifier(index);
+                        alias = SqlTokenizer.identifierAt(tokens, index);
                         index++;
                     }
                     List<String> aliasColumns = null;
-                    if (isSymbolAt(index, "(", depth)) {
-                        int columnsEnd = matchingParen(index);
+                    if (SqlTokenizer.isSymbolAt(tokens, index, "(", depth)) {
+                        int columnsEnd = SqlTokenizer.matchingParen(tokens, index);
                         if (columnsEnd < 0 || columnsEnd >= end) {
                             return null;
                         }
-                        aliasColumns = identifiers(index + 1, columnsEnd, depth + 1);
+                        aliasColumns = SqlTokenizer.identifiers(tokens, index + 1, columnsEnd, depth + 1);
                         index = columnsEnd + 1;
                     }
                     if (inner == null) {
@@ -395,15 +386,15 @@ final class SqlTableReference {
                 }
                 index = close + 1;
                 String alias = null;
-                if (isWordAt(index, depth, "AS")) {
+                if (SqlTokenizer.isWordAt(tokens, index, depth, "AS")) {
                     index++;
-                    alias = identifier(index);
+                    alias = SqlTokenizer.identifierAt(tokens, index);
                     if (alias == null) {
                         return null;
                     }
                     index++;
                 } else if (isAlias(index, depth)) {
-                    alias = identifier(index);
+                    alias = SqlTokenizer.identifierAt(tokens, index);
                     index++;
                 }
                 if (alias == null) {
@@ -414,35 +405,35 @@ final class SqlTableReference {
                         index);
             }
 
-            String first = identifier(index);
+            String first = SqlTokenizer.identifierAt(tokens, index);
             if (first == null) {
                 return null;
             }
             index++;
             String schemaName = null;
-            if (isSymbolAt(index, ".", depth)) {
+            if (SqlTokenizer.isSymbolAt(tokens, index, ".", depth)) {
                 index++;
-                String second = identifier(index);
+                String second = SqlTokenizer.identifierAt(tokens, index);
                 if (second == null) {
                     return null;
                 }
                 index++;
-                if (isSymbolAt(index, ".", depth)) {
+                if (SqlTokenizer.isSymbolAt(tokens, index, ".", depth)) {
                     return null;
                 }
                 schemaName = first;
                 first = second;
             }
             String alias = null;
-            if (isWordAt(index, depth, "AS")) {
+            if (SqlTokenizer.isWordAt(tokens, index, depth, "AS")) {
                 index++;
-                alias = identifier(index);
+                alias = SqlTokenizer.identifierAt(tokens, index);
                 if (alias == null) {
                     return null;
                 }
                 index++;
             } else if (isAlias(index, depth)) {
-                alias = identifier(index);
+                alias = SqlTokenizer.identifierAt(tokens, index);
                 index++;
             }
             TableRef reference = new TableRef(schemaName, first);
@@ -500,23 +491,23 @@ final class SqlTableReference {
                 return null;
             }
             try {
-                List<Token> viewTokens = tokenize(definition.sql());
+                List<SqlTokenizer.Token> viewTokens = SqlTokenizer.tokenize(definition.sql());
                 if (viewTokens == null) {
                     return null;
                 }
-                int as = indexOfWordIn(viewTokens, 0, viewTokens.size(), 0, "AS");
+                int as = SqlTokenizer.indexOfWord(viewTokens, 0, viewTokens.size(), 0, "AS");
                 if (as < 0) {
                     return null;
                 }
                 List<String> explicit = null;
                 for (int i = 0; i < as; i++) {
-                    Token token = viewTokens.get(i);
-                    if (token.depth() == 0 && isSymbol(token, "(")) {
-                        int close = matchingParenIn(viewTokens, i);
+                    SqlTokenizer.Token token = viewTokens.get(i);
+                    if (token.depth() == 0 && token.isSymbol("(")) {
+                        int close = SqlTokenizer.matchingParen(viewTokens, i);
                         if (close < 0) {
                             return null;
                         }
-                        explicit = identifiersIn(viewTokens, i + 1, close, 1);
+                        explicit = SqlTokenizer.identifiers(viewTokens, i + 1, close, 1);
                         break;
                     }
                 }
@@ -536,7 +527,7 @@ final class SqlTableReference {
 
         private Resolution parseReturning(int start, int end, int depth, Map<String, Source> scope)
                 throws SQLException {
-            int returning = indexOfWord(start, end, depth, "RETURNING");
+            int returning = SqlTokenizer.indexOfWord(tokens, start, end, depth, "RETURNING");
             if (returning < 0) {
                 return null;
             }
@@ -566,14 +557,14 @@ final class SqlTableReference {
         }
 
         private Target targetTable(int start, int end, int depth) {
-            String keyword = wordAt(start, depth);
+            String keyword = SqlTokenizer.wordAt(tokens, start, depth);
             if (keyword == null) {
                 return null;
             }
             int index;
             switch (keyword) {
                 case "INSERT", "REPLACE" -> {
-                    index = indexOfWord(start, end, depth, "INTO");
+                    index = SqlTokenizer.indexOfWord(tokens, start, end, depth, "INTO");
                     if (index < 0) {
                         return null;
                     }
@@ -581,12 +572,12 @@ final class SqlTableReference {
                 }
                 case "UPDATE" -> {
                     index = start + 1;
-                    if (isWordAt(index, depth, "OR")) {
+                    if (SqlTokenizer.isWordAt(tokens, index, depth, "OR")) {
                         index += 2;
                     }
                 }
                 case "DELETE" -> {
-                    index = indexOfWord(start, end, depth, "FROM");
+                    index = SqlTokenizer.indexOfWord(tokens, start, end, depth, "FROM");
                     if (index < 0) {
                         return null;
                     }
@@ -596,15 +587,15 @@ final class SqlTableReference {
                     return null;
                 }
             }
-            String first = identifier(index);
+            String first = SqlTokenizer.identifierAt(tokens, index);
             if (first == null) {
                 return null;
             }
             index++;
             String schemaName = null;
-            if (isSymbolAt(index, ".", depth)) {
+            if (SqlTokenizer.isSymbolAt(tokens, index, ".", depth)) {
                 index++;
-                String second = identifier(index);
+                String second = SqlTokenizer.identifierAt(tokens, index);
                 if (second == null) {
                     return null;
                 }
@@ -612,8 +603,8 @@ final class SqlTableReference {
                 first = second;
             }
             String alias = null;
-            if (isWordAt(index, depth, "AS")) {
-                alias = identifier(index + 1);
+            if (SqlTokenizer.isWordAt(tokens, index, depth, "AS")) {
+                alias = SqlTokenizer.identifierAt(tokens, index + 1);
                 if (alias == null) {
                     return null;
                 }
@@ -628,7 +619,7 @@ final class SqlTableReference {
             List<TableRef> tables = new ArrayList<>();
             int index = start;
             while (index < end) {
-                int comma = indexOfSymbol(index, end, depth, ",");
+                int comma = SqlTokenizer.indexOfSymbol(tokens, index, end, depth, ",");
                 int itemEnd = comma < 0 ? end : comma;
                 parseItem(index, itemEnd, depth, from, scope, labels, tables);
                 if (comma < 0) {
@@ -655,9 +646,9 @@ final class SqlTableReference {
             }
             String alias = null;
             int expressionEnd = end;
-            int as = indexOfWord(start, end, depth, "AS");
+            int as = SqlTokenizer.indexOfWord(tokens, start, end, depth, "AS");
             if (as >= 0 && as + 1 < end) {
-                String candidate = identifier(as + 1);
+                String candidate = SqlTokenizer.identifierAt(tokens, as + 1);
                 if (candidate != null) {
                     alias = candidate;
                     expressionEnd = as;
@@ -665,7 +656,7 @@ final class SqlTableReference {
             } else {
                 int implicit = implicitAlias(start, end, depth);
                 if (implicit >= 0) {
-                    alias = identifier(implicit);
+                    alias = SqlTokenizer.identifierAt(tokens, implicit);
                     expressionEnd = implicit;
                 }
             }
@@ -675,7 +666,7 @@ final class SqlTableReference {
                 return;
             }
 
-            if (expressionEnd - start == 1 && isSymbol(tokens.get(start), "*")) {
+            if (expressionEnd - start == 1 && tokens.get(start).isSymbol("*")) {
                 labels.addAll(from.starLabels());
                 tables.addAll(from.starTables());
                 return;
@@ -699,9 +690,10 @@ final class SqlTableReference {
                 return;
             }
 
-            if (isSymbol(tokens.get(start), "(") && matchingParen(start) == expressionEnd - 1) {
+            if (tokens.get(start).isSymbol("(")
+                    && SqlTokenizer.matchingParen(tokens, start) == expressionEnd - 1) {
                 int innerDepth = depth + 1;
-                String innerKeyword = wordAt(start + 1, innerDepth);
+                String innerKeyword = SqlTokenizer.wordAt(tokens, start + 1, innerDepth);
                 if ("SELECT".equals(innerKeyword) || "WITH".equals(innerKeyword)) {
                     Resolution inner = parseStatement(start + 1, expressionEnd - 1, innerDepth, scope);
                     if (inner != null && inner.tables().size() == 1) {
@@ -771,21 +763,23 @@ final class SqlTableReference {
             if (end - start < 2) {
                 return -1;
             }
-            Token last = tokens.get(end - 1);
-            if (identifierOf(last) == null) {
+            SqlTokenizer.Token last = tokens.get(end - 1);
+            if (last.identifier() == null) {
                 return -1;
             }
-            if (last.type() == Type.WORD && NOT_AN_ALIAS.contains(upper(last.text()))) {
+            if (last.type() == SqlTokenizer.Type.WORD
+                    && NOT_AN_ALIAS.contains(SqlTokenizer.upper(last.text()))) {
                 return -1;
             }
-            Token previous = tokens.get(end - 2);
-            if (isSymbol(previous, ".") || isSymbol(previous, "(") || isSymbol(previous, ",")) {
+            SqlTokenizer.Token previous = tokens.get(end - 2);
+            if (previous.isSymbol(".") || previous.isSymbol("(") || previous.isSymbol(",")) {
                 return -1;
             }
-            if (previous.type() == Type.SYMBOL && !isSymbol(previous, ")")) {
+            if (previous.type() == SqlTokenizer.Type.SYMBOL && !previous.isSymbol(")")) {
                 return -1;
             }
-            if (previous.type() == Type.WORD && NOT_AN_ALIAS.contains(upper(previous.text()))) {
+            if (previous.type() == SqlTokenizer.Type.WORD
+                    && NOT_AN_ALIAS.contains(SqlTokenizer.upper(previous.text()))) {
                 return -1;
             }
             return end - 1;
@@ -794,21 +788,21 @@ final class SqlTableReference {
         private ColumnRef simpleColumn(int start, int end) {
             List<String> parts = new ArrayList<>();
             int index = start;
-            String first = identifier(index);
+            String first = SqlTokenizer.identifierAt(tokens, index);
             if (first == null) {
                 return null;
             }
             parts.add(first);
             index++;
             while (index < end) {
-                if (!isSymbol(tokens.get(index), ".")) {
+                if (!tokens.get(index).isSymbol(".")) {
                     return null;
                 }
                 index++;
                 if (index >= end) {
                     return null;
                 }
-                String part = identifier(index);
+                String part = SqlTokenizer.identifierAt(tokens, index);
                 if (part == null) {
                     return null;
                 }
@@ -819,13 +813,13 @@ final class SqlTableReference {
         }
 
         private ColumnRef qualifiedStar(int start, int end) {
-            if (end - start < 3 || !isSymbol(tokens.get(end - 1), "*")) {
+            if (end - start < 3 || !tokens.get(end - 1).isSymbol("*")) {
                 return null;
             }
             List<String> parts = new ArrayList<>();
             int index = start;
             while (index < end - 1) {
-                String part = identifier(index);
+                String part = SqlTokenizer.identifierAt(tokens, index);
                 if (part == null) {
                     return null;
                 }
@@ -834,12 +828,12 @@ final class SqlTableReference {
                 if (index == end - 1) {
                     break;
                 }
-                if (!isSymbol(tokens.get(index), ".")) {
+                if (!tokens.get(index).isSymbol(".")) {
                     return null;
                 }
                 index++;
             }
-            if (index != end - 1 || !isSymbol(tokens.get(end - 2), ".")) {
+            if (index != end - 1 || !tokens.get(end - 2).isSymbol(".")) {
                 return null;
             }
             if (parts.size() < 1 || parts.size() > 2) {
@@ -859,11 +853,12 @@ final class SqlTableReference {
         private int skipIndexModifiers(int start, int end, int depth) {
             int index = start;
             while (index < end) {
-                if (isWordAt(index, depth, "INDEXED")) {
+                if (SqlTokenizer.isWordAt(tokens, index, depth, "INDEXED")) {
                     index += 3;
                     continue;
                 }
-                if (isWordAt(index, depth, "NOT") && isWordAt(index + 1, depth, "INDEXED")) {
+                if (SqlTokenizer.isWordAt(tokens, index, depth, "NOT")
+                        && SqlTokenizer.isWordAt(tokens, index + 1, depth, "INDEXED")) {
                     index += 2;
                     continue;
                 }
@@ -873,13 +868,14 @@ final class SqlTableReference {
         }
 
         private int skipJoinCondition(int start, int end, int depth) {
-            if (!isWordAt(start, depth, "ON") && !isWordAt(start, depth, "USING")) {
+            if (!SqlTokenizer.isWordAt(tokens, start, depth, "ON")
+                    && !SqlTokenizer.isWordAt(tokens, start, depth, "USING")) {
                 return start;
             }
             int index = start + 1;
             while (index < end) {
                 if (tokens.get(index).depth() == depth) {
-                    if (isSymbol(tokens.get(index), ",") || isJoinStart(index, end, depth)) {
+                    if (tokens.get(index).isSymbol(",") || isJoinStart(index, end, depth)) {
                         break;
                     }
                 }
@@ -892,23 +888,24 @@ final class SqlTableReference {
             if (index >= end) {
                 return false;
             }
-            Token token = tokens.get(index);
-            if (token.depth() != depth || token.type() != Type.WORD) {
+            SqlTokenizer.Token token = tokens.get(index);
+            if (token.depth() != depth || token.type() != SqlTokenizer.Type.WORD) {
                 return false;
             }
-            String keyword = upper(token.text());
+            String keyword = SqlTokenizer.upper(token.text());
             if (!JOIN_START.contains(keyword)) {
                 return false;
             }
             if ("LEFT".equals(keyword) || "RIGHT".equals(keyword)) {
-                return isWordAt(index + 1, depth, "JOIN") || isWordAt(index + 1, depth, "OUTER");
+                return SqlTokenizer.isWordAt(tokens, index + 1, depth, "JOIN")
+                        || SqlTokenizer.isWordAt(tokens, index + 1, depth, "OUTER");
             }
             return true;
         }
 
         private int skipToJoin(int start, int end, int depth) {
             for (int index = start; index < end; index++) {
-                if (isWordAt(index, depth, "JOIN")) {
+                if (SqlTokenizer.isWordAt(tokens, index, depth, "JOIN")) {
                     return index;
                 }
             }
@@ -919,12 +916,12 @@ final class SqlTableReference {
             if (index >= tokens.size()) {
                 return false;
             }
-            Token token = tokens.get(index);
-            if (token.depth() != depth || identifierOf(token) == null) {
+            SqlTokenizer.Token token = tokens.get(index);
+            if (token.depth() != depth || token.identifier() == null) {
                 return false;
             }
-            if (token.type() == Type.WORD) {
-                String keyword = upper(token.text());
+            if (token.type() == SqlTokenizer.Type.WORD) {
+                String keyword = SqlTokenizer.upper(token.text());
                 return !FROM_END.contains(keyword)
                         && !JOIN_START.contains(keyword)
                         && !NOT_AN_ALIAS.contains(keyword);
@@ -933,200 +930,36 @@ final class SqlTableReference {
         }
 
         private List<String> usingColumns(int start, int end, int depth) {
-            if (!isSymbolAt(start + 1, "(", depth)) {
+            if (!SqlTokenizer.isSymbolAt(tokens, start + 1, "(", depth)) {
                 return List.of();
             }
-            int close = matchingParen(start + 1);
+            int close = SqlTokenizer.matchingParen(tokens, start + 1);
             if (close < 0 || close > end) {
                 return List.of();
             }
-            return identifiers(start + 2, close, depth + 1);
+            return SqlTokenizer.identifiers(tokens, start + 2, close, depth + 1);
         }
 
-        private List<String> identifiers(int start, int end, int depth) {
-            List<String> identifiers = new ArrayList<>();
-            int index = start;
-            while (index < end) {
-                String identifier = identifier(index);
-                if (identifier == null || tokens.get(index).depth() != depth) {
-                    return List.of();
-                }
-                identifiers.add(identifier);
-                index++;
-                if (index < end) {
-                    if (!isSymbol(tokens.get(index), ",")) {
-                        return List.of();
-                    }
-                    index++;
-                }
-            }
-            return identifiers;
-        }
-
-        private int skipSymbols(int start, int end, int depth, String symbol) {
-            int index = start;
-            while (index < end && isSymbolAt(index, symbol, depth)) {
-                index++;
-            }
-            return index;
-        }
-
-        private int indexOfWord(int start, int end, int depth, String word) {
-            for (int index = start; index < end; index++) {
-                if (isWordAt(index, depth, word)) {
-                    return index;
-                }
-            }
-            return -1;
-        }
-
-        private int indexOfAnyWord(int start, int end, int depth, Set<String> words) {
-            for (int index = start; index < end; index++) {
-                Token token = tokens.get(index);
-                if (token.depth() == depth && token.type() == Type.WORD && words.contains(upper(token.text()))) {
-                    return index;
-                }
-            }
-            return -1;
-        }
-
-        private int indexOfSymbol(int start, int end, int depth, String symbol) {
-            for (int index = start; index < end; index++) {
-                if (isSymbolAt(index, symbol, depth)) {
-                    return index;
-                }
-            }
-            return -1;
-        }
-
-        private boolean isWordAt(int index, int depth, String word) {
-            if (index < 0 || index >= tokens.size()) {
-                return false;
-            }
-            Token token = tokens.get(index);
-            return token.depth() == depth && token.type() == Type.WORD && upper(token.text()).equals(word);
-        }
-
-        private boolean isSymbolAt(int index, String symbol, int depth) {
-            if (index < 0 || index >= tokens.size()) {
-                return false;
-            }
-            Token token = tokens.get(index);
-            return token.depth() == depth && isSymbol(token, symbol);
-        }
-
-        private String wordAt(int index, int depth) {
-            if (index < 0 || index >= tokens.size()) {
-                return null;
-            }
-            Token token = tokens.get(index);
-            return token.depth() == depth && token.type() == Type.WORD ? upper(token.text()) : null;
-        }
-
-        private String identifier(int index) {
-            if (index < 0 || index >= tokens.size()) {
-                return null;
-            }
-            return identifierOf(tokens.get(index));
-        }
-
-        private int matchingParen(int open) {
-            return matchingParenIn(tokens, open);
-        }
-    }
-
-    private static int matchingParenIn(List<Token> tokens, int open) {
-        if (open < 0 || open >= tokens.size()) {
-            return -1;
-        }
-        int depth = tokens.get(open).depth();
-        for (int index = open + 1; index < tokens.size(); index++) {
-            Token token = tokens.get(index);
-            if (token.depth() == depth && isSymbol(token, ")")) {
-                return index;
-            }
-        }
-        return -1;
-    }
-
-    private static int indexOfWordIn(List<Token> tokens, int start, int end, int depth, String word) {
-        for (int index = start; index < end; index++) {
-            Token token = tokens.get(index);
-            if (token.depth() == depth && token.type() == Type.WORD && upper(token.text()).equals(word)) {
-                return index;
-            }
-        }
-        return -1;
-    }
-
-    private static List<String> identifiersIn(List<Token> tokens, int start, int end, int depth) {
-        List<String> identifiers = new ArrayList<>();
-        int index = start;
-        while (index < end) {
-            Token token = tokens.get(index);
-            if (token.depth() != depth) {
-                return List.of();
-            }
-            String identifier = identifierOf(token);
-            if (identifier == null) {
-                return List.of();
-            }
-            identifiers.add(identifier);
-            index++;
-            if (index < end) {
-                Token separator = tokens.get(index);
-                if (separator.depth() != depth || !isSymbol(separator, ",")) {
-                    return List.of();
-                }
-                index++;
-            }
-        }
-        return identifiers;
     }
 
     private static boolean isViewDefinition(String sql) {
         if (sql == null) {
             return false;
         }
-        List<Token> tokens = tokenize(sql);
+        List<SqlTokenizer.Token> tokens = SqlTokenizer.tokenize(sql);
         if (tokens == null) {
             return false;
         }
         int index = 0;
-        if (!isWord(tokens, index, "CREATE")) {
+        if (!SqlTokenizer.isWordAt(tokens, index, 0, "CREATE")) {
             return false;
         }
         index++;
-        if (isWord(tokens, index, "TEMP") || isWord(tokens, index, "TEMPORARY")) {
+        if (SqlTokenizer.isWordAt(tokens, index, 0, "TEMP")
+                || SqlTokenizer.isWordAt(tokens, index, 0, "TEMPORARY")) {
             index++;
         }
-        return isWord(tokens, index, "VIEW");
-    }
-
-    private static boolean isWord(List<Token> tokens, int index, String word) {
-        if (index < 0 || index >= tokens.size()) {
-            return false;
-        }
-        Token token = tokens.get(index);
-        return token.depth() == 0 && token.type() == Type.WORD && upper(token.text()).equals(word);
-    }
-
-    private static boolean isSymbol(Token token, String symbol) {
-        return token.type() == Type.SYMBOL && token.text().equals(symbol);
-    }
-
-    private static String identifierOf(Token token) {
-        if (token.type() == Type.IDENT) {
-            return token.text();
-        }
-        if (token.type() == Type.WORD && UNQUOTED_IDENTIFIER.matcher(token.text()).matches()) {
-            return token.text();
-        }
-        return null;
-    }
-
-    private static String upper(String value) {
-        return value.toUpperCase(Locale.ROOT);
+        return SqlTokenizer.isWordAt(tokens, index, 0, "VIEW");
     }
 
     private static void appendStarColumns(
@@ -1161,124 +994,5 @@ final class SqlTableReference {
             }
         }
         return false;
-    }
-
-    private static List<Token> tokenize(String sql) {
-        List<Token> tokens = new ArrayList<>();
-        int depth = 0;
-        int i = 0;
-        while (i < sql.length()) {
-            char c = sql.charAt(i);
-            if (Character.isWhitespace(c)) {
-                i++;
-                continue;
-            }
-            if (c == '-' && i + 1 < sql.length() && sql.charAt(i + 1) == '-') {
-                i += 2;
-                while (i < sql.length() && sql.charAt(i) != '\n' && sql.charAt(i) != '\r') {
-                    i++;
-                }
-                continue;
-            }
-            if (c == '/' && i + 1 < sql.length() && sql.charAt(i + 1) == '*') {
-                int end = sql.indexOf("*/", i + 2);
-                if (end < 0) {
-                    return null;
-                }
-                i = end + 2;
-                continue;
-            }
-            if (c == '\'' || ((c == 'x' || c == 'X') && i + 1 < sql.length() && sql.charAt(i + 1) == '\'')) {
-                int quote = c == '\'' ? i : i + 1;
-                int end = scanQuoted(sql, quote, '\'');
-                if (end < 0) {
-                    return null;
-                }
-                tokens.add(new Token(Type.LITERAL, sql.substring(i, end), depth));
-                i = end;
-                continue;
-            }
-            if (c == '"' || c == '`') {
-                int end = scanQuoted(sql, i, c);
-                if (end < 0) {
-                    return null;
-                }
-                tokens.add(new Token(Type.IDENT, unescape(sql.substring(i + 1, end - 1), c), depth));
-                i = end;
-                continue;
-            }
-            if (c == '[') {
-                int end = sql.indexOf(']', i + 1);
-                if (end < 0) {
-                    return null;
-                }
-                tokens.add(new Token(Type.IDENT, sql.substring(i + 1, end), depth));
-                i = end + 1;
-                continue;
-            }
-            if (c == '(') {
-                tokens.add(new Token(Type.SYMBOL, "(", depth));
-                depth++;
-                i++;
-                continue;
-            }
-            if (c == ')') {
-                if (depth == 0) {
-                    return null;
-                }
-                depth--;
-                tokens.add(new Token(Type.SYMBOL, ")", depth));
-                i++;
-                continue;
-            }
-            if (c == ',' || c == '.' || c == ';' || c == '*') {
-                tokens.add(new Token(Type.SYMBOL, String.valueOf(c), depth));
-                i++;
-                continue;
-            }
-            if (isWordChar(c)) {
-                int start = i;
-                while (i < sql.length() && isWordChar(sql.charAt(i))) {
-                    i++;
-                }
-                tokens.add(new Token(Type.WORD, sql.substring(start, i), depth));
-                continue;
-            }
-            tokens.add(new Token(Type.SYMBOL, String.valueOf(c), depth));
-            i++;
-        }
-        if (depth != 0) {
-            return null;
-        }
-        return tokens;
-    }
-
-    private static int scanQuoted(String sql, int start, char quote) {
-        int i = start + 1;
-        while (i < sql.length()) {
-            if (sql.charAt(i) == quote) {
-                if (i + 1 < sql.length() && sql.charAt(i + 1) == quote) {
-                    i += 2;
-                    continue;
-                }
-                return i + 1;
-            }
-            i++;
-        }
-        return -1;
-    }
-
-    private static String unescape(String content, char quote) {
-        String doubled = new String(new char[] {quote, quote});
-        return content.replace(doubled, String.valueOf(quote));
-    }
-
-    private static boolean isWordChar(char c) {
-        return c >= 0x80
-                || (c >= 'a' && c <= 'z')
-                || (c >= 'A' && c <= 'Z')
-                || (c >= '0' && c <= '9')
-                || c == '_'
-                || c == '$';
     }
 }
