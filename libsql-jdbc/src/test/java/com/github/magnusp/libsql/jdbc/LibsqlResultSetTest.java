@@ -248,6 +248,19 @@ class LibsqlResultSetTest {
     }
 
     @Test
+    void emptyTextDateAndTimeGettersReturnNull() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Text(""));
+        assertThat(rs.next()).isTrue();
+
+        assertThat(rs.getDate(1)).isNull();
+        assertThat(rs.getTime(1)).isNull();
+        assertThat(rs.getTimestamp(1)).isNull();
+        assertThat(rs.getObject(1, LocalDate.class)).isNull();
+        assertThat(rs.getObject(1, LocalTime.class)).isNull();
+        assertThat(rs.getObject(1, LocalDateTime.class)).isNull();
+    }
+
+    @Test
     void integerEpochMillisFeedsEveryDateAndTimeGetter() throws SQLException {
         LibsqlResultSet rs = resultSet(new Value.Integer(1_700_000_000_000L));
         assertThat(rs.next()).isTrue();
