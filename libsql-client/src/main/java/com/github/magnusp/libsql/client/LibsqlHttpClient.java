@@ -1,5 +1,7 @@
 package com.github.magnusp.libsql.client;
 
+import com.github.magnusp.libsql.hrana.codec.Batch;
+import com.github.magnusp.libsql.hrana.codec.BatchResult;
 import com.github.magnusp.libsql.hrana.codec.DirectHranaJsonCodec;
 import com.github.magnusp.libsql.hrana.codec.HranaError;
 import com.github.magnusp.libsql.hrana.codec.HranaJsonCodec;
@@ -24,7 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadLocalRandom;
 
-public class LibsqlHttpClient {
+public class LibsqlHttpClient implements LibsqlClient {
 
     private static final ConcurrentHashMap<String, HttpClient> HTTP_CLIENT_CACHE = new ConcurrentHashMap<>();
 
@@ -32,6 +34,12 @@ public class LibsqlHttpClient {
     private final HttpClient httpClient;
     private final HranaJsonCodec codec;
     private final URI pipelineUri;
+
+    /** Guards the interactive stream state below. */
+    private final Object streamLock = new Object();
+
+    private String baton;
+    private URI baseUrl;
 
     public LibsqlHttpClient(LibsqlClientConfig config) {
         this(config, new DirectHranaJsonCodec());
@@ -59,6 +67,7 @@ public class LibsqlHttpClient {
                 .build());
     }
 
+    @Override
     public StmtResult executeOneShot(Stmt stmt) {
         // One-shot: [execute, close] in one round trip, so no idle stream is left for the server to reap.
         PipelineReqBody req = new PipelineReqBody(
@@ -84,6 +93,107 @@ public class LibsqlHttpClient {
             }
             case StreamResult.Error err -> throw new LibsqlException(err.error());
         };
+    }
+
+    @Override
+    public StmtResult executeOnStream(Stmt stmt) {
+        StreamResult result;
+        synchronized (streamLock) {
+            PipelineReqBody req = new PipelineReqBody(baton, List.of(new StreamRequest.Execute(stmt)));
+            PipelineRespBody resp = sendPipeline(req, baseUrl);
+            updateStreamState(resp);
+            result = firstResult(resp);
+        }
+        return switch (result) {
+            case StreamResult.Ok ok -> {
+                if (ok.response() instanceof StreamResponse.Execute exec) {
+                    yield exec.result();
+                }
+                throw new LibsqlException("Unexpected stream response: " + ok.response(), null, 200);
+            }
+            case StreamResult.Error err -> throw new LibsqlException(err.error());
+        };
+    }
+
+    @Override
+    public BatchResult executeBatchOneShot(Batch batch) {
+        // One-shot: [batch, close] in one round trip, so no idle stream is left for the server to reap.
+        PipelineReqBody req = new PipelineReqBody(
+                null,
+                List.of(
+                        new StreamRequest.BatchReq(batch),
+                        StreamRequest.Close.INSTANCE
+                )
+        );
+
+        PipelineRespBody resp = sendPipelineWithRetry(req, pipelineUri);
+        return batchResult(firstResult(resp));
+    }
+
+    @Override
+    public BatchResult executeBatchOnStream(Batch batch) {
+        StreamResult result;
+        synchronized (streamLock) {
+            PipelineReqBody req = new PipelineReqBody(baton, List.of(new StreamRequest.BatchReq(batch)));
+            PipelineRespBody resp = sendPipeline(req, baseUrl);
+            updateStreamState(resp);
+            result = firstResult(resp);
+        }
+        return batchResult(result);
+    }
+
+    @Override
+    public boolean hasOpenStream() {
+        synchronized (streamLock) {
+            return baton != null;
+        }
+    }
+
+    @Override
+    public void closeStream() {
+        synchronized (streamLock) {
+            if (baton == null) {
+                return;
+            }
+            try {
+                PipelineReqBody req = new PipelineReqBody(baton, List.of(StreamRequest.Close.INSTANCE));
+                PipelineRespBody resp = sendPipeline(req, baseUrl);
+                updateStreamState(resp);
+            } finally {
+                baton = null;
+            }
+        }
+    }
+
+    @Override
+    public void close() {
+        // HTTP keeps no connection-level state; a pipeline request owns its whole stream.
+    }
+
+    private static StreamResult firstResult(PipelineRespBody resp) {
+        if (resp.results().isEmpty()) {
+            throw new LibsqlException("Empty result list in response", null, 200);
+        }
+        return resp.results().get(0);
+    }
+
+    private static BatchResult batchResult(StreamResult result) {
+        return switch (result) {
+            case StreamResult.Ok ok -> {
+                if (ok.response() instanceof StreamResponse.BatchResp batchResp) {
+                    yield batchResp.result();
+                }
+                throw new LibsqlException("Unexpected stream response: " + ok.response(), null, 200);
+            }
+            case StreamResult.Error err -> throw new LibsqlException(err.error());
+        };
+    }
+
+    private void updateStreamState(PipelineRespBody resp) {
+        this.baton = resp.baton();
+        if (resp.baseUrl() != null && !resp.baseUrl().isBlank()) {
+            this.baseUrl = URI.create(resp.baseUrl());
+        }
     }
 
     public PipelineRespBody sendPipeline(PipelineReqBody reqBody, URI targetUri) {
