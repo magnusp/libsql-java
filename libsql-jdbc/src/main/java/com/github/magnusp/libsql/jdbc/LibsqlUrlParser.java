@@ -28,99 +28,103 @@ public class LibsqlUrlParser {
         if (!acceptsUrl(url)) {
             throw new SQLException("Invalid JDBC URL: " + url);
         }
+        URI uri = normalizeUri(url);
+        Map<String, String> queryParams = parseQuery(uri.getRawQuery());
+        String authToken = resolveAuthToken(queryParams, info);
+        String scheme = resolveScheme(uri.getScheme(), queryParams);
+        LibsqlClientConfig.Encoding encoding = resolveEncoding(queryParams, scheme);
+        Duration connectTimeout =
+                resolveDuration("connectTimeout", queryParams, info, LibsqlClientConfig.DEFAULT_CONNECT_TIMEOUT);
+        Duration busyTimeout =
+                resolveDuration("busyTimeout", queryParams, info, LibsqlClientConfig.DEFAULT_BUSY_TIMEOUT);
+        return new LibsqlClientConfig(
+                buildEndpoint(uri, scheme), authToken, connectTimeout, busyTimeout, encoding);
+    }
 
-        String rawUriStr;
-        if (url.startsWith(PREFIX)) {
-            rawUriStr = url.substring(PREFIX.length());
-        } else {
-            rawUriStr = url.substring(SQLITE_PREFIX.length());
+    private static URI normalizeUri(String url) throws SQLException {
+        String rawUriStr = url.startsWith(PREFIX)
+                ? url.substring(PREFIX.length())
+                : url.substring(SQLITE_PREFIX.length());
+        if (!hasExplicitScheme(rawUriStr)) {
+            rawUriStr = rawUriStr.startsWith("//") ? "http:" + rawUriStr : "http://" + rawUriStr;
         }
-
-        boolean hasExplicitScheme = rawUriStr.startsWith("http://")
-                || rawUriStr.startsWith("https://")
-                || rawUriStr.startsWith("ws://")
-                || rawUriStr.startsWith("wss://");
-        if (!hasExplicitScheme) {
-            if (rawUriStr.startsWith("//")) {
-                rawUriStr = "http:" + rawUriStr;
-            } else {
-                rawUriStr = "http://" + rawUriStr;
-            }
-        }
-
-        URI uri;
         try {
-            uri = URI.create(rawUriStr);
+            return URI.create(rawUriStr);
         } catch (IllegalArgumentException e) {
             throw new SQLException("Malformed libSQL JDBC URL: " + url, e);
         }
+    }
 
-        Map<String, String> queryParams = parseQuery(uri.getRawQuery());
+    private static boolean hasExplicitScheme(String rawUriStr) {
+        return rawUriStr.startsWith("http://")
+                || rawUriStr.startsWith("https://")
+                || rawUriStr.startsWith("ws://")
+                || rawUriStr.startsWith("wss://");
+    }
 
-        // Extract auth token
-        String authToken = null;
+    private static String resolveAuthToken(Map<String, String> queryParams, Properties info) {
         if (queryParams.containsKey("authToken")) {
-            authToken = queryParams.get("authToken");
-        } else if (queryParams.containsKey("jwt")) {
-            authToken = queryParams.get("jwt");
-        } else if (info != null) {
-            authToken = info.getProperty("authToken", info.getProperty("password", null));
+            return queryParams.get("authToken");
         }
-
-        // Check TLS override. A ws URL upgrades to wss just like http upgrades to https.
-        String scheme = uri.getScheme();
-        if ("true".equalsIgnoreCase(queryParams.get("tls")) || "true".equalsIgnoreCase(queryParams.get("ssl"))) {
-            scheme = switch (scheme) {
-                case "http" -> "https";
-                case "ws" -> "wss";
-                default -> scheme;
-            };
+        if (queryParams.containsKey("jwt")) {
+            return queryParams.get("jwt");
         }
+        return info != null ? info.getProperty("authToken", info.getProperty("password", null)) : null;
+    }
 
-        // Encoding selection. JSON stays the default; Protobuf exists only for WebSocket.
+    private static String resolveScheme(String scheme, Map<String, String> queryParams) {
+        boolean tlsRequested = "true".equalsIgnoreCase(queryParams.get("tls"))
+                || "true".equalsIgnoreCase(queryParams.get("ssl"));
+        if (!tlsRequested) {
+            return scheme;
+        }
+        return switch (scheme) {
+            case "http" -> "https";
+            case "ws" -> "wss";
+            default -> scheme;
+        };
+    }
+
+    private static LibsqlClientConfig.Encoding resolveEncoding(
+            Map<String, String> queryParams, String scheme) throws SQLException {
         LibsqlClientConfig.Encoding encoding = LibsqlClientConfig.Encoding.JSON;
         String encodingParam = queryParams.get("encoding");
         if (encodingParam != null) {
-            switch (encodingParam.toLowerCase(Locale.ROOT)) {
-                case "json" -> encoding = LibsqlClientConfig.Encoding.JSON;
-                case "protobuf", "proto" -> encoding = LibsqlClientConfig.Encoding.PROTOBUF;
+            encoding = switch (encodingParam.toLowerCase(Locale.ROOT)) {
+                case "json" -> LibsqlClientConfig.Encoding.JSON;
+                case "protobuf", "proto" -> LibsqlClientConfig.Encoding.PROTOBUF;
                 default -> throw new SQLException(
                         "Unsupported encoding '" + encodingParam + "': expected json or protobuf");
-            }
+            };
         }
         if (encoding == LibsqlClientConfig.Encoding.PROTOBUF
                 && !"ws".equals(scheme) && !"wss".equals(scheme)) {
             throw new SQLException("encoding=protobuf is only supported for ws/wss URLs");
         }
+        return encoding;
+    }
 
-        // Timeouts
-        Duration connectTimeout = LibsqlClientConfig.DEFAULT_CONNECT_TIMEOUT;
-        if (queryParams.containsKey("connectTimeout")) {
-            connectTimeout = Duration.ofMillis(Long.parseLong(queryParams.get("connectTimeout")));
-        } else if (info != null && info.containsKey("connectTimeout")) {
-            connectTimeout = Duration.ofMillis(Long.parseLong(info.getProperty("connectTimeout")));
+    private static Duration resolveDuration(
+            String name, Map<String, String> queryParams, Properties info, Duration defaultValue) {
+        if (queryParams.containsKey(name)) {
+            return Duration.ofMillis(Long.parseLong(queryParams.get(name)));
         }
-
-        Duration busyTimeout = LibsqlClientConfig.DEFAULT_BUSY_TIMEOUT;
-        if (queryParams.containsKey("busyTimeout")) {
-            busyTimeout = Duration.ofMillis(Long.parseLong(queryParams.get("busyTimeout")));
-        } else if (info != null && info.containsKey("busyTimeout")) {
-            busyTimeout = Duration.ofMillis(Long.parseLong(info.getProperty("busyTimeout")));
+        if (info != null && info.containsKey(name)) {
+            return Duration.ofMillis(Long.parseLong(info.getProperty(name)));
         }
+        return defaultValue;
+    }
 
+    private static String buildEndpoint(URI uri, String scheme) {
         int port = uri.getPort();
-        String host = uri.getHost();
         String path = uri.getPath() != null ? uri.getPath() : "";
-
         StringBuilder endpointUrl = new StringBuilder();
-        endpointUrl.append(scheme).append("://").append(host);
+        endpointUrl.append(scheme).append("://").append(uri.getHost());
         if (port > 0) {
             endpointUrl.append(":").append(port);
         }
         endpointUrl.append(path);
-
-        return new LibsqlClientConfig(
-                endpointUrl.toString(), authToken, connectTimeout, busyTimeout, encoding);
+        return endpointUrl.toString();
     }
 
     private static Map<String, String> parseQuery(String query) {
