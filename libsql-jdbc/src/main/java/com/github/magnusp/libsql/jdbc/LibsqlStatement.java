@@ -135,7 +135,18 @@ public class LibsqlStatement implements Statement {
     @Override
     public int executeUpdate(String sql) throws SQLException {
         execute(sql);
-        return (int) updateCount;
+        return snapshotUpdateCount();
+    }
+
+    /**
+     * Reads the update count under {@link #stateLock}, the lock every write to the field holds.
+     * The execute paths that return a count use this instead of reading the field directly, so the
+     * value they hand back has the same happens-before edge as {@link #getUpdateCount()}.
+     */
+    protected int snapshotUpdateCount() {
+        synchronized (stateLock) {
+            return (int) updateCount;
+        }
     }
 
     @Override
