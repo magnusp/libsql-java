@@ -7,6 +7,7 @@ import java.sql.SQLException;
 import java.util.Properties;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 public class LibsqlUrlParserTest {
 
@@ -67,6 +68,45 @@ public class LibsqlUrlParserTest {
                 .isEqualTo("https://example.com");
         assertThat(LibsqlUrlParser.parse("jdbc:libsql:wss://example.com?tls=true", new Properties()).url())
                 .isEqualTo("wss://example.com");
+    }
+
+    @Test
+    void testParseEncodesWebSocketEncoding() throws SQLException {
+        assertThat(LibsqlUrlParser.parse(
+                        "jdbc:libsql:ws://localhost:8080?encoding=protobuf", new Properties())
+                .encoding())
+                .isEqualTo(LibsqlClientConfig.Encoding.PROTOBUF);
+        assertThat(LibsqlUrlParser.parse(
+                        "jdbc:libsql:wss://example.com?encoding=PROTO", new Properties())
+                .encoding())
+                .isEqualTo(LibsqlClientConfig.Encoding.PROTOBUF);
+        assertThat(LibsqlUrlParser.parse(
+                        "jdbc:libsql:ws://localhost:8080?encoding=json", new Properties())
+                .encoding())
+                .isEqualTo(LibsqlClientConfig.Encoding.JSON);
+        assertThat(LibsqlUrlParser.parse("jdbc:libsql:ws://localhost:8080", new Properties())
+                .encoding())
+                .isEqualTo(LibsqlClientConfig.Encoding.JSON);
+    }
+
+    @Test
+    void testRejectsUnknownEncoding() {
+        assertThatThrownBy(() -> LibsqlUrlParser.parse(
+                        "jdbc:libsql:ws://localhost:8080?encoding=msgpack", new Properties()))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("msgpack");
+    }
+
+    @Test
+    void testRejectsProtobufOnHttpTransport() {
+        assertThatThrownBy(() -> LibsqlUrlParser.parse(
+                        "jdbc:libsql:http://localhost:8080?encoding=protobuf", new Properties()))
+                .isInstanceOf(SQLException.class)
+                .hasMessage("encoding=protobuf is only supported for ws/wss URLs");
+        assertThatThrownBy(() -> LibsqlUrlParser.parse(
+                        "jdbc:libsql:https://example.com?encoding=protobuf", new Properties()))
+                .isInstanceOf(SQLException.class)
+                .hasMessage("encoding=protobuf is only supported for ws/wss URLs");
     }
 
     @Test
