@@ -548,7 +548,7 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
 
                 ColumnShape shape = columnShape(declaredType);
                 boolean autoIncrement = primaryKey
-                        && LibsqlResultSetMetaData.isAutoIncrementColumn(createSql, columnName);
+                        && SqlAutoIncrement.isAutoIncrementColumn(createSql, columnName);
                 boolean generated = hidden == 2 || hidden == 3;
 
                 rows.add(new Row(List.of(
