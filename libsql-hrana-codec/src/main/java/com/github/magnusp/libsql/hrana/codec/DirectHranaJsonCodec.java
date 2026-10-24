@@ -15,7 +15,7 @@ import java.util.Map;
  * High-performance, zero-dependency streaming JSON codec purpose-built for Hrana v3 protocol payloads.
  * Allocates no Jackson objects, no intermediate tree nodes, and operates directly with low-overhead scanning.
  */
-public class DirectHranaJsonCodec implements HranaJsonCodec {
+public class DirectHranaJsonCodec implements HranaJsonCodec, HranaWsCodec {
 
     private static final Base64.Encoder B64_ENCODER = Base64.getEncoder();
     private static final Base64.Decoder B64_DECODER = Base64.getDecoder();
@@ -581,6 +581,186 @@ public class DirectHranaJsonCodec implements HranaJsonCodec {
             }
         }
         return new HranaError(message, code);
+    }
+
+    // -------------------------------------------------------------
+    // Hrana over WebSocket (JSON text frames)
+    // -------------------------------------------------------------
+
+    @Override
+    public boolean isBinary() {
+        return false;
+    }
+
+    @Override
+    public byte[] serialize(WsClientMsg msg) throws IOException {
+        FastJsonWriter w = new FastJsonWriter(256);
+        switch (msg) {
+            case WsClientMsg.Hello hello -> {
+                w.writeStartObject();
+                w.writeStringField("type", "hello");
+                w.writeComma();
+                if (hello.jwt() == null) {
+                    w.writeNullField("jwt");
+                } else {
+                    w.writeStringField("jwt", hello.jwt());
+                }
+                w.writeEndObject();
+            }
+            case WsClientMsg.Request request -> {
+                w.writeStartObject();
+                w.writeStringField("type", "request");
+                w.writeComma();
+                w.writeNumberField("request_id", request.requestId());
+                w.writeComma();
+                w.writeFieldName("request");
+                writeWsRequest(w, request.request());
+                w.writeEndObject();
+            }
+        }
+        return w.toByteArray();
+    }
+
+    private void writeWsRequest(FastJsonWriter w, WsRequest request) {
+        w.writeStartObject();
+        switch (request) {
+            case WsRequest.OpenStream open -> {
+                w.writeStringField("type", "open_stream");
+                w.writeComma();
+                w.writeNumberField("stream_id", open.streamId());
+            }
+            case WsRequest.CloseStream close -> {
+                w.writeStringField("type", "close_stream");
+                w.writeComma();
+                w.writeNumberField("stream_id", close.streamId());
+            }
+            case WsRequest.Execute execute -> {
+                w.writeStringField("type", "execute");
+                w.writeComma();
+                w.writeNumberField("stream_id", execute.streamId());
+                w.writeComma();
+                w.writeFieldName("stmt");
+                writeStmt(w, execute.stmt());
+            }
+            case WsRequest.Batch batch -> {
+                w.writeStringField("type", "batch");
+                w.writeComma();
+                w.writeNumberField("stream_id", batch.streamId());
+                w.writeComma();
+                w.writeFieldName("batch");
+                writeBatch(w, batch.batch());
+            }
+        }
+        w.writeEndObject();
+    }
+
+    @Override
+    public WsServerMsg deserialize(byte[] payload) throws IOException {
+        FastJsonParser p = new FastJsonParser(payload);
+        p.expectObjectStart();
+        String type = null;
+        Integer requestId = null;
+        WsResponse response = null;
+        HranaError error = null;
+
+        while (!p.checkObjectEnd()) {
+            String field = p.nextFieldName();
+            switch (field) {
+                case "type" -> type = p.nextString();
+                case "request_id" -> requestId = (int) p.nextLong();
+                case "response" -> response = parseWsResponse(p);
+                case "error" -> error = parseError(p);
+                default -> p.skipValue();
+            }
+        }
+
+        if (type == null) {
+            throw new IOException("WebSocket server message missing type field");
+        }
+        return switch (type) {
+            case "hello_ok" -> WsServerMsg.HelloOk.INSTANCE;
+            case "hello_error" -> new WsServerMsg.HelloError(requireError(error, type));
+            case "response_ok" -> new WsServerMsg.ResponseOk(
+                    requireRequestId(requestId, type), requireResponse(response, type));
+            case "response_error" -> new WsServerMsg.ResponseError(
+                    requireRequestId(requestId, type), requireError(error, type));
+            default -> throw new IOException("Unknown WebSocket server message type: " + type);
+        };
+    }
+
+    private WsResponse parseWsResponse(FastJsonParser p) throws IOException {
+        // JSON object field order is not significant, so find the type before reading the payload.
+        int start = p.pos;
+        p.expectObjectStart();
+        String type = null;
+        while (!p.checkObjectEnd()) {
+            String field = p.nextFieldName();
+            if ("type".equals(field)) {
+                type = p.nextString();
+            } else {
+                p.skipValue();
+            }
+        }
+        if (type == null) {
+            throw new IOException("WebSocket response missing type field");
+        }
+
+        p.pos = start;
+        p.expectObjectStart();
+        StmtResult stmtResult = null;
+        BatchResult batchResult = null;
+        while (!p.checkObjectEnd()) {
+            String field = p.nextFieldName();
+            if ("result".equals(field)) {
+                if ("execute".equals(type)) {
+                    stmtResult = parseStmtResult(p);
+                } else if ("batch".equals(type)) {
+                    batchResult = parseBatchResult(p);
+                } else {
+                    p.skipValue();
+                }
+            } else {
+                p.skipValue();
+            }
+        }
+        return switch (type) {
+            case "open_stream" -> WsResponse.OpenStream.INSTANCE;
+            case "close_stream" -> WsResponse.CloseStream.INSTANCE;
+            case "execute" -> {
+                if (stmtResult == null) {
+                    throw new IOException("WebSocket execute response missing result");
+                }
+                yield new WsResponse.Execute(stmtResult);
+            }
+            case "batch" -> {
+                if (batchResult == null) {
+                    throw new IOException("WebSocket batch response missing result");
+                }
+                yield new WsResponse.Batch(batchResult);
+            }
+            default -> throw new IOException("Unsupported WebSocket response type: " + type);
+        };
+    }
+
+    private static int requireRequestId(Integer requestId, String type) throws IOException {
+        if (requestId == null) {
+            throw new IOException("WebSocket " + type + " message missing request_id");
+        }
+        return requestId;
+    }
+
+    private static WsResponse requireResponse(WsResponse response, String type) throws IOException {
+        if (response == null) {
+            throw new IOException("WebSocket " + type + " message missing response");
+        }
+        return response;
+    }
+
+    private static HranaError requireError(HranaError error, String type) throws IOException {
+        if (error == null) {
+            throw new IOException("WebSocket " + type + " message missing error");
+        }
+        return error;
     }
 
     // -------------------------------------------------------------

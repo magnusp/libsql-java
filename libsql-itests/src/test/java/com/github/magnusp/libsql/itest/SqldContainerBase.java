@@ -45,4 +45,8 @@ public abstract class SqldContainerBase {
     public static String getHttpUrl() {
         return "http://" + LIBSQL_CONTAINER.getHost() + ":" + LIBSQL_CONTAINER.getMappedPort(PORT);
     }
+
+    public static String getWebSocketUrl() {
+        return "ws://" + LIBSQL_CONTAINER.getHost() + ":" + LIBSQL_CONTAINER.getMappedPort(PORT);
+    }
 }

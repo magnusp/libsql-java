@@ -1,8 +1,10 @@
 package com.github.magnusp.libsql.jdbc;
 
+import com.github.magnusp.libsql.client.LibsqlClient;
 import com.github.magnusp.libsql.client.LibsqlClientConfig;
 import com.github.magnusp.libsql.client.LibsqlException;
-import com.github.magnusp.libsql.client.LibsqlHttpClient;
+import com.github.magnusp.libsql.hrana.codec.Batch;
+import com.github.magnusp.libsql.hrana.codec.BatchResult;
 import com.github.magnusp.libsql.hrana.codec.HranaError;
 import com.github.magnusp.libsql.hrana.codec.PipelineReqBody;
 import com.github.magnusp.libsql.hrana.codec.PipelineRespBody;
@@ -13,7 +15,6 @@ import com.github.magnusp.libsql.hrana.codec.StreamResponse;
 import com.github.magnusp.libsql.hrana.codec.StreamResult;
 import org.junit.jupiter.api.Test;
 
-import java.net.URI;
 import java.sql.SQLException;
 import java.sql.SQLSyntaxErrorException;
 import java.sql.Savepoint;
@@ -331,7 +332,7 @@ class LibsqlSavepointTest {
         return execute.stmt().sql();
     }
 
-    private static final class ScriptedClient extends LibsqlHttpClient {
+    private static final class ScriptedClient implements LibsqlClient {
 
         @FunctionalInterface
         private interface Handler {
@@ -344,7 +345,6 @@ class LibsqlSavepointTest {
         private int batonCount = 0;
 
         private ScriptedClient(Handler handler) {
-            super(CONFIG);
             this.handler = handler;
         }
 
@@ -354,8 +354,7 @@ class LibsqlSavepointTest {
                     new StreamRequest.Execute(stmt),
                     StreamRequest.Close.INSTANCE));
             requests.add(request);
-            PipelineRespBody response = handler.handle(request, requests.size() - 1);
-            StreamResult first = response.results().get(0);
+            StreamResult first = handler.handle(request, requests.size() - 1).results().get(0);
             return switch (first) {
                 case StreamResult.Ok ok -> {
                     if (ok.response() instanceof StreamResponse.Execute exec) {
@@ -368,14 +367,78 @@ class LibsqlSavepointTest {
         }
 
         @Override
-        public PipelineRespBody sendPipeline(PipelineReqBody request, URI targetUri) {
+        public BatchResult executeBatchOneShot(Batch batch) {
+            PipelineReqBody request = new PipelineReqBody(null, List.of(
+                    new StreamRequest.BatchReq(batch),
+                    StreamRequest.Close.INSTANCE));
+            requests.add(request);
+            return batchResult(handler.handle(request, requests.size() - 1).results().get(0));
+        }
+
+        @Override
+        public StmtResult executeOnStream(Stmt stmt) {
+            StreamResult result = roundTrip(new PipelineReqBody(
+                    issuedBaton, List.of(new StreamRequest.Execute(stmt))));
+            return switch (result) {
+                case StreamResult.Ok ok -> {
+                    if (ok.response() instanceof StreamResponse.Execute exec) {
+                        yield exec.result();
+                    }
+                    throw new LibsqlException("Unexpected stream response: " + ok.response(), null, 200);
+                }
+                case StreamResult.Error err -> throw new LibsqlException(err.error());
+            };
+        }
+
+        @Override
+        public BatchResult executeBatchOnStream(Batch batch) {
+            StreamResult result = roundTrip(new PipelineReqBody(
+                    issuedBaton, List.of(new StreamRequest.BatchReq(batch))));
+            return batchResult(result);
+        }
+
+        @Override
+        public boolean hasOpenStream() {
+            return issuedBaton != null;
+        }
+
+        @Override
+        public void closeStream() {
+            if (issuedBaton == null) {
+                return;
+            }
+            PipelineReqBody request = new PipelineReqBody(
+                    issuedBaton, List.of(StreamRequest.Close.INSTANCE));
+            requests.add(request);
+            handler.handle(request, requests.size() - 1);
+            issuedBaton = null;
+        }
+
+        @Override
+        public void close() {
+            // No connection-level state to release.
+        }
+
+        private StreamResult roundTrip(PipelineReqBody request) {
             requests.add(request);
             if (request.baton() != null && !request.baton().equals(issuedBaton)) {
                 throw new LibsqlException("stale baton " + request.baton(), "STALE_BATON", 400);
             }
             PipelineRespBody response = handler.handle(request, requests.size() - 1);
             issuedBaton = "baton-" + (++batonCount);
-            return new PipelineRespBody(issuedBaton, response.baseUrl(), response.results());
+            return response.results().get(0);
+        }
+
+        private static BatchResult batchResult(StreamResult result) {
+            return switch (result) {
+                case StreamResult.Ok ok -> {
+                    if (ok.response() instanceof StreamResponse.BatchResp batchResp) {
+                        yield batchResp.result();
+                    }
+                    throw new LibsqlException("Unexpected stream response: " + ok.response(), null, 200);
+                }
+                case StreamResult.Error err -> throw new LibsqlException(err.error());
+            };
         }
 
         private List<String> executedStatements() {

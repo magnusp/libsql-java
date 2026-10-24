@@ -17,7 +17,10 @@ public class LibsqlUrlParser {
     public static boolean acceptsUrl(String url) {
         if (url == null) return false;
         if (url.startsWith(PREFIX)) return true;
-        return url.startsWith("jdbc:sqlite:http://") || url.startsWith("jdbc:sqlite:https://");
+        return url.startsWith("jdbc:sqlite:http://")
+                || url.startsWith("jdbc:sqlite:https://")
+                || url.startsWith("jdbc:sqlite:ws://")
+                || url.startsWith("jdbc:sqlite:wss://");
     }
 
     public static LibsqlClientConfig parse(String url, Properties info) throws SQLException {
@@ -32,8 +35,11 @@ public class LibsqlUrlParser {
             rawUriStr = url.substring(SQLITE_PREFIX.length());
         }
 
-        boolean hasHttpScheme = rawUriStr.startsWith("http://") || rawUriStr.startsWith("https://");
-        if (!hasHttpScheme) {
+        boolean hasExplicitScheme = rawUriStr.startsWith("http://")
+                || rawUriStr.startsWith("https://")
+                || rawUriStr.startsWith("ws://")
+                || rawUriStr.startsWith("wss://");
+        if (!hasExplicitScheme) {
             if (rawUriStr.startsWith("//")) {
                 rawUriStr = "http:" + rawUriStr;
             } else {
@@ -60,10 +66,14 @@ public class LibsqlUrlParser {
             authToken = info.getProperty("authToken", info.getProperty("password", null));
         }
 
-        // Check TLS override
+        // Check TLS override. A ws URL upgrades to wss just like http upgrades to https.
         String scheme = uri.getScheme();
         if ("true".equalsIgnoreCase(queryParams.get("tls")) || "true".equalsIgnoreCase(queryParams.get("ssl"))) {
-            scheme = "https";
+            scheme = switch (scheme) {
+                case "http" -> "https";
+                case "ws" -> "wss";
+                default -> scheme;
+            };
         }
 
         // Timeouts
@@ -85,14 +95,14 @@ public class LibsqlUrlParser {
         String host = uri.getHost();
         String path = uri.getPath() != null ? uri.getPath() : "";
 
-        StringBuilder httpUrl = new StringBuilder();
-        httpUrl.append(scheme).append("://").append(host);
+        StringBuilder endpointUrl = new StringBuilder();
+        endpointUrl.append(scheme).append("://").append(host);
         if (port > 0) {
-            httpUrl.append(":").append(port);
+            endpointUrl.append(":").append(port);
         }
-        httpUrl.append(path);
+        endpointUrl.append(path);
 
-        return new LibsqlClientConfig(httpUrl.toString(), authToken, connectTimeout, busyTimeout);
+        return new LibsqlClientConfig(endpointUrl.toString(), authToken, connectTimeout, busyTimeout);
     }
 
     private static Map<String, String> parseQuery(String query) {
