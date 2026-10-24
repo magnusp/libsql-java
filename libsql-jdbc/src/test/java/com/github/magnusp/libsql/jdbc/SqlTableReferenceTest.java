@@ -355,6 +355,47 @@ class SqlTableReferenceTest {
     }
 
     @Test
+    void resolvesReturningThroughTheTableNameWhenTheTargetHasNoAlias() throws SQLException {
+        SqlTableReference.Resolution resolution = resolve("DELETE FROM w RETURNING w.a");
+
+        assertThat(resolution.labels()).containsExactly("a");
+        assertThat(resolution.tables()).containsExactly(new SqlTableReference.TableRef(null, "w"));
+        // The table reference is the nullability path: w.a maps back to the NOT NULL column of w.
+        assertThat(resolution.table(0)).isEqualTo(new SqlTableReference.TableRef(null, "w"));
+    }
+
+    @Test
+    void doesNotBindAnImplicitUpdateAliasToTheReturningSource() throws SQLException {
+        SqlTableReference.Resolution implicit = resolve("UPDATE w x RETURNING x.a");
+        SqlTableReference.Resolution byTableName = resolve("UPDATE w x RETURNING w.a");
+
+        assertThat(implicit.labels()).containsExactly("a");
+        assertThat(implicit.tables()).containsExactly((SqlTableReference.TableRef) null);
+        assertThat(implicit.table(0)).isNull();
+        assertThat(byTableName.tables()).containsExactly(new SqlTableReference.TableRef(null, "w"));
+    }
+
+    @Test
+    void doesNotBindAnImplicitInsertAliasToTheReturningSource() throws SQLException {
+        SqlTableReference.Resolution implicit = resolve("INSERT INTO w t SELECT 1 RETURNING t.a");
+        SqlTableReference.Resolution byTableName = resolve("INSERT INTO w t SELECT 1 RETURNING w.a");
+
+        assertThat(implicit.labels()).containsExactly("a");
+        assertThat(implicit.tables()).containsExactly((SqlTableReference.TableRef) null);
+        assertThat(implicit.table(0)).isNull();
+        assertThat(byTableName.tables()).containsExactly(new SqlTableReference.TableRef(null, "w"));
+    }
+
+    @Test
+    void resolvesReturningThroughAnExplicitAsAlias() throws SQLException {
+        SqlTableReference.Resolution resolution = resolve("UPDATE w AS x RETURNING x.a");
+
+        assertThat(resolution.labels()).containsExactly("a");
+        assertThat(resolution.tables()).containsExactly(new SqlTableReference.TableRef(null, "w"));
+        assertThat(resolution.table(0)).isEqualTo(new SqlTableReference.TableRef(null, "w"));
+    }
+
+    @Test
     void acceptsTrailingSemicolon() throws SQLException {
         assertThat(resolve("SELECT a FROM w;").tables())
                 .containsExactly(new SqlTableReference.TableRef(null, "w"));
