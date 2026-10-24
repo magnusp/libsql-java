@@ -16,35 +16,9 @@ import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Locale;
 import java.util.function.UnaryOperator;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class LibsqlDatabaseMetaData implements DatabaseMetaData {
-
-    private static final Pattern NAMED_PRIMARY_KEY = Pattern.compile(
-            "\\bCONSTRAINT\\s*(\"[^\"]+\"|`[^`]+`|\\[[^\\]]+\\]|'[^']+'|[^\\s]+)\\s*PRIMARY\\s+KEY\\b",
-            Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
-    private static final Pattern NAMED_FOREIGN_KEY = Pattern.compile(
-            "\\bCONSTRAINT\\s+(\"[^\"]+\"|`[^`]+`|\\[[^\\]]+\\]|'[^']+'|[^\\s]+)\\s+FOREIGN\\s+KEY\\b",
-            Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
-
-    private static final List<Col> FOREIGN_KEY_COLUMNS = List.of(
-            new Col("PKTABLE_CAT", "TEXT"),
-            new Col("PKTABLE_SCHEM", "TEXT"),
-            new Col("PKTABLE_NAME", "TEXT"),
-            new Col("PKCOLUMN_NAME", "TEXT"),
-            new Col("FKTABLE_CAT", "TEXT"),
-            new Col("FKTABLE_SCHEM", "TEXT"),
-            new Col("FKTABLE_NAME", "TEXT"),
-            new Col("FKCOLUMN_NAME", "TEXT"),
-            new Col("KEY_SEQ", "INTEGER"),
-            new Col("UPDATE_RULE", "INTEGER"),
-            new Col("DELETE_RULE", "INTEGER"),
-            new Col("FK_NAME", "TEXT"),
-            new Col("PK_NAME", "TEXT"),
-            new Col("DEFERRABILITY", "INTEGER"));
 
     private static final List<Col> COLUMN_COLUMNS = List.of(
             new Col("TABLE_CAT", "TEXT"),
@@ -513,158 +487,13 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
                         Value.of(table),
                         Value.of(text(values.get(0))),
                         Value.of(integer(values.get(1))),
-                        Value.of(primaryKeyName(text(values.get(2)))))));
+                        Value.of(ForeignKeyMetadata.primaryKeyName(text(values.get(2)))))));
             }
         }
         // xerial orders getPrimaryKeys by column name, not by the declared key sequence.
         rows.sort(Comparator.comparing(
                 row -> text(row.values().get(3)), Comparator.nullsFirst(Comparator.naturalOrder())));
         return new StmtResult(PRIMARY_KEY_COLUMNS, rows, 0, null);
-    }
-
-    private static StmtResult importedKeysResult(
-            StmtResult raw, String catalog, String schema, String table) {
-        List<ForeignKeyRow> rows = new ArrayList<>();
-        if (raw != null && raw.rows() != null) {
-            for (Row row : raw.rows()) {
-                List<Value> values = row.values();
-                long fkId = integer(values.get(0));
-                String pkColumn = text(values.get(4));
-                if (pkColumn == null) {
-                    pkColumn = text(values.get(9));
-                }
-                rows.add(new ForeignKeyRow(
-                        catalog,
-                        schema,
-                        text(values.get(2)),
-                        pkColumn,
-                        catalog,
-                        schema,
-                        table,
-                        text(values.get(3)),
-                        (int) integer(values.get(1)) + 1,
-                        keyRule(text(values.get(5))),
-                        keyRule(text(values.get(6))),
-                        nameOrEmpty(foreignKeyName(text(values.get(7)), fkId)),
-                        nameOrEmpty(primaryKeyName(text(values.get(8))))));
-            }
-        }
-        rows.sort(Comparator.comparing(
-                        ForeignKeyRow::pkTable, Comparator.nullsFirst(Comparator.naturalOrder()))
-                .thenComparingInt(ForeignKeyRow::keySeq));
-        return foreignKeyResult(rows);
-    }
-
-    private static StmtResult exportedKeysResult(
-            StmtResult raw, String pkCatalog, String pkSchema, String fkCatalog, String fkSchema) {
-        List<ForeignKeyRow> rows = new ArrayList<>();
-        if (raw != null && raw.rows() != null) {
-            for (Row row : raw.rows()) {
-                List<Value> values = row.values();
-                long fkId = integer(values.get(0));
-                String pkColumn = text(values.get(4));
-                String pkName = primaryKeyName(text(values.get(9)));
-                if (!containsColumn(text(values.get(10)), pkColumn)) {
-                    pkName = null;
-                }
-                rows.add(new ForeignKeyRow(
-                        pkCatalog,
-                        pkSchema,
-                        text(values.get(2)),
-                        pkColumn,
-                        fkCatalog,
-                        fkSchema,
-                        text(values.get(7)),
-                        text(values.get(3)),
-                        (int) integer(values.get(1)) + 1,
-                        keyRule(text(values.get(5))),
-                        keyRule(text(values.get(6))),
-                        nameOrEmpty(foreignKeyName(text(values.get(8)), fkId)),
-                        nameOrEmpty(pkName)));
-            }
-        }
-        rows.sort(Comparator.comparing(
-                        ForeignKeyRow::fkTable, Comparator.nullsFirst(Comparator.naturalOrder()))
-                .thenComparingInt(ForeignKeyRow::keySeq));
-        return foreignKeyResult(rows);
-    }
-
-    private static StmtResult foreignKeyResult(List<ForeignKeyRow> rows) {
-        List<Row> values = new ArrayList<>(rows.size());
-        for (ForeignKeyRow row : rows) {
-            values.add(row.toRow());
-        }
-        return new StmtResult(FOREIGN_KEY_COLUMNS, values, 0, null);
-    }
-
-    private static int keyRule(String rule) {
-        if (rule == null) {
-            return DatabaseMetaData.importedKeyNoAction;
-        }
-        return switch (rule.toUpperCase(Locale.ENGLISH)) {
-            case "CASCADE" -> DatabaseMetaData.importedKeyCascade;
-            case "RESTRICT" -> DatabaseMetaData.importedKeyRestrict;
-            case "SET NULL" -> DatabaseMetaData.importedKeySetNull;
-            case "SET DEFAULT" -> DatabaseMetaData.importedKeySetDefault;
-            default -> DatabaseMetaData.importedKeyNoAction;
-        };
-    }
-
-    private static String primaryKeyName(String createSql) {
-        if (createSql == null) {
-            return null;
-        }
-        Matcher matcher = NAMED_PRIMARY_KEY.matcher(createSql);
-        return matcher.find() ? unquoteIdentifier(matcher.group(1)) : null;
-    }
-
-    private static String foreignKeyName(String createSql, long fkId) {
-        if (createSql == null) {
-            return null;
-        }
-        List<String> names = new ArrayList<>();
-        Matcher matcher = NAMED_FOREIGN_KEY.matcher(createSql);
-        while (matcher.find()) {
-            names.add(unquoteIdentifier(matcher.group(1)));
-        }
-        // SQLite numbers foreign keys from the last declaration down, so the parsed names are
-        // matched to pragma ids in reverse declaration order.
-        int index = names.size() - 1 - (int) fkId;
-        return index >= 0 && index < names.size() ? names.get(index) : null;
-    }
-
-    private static boolean containsColumn(String columns, String column) {
-        if (columns == null || column == null) {
-            return false;
-        }
-        for (String candidate : columns.split(",")) {
-            if (candidate.trim().equalsIgnoreCase(column)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static String nameOrEmpty(String name) {
-        return name == null ? "" : name;
-    }
-
-    private static String unquoteIdentifier(String name) {
-        if (name == null) {
-            return null;
-        }
-        String trimmed = name.trim();
-        if (trimmed.length() > 2) {
-            char first = trimmed.charAt(0);
-            char last = trimmed.charAt(trimmed.length() - 1);
-            if ((first == '"' && last == '"')
-                    || (first == '`' && last == '`')
-                    || (first == '[' && last == ']')
-                    || (first == '\'' && last == '\'')) {
-                return trimmed.substring(1, trimmed.length() - 1);
-            }
-        }
-        return trimmed;
     }
 
     private static Row typeInfoRow(
@@ -690,40 +519,6 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
                 Value.of(10)));
     }
 
-    private record ForeignKeyRow(
-            String pkCatalog,
-            String pkSchema,
-            String pkTable,
-            String pkColumn,
-            String fkCatalog,
-            String fkSchema,
-            String fkTable,
-            String fkColumn,
-            int keySeq,
-            int updateRule,
-            int deleteRule,
-            String fkName,
-            String pkName) {
-
-        private Row toRow() {
-            return new Row(List.of(
-                    Value.of(pkCatalog),
-                    Value.of(pkSchema),
-                    Value.of(pkTable),
-                    Value.of(pkColumn),
-                    Value.of(fkCatalog),
-                    Value.of(fkSchema),
-                    Value.of(fkTable),
-                    Value.of(fkColumn),
-                    Value.of(keySeq),
-                    Value.of(updateRule),
-                    Value.of(deleteRule),
-                    Value.of(fkName),
-                    Value.of(pkName),
-                    Value.of(DatabaseMetaData.importedKeyInitiallyDeferred)));
-        }
-    }
-
     @Override public ResultSet getPrimaryKeys(String catalog, String schema, String table) throws SQLException {
         return executeMetadataQuery(MetadataSql.primaryKeys(table), null, raw -> primaryKeysResult(raw, table));
     }
@@ -745,12 +540,12 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     @Override public ResultSet getVersionColumns(String catalog, String schema, String table) throws SQLException { return metadataResult(VERSION_COLUMNS_RESULT); }
     @Override public ResultSet getImportedKeys(String catalog, String schema, String table) throws SQLException {
         return executeMetadataQuery(MetadataSql.importedKeys(table), null,
-                raw -> importedKeysResult(raw, catalog, schema, table));
+                raw -> ForeignKeyMetadata.fromImported(raw, catalog, schema, table));
     }
 
     @Override public ResultSet getExportedKeys(String catalog, String schema, String table) throws SQLException {
         return executeMetadataQuery(MetadataSql.exportedKeys(table, null), null,
-                raw -> exportedKeysResult(raw, catalog, schema, catalog, schema));
+                raw -> ForeignKeyMetadata.fromExported(raw, catalog, schema, catalog, schema));
     }
 
     @Override
@@ -767,7 +562,7 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
                 || requestsNamespace(foreignCatalog)
                 || requestsNamespace(foreignSchema)) {
             // The server reports no catalog and no schema, so a specific request matches nothing.
-            return metadataResult(emptyMetadataResult(FOREIGN_KEY_COLUMNS));
+            return metadataResult(ForeignKeyMetadata.empty());
         }
         if (parentTable == null) {
             return getExportedKeys(foreignCatalog, foreignSchema, foreignTable);
@@ -776,7 +571,7 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
             return getImportedKeys(parentCatalog, parentSchema, parentTable);
         }
         return executeMetadataQuery(MetadataSql.exportedKeys(parentTable, foreignTable), null,
-                raw -> exportedKeysResult(raw, parentCatalog, parentSchema, foreignCatalog, foreignSchema));
+                raw -> ForeignKeyMetadata.fromExported(raw, parentCatalog, parentSchema, foreignCatalog, foreignSchema));
     }
 
     private static boolean requestsNamespace(String name) {
