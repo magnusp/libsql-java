@@ -13,15 +13,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class LibsqlResultSetMetaData implements ResultSetMetaData {
-
-    private static final Pattern COLUMN_TYPENAME = Pattern.compile("([^\\(]*)");
-    private static final Pattern COLUMN_TYPECAST =
-            Pattern.compile("cast\\(.*?\\s+as\\s+(.*?)\\s*\\)");
-    private static final Pattern COLUMN_PRECISION = Pattern.compile(".*?\\((.*?)\\)");
 
     private final List<Col> cols;
     private final List<Row> rows;
@@ -104,8 +97,9 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public boolean isSigned(int column) throws SQLException {
-        if (declType(column) != null) {
-            return switch (getColumnTypeName(column)) {
+        DeclaredType declared = DeclaredType.of(getCol(column));
+        if (declared.isDeclared()) {
+            return switch (declared.typeName()) {
                 case "NUMERIC", "INTEGER", "REAL" -> true;
                 default -> false;
             };
@@ -143,28 +137,12 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public int getPrecision(int column) throws SQLException {
-        String declType = declType(column);
-        if (declType == null) {
-            return 0;
-        }
-        Matcher matcher = COLUMN_PRECISION.matcher(declType);
-        return matcher.find() ? Integer.parseInt(matcher.group(1).split(",")[0].trim()) : 0;
+        return DeclaredType.of(getCol(column)).precision();
     }
 
     @Override
     public int getScale(int column) throws SQLException {
-        String declType = declType(column);
-        if (declType == null) {
-            return 0;
-        }
-        Matcher matcher = COLUMN_PRECISION.matcher(declType);
-        if (matcher.find()) {
-            String[] parts = matcher.group(1).split(",");
-            if (parts.length == 2) {
-                return Integer.parseInt(parts[1].trim());
-            }
-        }
-        return 0;
+        return DeclaredType.of(getCol(column)).scale();
     }
 
     @Override
@@ -189,14 +167,7 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public String getColumnTypeName(int column) throws SQLException {
-        getCol(column);
-        String declType = declType(column);
-        if (declType != null) {
-            Matcher matcher = COLUMN_TYPENAME.matcher(declType);
-            matcher.find();
-            return matcher.group(1).toUpperCase(Locale.ENGLISH);
-        }
-        return "NUMERIC";
+        return DeclaredType.of(getCol(column)).typeName();
     }
 
     @Override
@@ -221,19 +192,6 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
     public String getColumnClassName(int column) throws SQLException {
         getCol(column);
         return XerialColumnType.className(runtimeValue(column));
-    }
-
-    private String declType(int column) throws SQLException {
-        Col col = getCol(column);
-        String declType = col.decltype();
-        if (declType == null) {
-            String name = col.name();
-            if (name != null) {
-                Matcher matcher = COLUMN_TYPECAST.matcher(name);
-                declType = matcher.find() ? matcher.group(1) : null;
-            }
-        }
-        return declType;
     }
 
     private String columnName(int column) throws SQLException {
