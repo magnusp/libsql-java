@@ -209,6 +209,52 @@ class LibsqlSavepointTest {
     }
 
     @Test
+    void releasingTheLaterOfTwoSavepointsWithTheSameNameKeepsTheEarlierOneActive()
+            throws SQLException {
+        ScriptedClient client = successClient();
+        LibsqlConnection connection = newConnection(client);
+        Savepoint first = connection.setSavepoint("dup");
+        Savepoint second = connection.setSavepoint("dup");
+
+        connection.releaseSavepoint(second);
+        connection.executeStatement(new Stmt("INSERT INTO sample VALUES (1)"));
+        connection.rollback(first);
+        connection.executeStatement(new Stmt("INSERT INTO sample VALUES (2)"));
+
+        assertThat(client.executedStatements())
+                .containsExactly(
+                        "SAVEPOINT \"dup\"",
+                        "SAVEPOINT \"dup\"",
+                        "RELEASE SAVEPOINT \"dup\"",
+                        "INSERT INTO sample VALUES (1)",
+                        "ROLLBACK TO SAVEPOINT \"dup\"",
+                        "INSERT INTO sample VALUES (2)");
+        assertThat(client.requests.stream()
+                        .flatMap(request -> request.requests().stream())
+                        .filter(StreamRequest.Close.class::isInstance))
+                .isEmpty();
+    }
+
+    @Test
+    void releasingTheOnlySavepointOfAnAutoCommitTransactionLeavesCommitWithNothingToSend()
+            throws SQLException {
+        ScriptedClient client = successClient();
+        LibsqlConnection connection = newConnection(client);
+        Savepoint savepoint = connection.setSavepoint("only");
+
+        connection.releaseSavepoint(savepoint);
+        connection.commit();
+
+        assertThat(connection.getAutoCommit()).isFalse();
+        assertThat(client.executedStatements())
+                .containsExactly("SAVEPOINT \"only\"", "RELEASE SAVEPOINT \"only\"");
+        assertThat(client.requests.stream()
+                        .flatMap(request -> request.requests().stream())
+                        .filter(StreamRequest.Close.class::isInstance))
+                .hasSize(1);
+    }
+
+    @Test
     void rollbackAndReleaseThrowInAutoCommitModeWithoutSendingAnything() throws SQLException {
         ScriptedClient client = successClient();
         LibsqlConnection connection = newConnection(client);

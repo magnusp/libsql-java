@@ -24,6 +24,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.IntStream;
@@ -274,6 +275,63 @@ class LibsqlResultSetTest {
         assertThat(rs.next()).isTrue();
 
         assertDateTimeGetters(rs, 1_704_153_600_000L);
+    }
+
+    @Test
+    void textDateTimeWithAnOffsetSuffixIsConvertedToTheSystemZone() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Text("2024-03-15 10:30:00+02:00"));
+        assertThat(rs.next()).isTrue();
+
+        LocalDateTime expected = LocalDateTime.of(2024, 3, 15, 10, 30)
+                .atOffset(ZoneOffset.ofHours(2))
+                .atZoneSameInstant(ZoneId.systemDefault())
+                .toLocalDateTime();
+
+        assertThat(rs.getObject(1, LocalDateTime.class)).isEqualTo(expected);
+        assertThat(rs.getObject(1, LocalDate.class)).isEqualTo(expected.toLocalDate());
+        assertThat(rs.getObject(1, LocalTime.class)).isEqualTo(expected.toLocalTime());
+    }
+
+    @Test
+    void textDateTimeWithAZSuffixIsReadAsUtc() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Text("2024-03-15T10:30:00Z"));
+        assertThat(rs.next()).isTrue();
+
+        LocalDateTime expected = LocalDateTime.of(2024, 3, 15, 10, 30)
+                .atOffset(ZoneOffset.UTC)
+                .atZoneSameInstant(ZoneId.systemDefault())
+                .toLocalDateTime();
+
+        assertThat(rs.getObject(1, LocalDateTime.class)).isEqualTo(expected);
+        assertThat(rs.getObject(1, LocalDate.class)).isEqualTo(expected.toLocalDate());
+        assertThat(rs.getObject(1, LocalTime.class)).isEqualTo(expected.toLocalTime());
+    }
+
+    @Test
+    void bareTimeTextGetsTheYear2000DefaultDate() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Text("10:30:45"));
+        assertThat(rs.next()).isTrue();
+
+        assertThat(rs.getObject(1, LocalDateTime.class))
+                .isEqualTo(LocalDateTime.of(2000, 1, 1, 10, 30, 45));
+        assertThat(rs.getObject(1, LocalDate.class)).isEqualTo(LocalDate.of(2000, 1, 1));
+        assertThat(rs.getObject(1, LocalTime.class)).isEqualTo(LocalTime.of(10, 30, 45));
+    }
+
+    @Test
+    void blobRejectsDateAndTimeGettersWithTheTargetTypeName() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Blob(new byte[] {1, 2, 3}));
+        assertThat(rs.next()).isTrue();
+
+        assertThatThrownBy(() -> rs.getObject(1, LocalDate.class))
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Bad value for type LocalDate");
+        assertThatThrownBy(() -> rs.getObject(1, LocalTime.class))
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Bad value for type LocalTime");
+        assertThatThrownBy(() -> rs.getObject(1, LocalDateTime.class))
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Bad value for type LocalDateTime");
     }
 
     @Test
