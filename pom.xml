@@ -46,6 +46,8 @@
         <testcontainers.version>2.0.5</testcontainers.version>
         <hikaricp.version>7.1.0</hikaricp.version>
         <protobuf.version>4.36.2</protobuf.version>
+        <!-- Pinned exactly: 5.7 is still a beta, so a silent upgrade must be a deliberate one. -->
+        <httpclient5.websocket.version>5.7-beta1</httpclient5.websocket.version>
         <!-- Pinned sqld image for the integration and conformance suites. Bump deliberately. -->
         <libsql.image>ghcr.io/tursodatabase/libsql-server:v0.24.33</libsql.image>
     </properties>
@@ -74,6 +76,13 @@
                 <groupId>com.google.protobuf</groupId>
                 <artifactId>protobuf-java</artifactId>
                 <version>${protobuf.version}</version>
+            </dependency>
+
+            <!-- WebSocket Transport -->
+            <dependency>
+                <groupId>org.apache.httpcomponents.client5</groupId>
+                <artifactId>httpclient5-websocket</artifactId>
+                <version>${httpclient5.websocket.version}</version>
             </dependency>
 
             <!-- JSON Streaming Codec -->

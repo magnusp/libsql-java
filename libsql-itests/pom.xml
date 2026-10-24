@@ -60,6 +60,15 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <!-- Trust only the self-signed test certificate in front of sqld. -->
+                        <javax.net.ssl.trustStore>
+                            ${project.build.testOutputDirectory}/tls/truststore.p12
+                        </javax.net.ssl.trustStore>
+                        <javax.net.ssl.trustStorePassword>changeit</javax.net.ssl.trustStorePassword>
+                    </systemPropertyVariables>
+                </configuration>
             </plugin>
         </plugins>
     </build>
