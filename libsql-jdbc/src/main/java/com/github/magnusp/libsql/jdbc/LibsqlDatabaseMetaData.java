@@ -447,63 +447,18 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
         }
     }
 
-    private static String escapeLiteral(String value) {
-        return value.replace("'", "''");
-    }
-
-    @Override
-    public ResultSet getTables(String catalog, String schemaPattern, String tableNamePattern, String[] types) throws SQLException {
-        String pattern = tableNamePattern == null || tableNamePattern.isEmpty()
-                ? "%"
-                : escapeLiteral(tableNamePattern);
-        StringBuilder sql = new StringBuilder();
-        sql.append("SELECT NULL AS TABLE_CAT, NULL AS TABLE_SCHEM, NAME AS TABLE_NAME, TYPE AS TABLE_TYPE, ")
-                .append("NULL AS REMARKS, NULL AS TYPE_CAT, NULL AS TYPE_SCHEM, NULL AS TYPE_NAME, ")
-                .append("NULL AS SELF_REFERENCING_COL_NAME, NULL AS REF_GENERATION FROM (")
-                .append("SELECT 'sqlite_schema' AS NAME, 'SYSTEM TABLE' AS TYPE")
-                .append(" UNION ALL SELECT NAME, UPPER(TYPE) AS TYPE FROM sqlite_schema")
-                .append(" WHERE NAME NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND UPPER(TYPE) IN ('TABLE', 'VIEW')")
-                .append(" UNION ALL SELECT NAME, 'GLOBAL TEMPORARY' AS TYPE FROM sqlite_temp_master")
-                .append(" UNION ALL SELECT NAME, 'SYSTEM TABLE' AS TYPE FROM sqlite_schema")
-                .append(" WHERE NAME LIKE 'sqlite\\_%' ESCAPE '\\'")
-                .append(") WHERE TABLE_NAME LIKE '").append(pattern).append("' ESCAPE '\\'");
-        if (types != null && types.length != 0) {
-            sql.append(" AND TABLE_TYPE IN (");
-            for (int i = 0; i < types.length; i++) {
-                if (i > 0) {
-                    sql.append(",");
-                }
-                sql.append("'").append(escapeLiteral(types[i].toUpperCase())).append("'");
-            }
-            sql.append(")");
-        }
-        sql.append(" ORDER BY TABLE_TYPE, TABLE_NAME");
-        return executeMetadataQuery(sql.toString());
+    @Override public ResultSet getTables(String catalog, String schemaPattern, String tableNamePattern, String[] types) throws SQLException {
+        String pattern = tableNamePattern == null || tableNamePattern.isEmpty() ? "%" : tableNamePattern;
+        return executeMetadataQuery(MetadataSql.tables(pattern, types));
     }
 
     @Override
     public ResultSet getColumns(String catalog, String schemaPattern, String tableNamePattern, String columnNamePattern) throws SQLException {
         String tablePattern = tableNamePattern == null || tableNamePattern.isEmpty() ? "%" : tableNamePattern;
         String columnPattern = columnNamePattern == null || columnNamePattern.isEmpty() ? "%" : columnNamePattern;
-        String sql = "WITH t(TABLE_NAME, CREATE_SQL, TABLE_RANK) AS ("
-                + " SELECT 'sqlite_schema' AS TABLE_NAME, NULL AS CREATE_SQL, 1 AS TABLE_RANK"
-                + " UNION ALL SELECT NAME, SQL, 1 FROM sqlite_schema"
-                + " WHERE NAME LIKE 'sqlite\\_%' ESCAPE '\\'"
-                + " UNION ALL SELECT NAME, SQL, 2 FROM sqlite_schema"
-                + " WHERE NAME NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND UPPER(TYPE) = 'TABLE'"
-                + " UNION ALL SELECT NAME, SQL, 3 FROM sqlite_schema"
-                + " WHERE NAME NOT LIKE 'sqlite\\_%' ESCAPE '\\' AND UPPER(TYPE) = 'VIEW'"
-                + " UNION ALL SELECT NAME, NULL, 0 FROM sqlite_temp_master"
-                + ") SELECT t.TABLE_NAME AS TABLE_NAME, t.CREATE_SQL AS CREATE_SQL, p.cid AS CID, "
-                + "p.name AS COLUMN_NAME, p.type AS DECLARED_TYPE, p.\"notnull\" AS NOT_NULL, "
-                + "p.dflt_value AS COLUMN_DEF, p.pk AS PK, p.hidden AS HIDDEN "
-                + "FROM t JOIN pragma_table_xinfo(t.TABLE_NAME) p "
-                + "WHERE t.TABLE_NAME LIKE '" + escapeLiteral(tablePattern) + "' ESCAPE '\\'"
-                + " AND p.name LIKE '" + escapeLiteral(columnPattern) + "' ESCAPE '\\'"
-                + " ORDER BY t.TABLE_RANK, t.TABLE_NAME, p.cid";
         // getColumns synthesizes its column labels, so the raw SQL must not drive column-origin
         // resolution for the result set.
-        return executeMetadataQuery(sql, null, LibsqlDatabaseMetaData::columnsResult);
+        return executeMetadataQuery(MetadataSql.columns(tablePattern, columnPattern), null, LibsqlDatabaseMetaData::columnsResult);
     }
 
     private static StmtResult columnsResult(StmtResult raw) {
@@ -666,39 +621,6 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
         rows.sort(Comparator.comparing(
                 row -> text(row.values().get(3)), Comparator.nullsFirst(Comparator.naturalOrder())));
         return new StmtResult(PRIMARY_KEY_COLUMNS, rows, 0, null);
-    }
-
-    private static String importedKeysSql(String table) {
-        String escapedTable = escapeLiteral(table == null ? "" : table);
-        return "SELECT f.id AS FK_ID, f.seq AS KEY_SEQ, f.\"table\" AS PKTABLE_NAME, "
-                + "f.\"from\" AS FKCOLUMN_NAME, f.\"to\" AS PKCOLUMN_NAME, "
-                + "f.on_update AS UPDATE_RULE, f.on_delete AS DELETE_RULE, "
-                + "c.sql AS FK_CREATE_SQL, p.sql AS PK_CREATE_SQL, "
-                + "(SELECT pi.name FROM pragma_table_info(f.\"table\") pi WHERE pi.pk = 1) AS PK_FIRST_COLUMN "
-                + "FROM pragma_foreign_key_list('" + escapedTable + "') f "
-                + "LEFT JOIN sqlite_schema c ON lower(c.name) = lower('" + escapedTable + "') "
-                + "LEFT JOIN sqlite_schema p ON lower(p.name) = lower(f.\"table\") "
-                + "ORDER BY f.id, f.seq";
-    }
-
-    private static String exportedKeysSql(String parentTable, String childTable) {
-        String escapedParent = escapeLiteral(parentTable == null ? "" : parentTable);
-        StringBuilder sql = new StringBuilder()
-                .append("SELECT f.id AS FK_ID, f.seq AS KEY_SEQ, ")
-                .append("COALESCE(p.name, f.\"table\") AS PKTABLE_NAME, f.\"from\" AS FKCOLUMN_NAME, ")
-                .append("COALESCE(f.\"to\", (SELECT pi.name FROM pragma_table_info(f.\"table\") pi WHERE pi.pk = 1)) AS PKCOLUMN_NAME, ")
-                .append("f.on_update AS UPDATE_RULE, f.on_delete AS DELETE_RULE, ")
-                .append("m.name AS FKTABLE_NAME, m.sql AS FK_CREATE_SQL, p.sql AS PK_CREATE_SQL, ")
-                .append("(SELECT group_concat(pi.name, ',') FROM pragma_table_info(f.\"table\") pi WHERE pi.pk > 0) AS PK_COLUMNS ")
-                .append("FROM sqlite_schema m JOIN pragma_foreign_key_list(m.name) f ")
-                .append("LEFT JOIN sqlite_schema p ON lower(p.name) = lower(f.\"table\") ")
-                .append("WHERE m.type = 'table' AND lower(f.\"table\") = lower('")
-                .append(escapedParent)
-                .append("')");
-        if (childTable != null) {
-            sql.append(" AND lower(m.name) = lower('").append(escapeLiteral(childTable)).append("')");
-        }
-        return sql.append(" ORDER BY m.name, f.id, f.seq").toString();
     }
 
     private static StmtResult importedKeysResult(
@@ -905,24 +827,11 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
 
     private record ColumnShape(int jdbcType, String typeName, int columnSize, int decimalDigits) {}
 
-    @Override
-    public ResultSet getPrimaryKeys(String catalog, String schema, String table) throws SQLException {
-        String escapedTable = escapeLiteral(table == null ? "" : table);
-        String sql = "SELECT p.name AS COLUMN_NAME, p.pk AS KEY_SEQ, s.sql AS CREATE_SQL "
-                + "FROM pragma_table_info('" + escapedTable + "') p "
-                + "LEFT JOIN sqlite_schema s ON lower(s.name) = lower('" + escapedTable + "') "
-                + "WHERE p.pk > 0";
-        return executeMetadataQuery(sql, null, raw -> primaryKeysResult(raw, table));
+    @Override public ResultSet getPrimaryKeys(String catalog, String schema, String table) throws SQLException {
+        return executeMetadataQuery(MetadataSql.primaryKeys(table), null, raw -> primaryKeysResult(raw, table));
     }
 
-    @Override
-    public ResultSet getTableTypes() throws SQLException {
-        return executeMetadataQuery(
-                "SELECT 'TABLE' AS TABLE_TYPE "
-                        + "UNION SELECT 'VIEW' AS TABLE_TYPE "
-                        + "UNION SELECT 'SYSTEM TABLE' AS TABLE_TYPE "
-                        + "UNION SELECT 'GLOBAL TEMPORARY' AS TABLE_TYPE");
-    }
+    @Override public ResultSet getTableTypes() throws SQLException { return executeMetadataQuery(MetadataSql.tableTypes()); }
 
     @Override
     public Connection getConnection() throws SQLException {
@@ -931,22 +840,20 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
 
     @Override public ResultSet getProcedures(String catalog, String schemaPattern, String procedureNamePattern) throws SQLException { return metadataResult(PROCEDURES_RESULT); }
     @Override public ResultSet getProcedureColumns(String catalog, String schemaPattern, String procedureNamePattern, String columnNamePattern) throws SQLException { return metadataResult(PROCEDURE_COLUMNS_RESULT); }
-    @Override public ResultSet getSchemas() throws SQLException { return executeMetadataQuery("SELECT NULL AS TABLE_SCHEM, NULL AS TABLE_CATALOG WHERE 0"); }
-    @Override public ResultSet getCatalogs() throws SQLException { return executeMetadataQuery("SELECT NULL AS TABLE_CAT WHERE 0"); }
+    @Override public ResultSet getSchemas() throws SQLException { return executeMetadataQuery(MetadataSql.schemas()); }
+    @Override public ResultSet getCatalogs() throws SQLException { return executeMetadataQuery(MetadataSql.catalogs()); }
     @Override public ResultSet getColumnPrivileges(String catalog, String schema, String table, String columnNamePattern) throws SQLException { return metadataResult(COLUMN_PRIVILEGES_RESULT); }
     @Override public ResultSet getTablePrivileges(String catalog, String schemaPattern, String tableNamePattern) throws SQLException { return metadataResult(TABLE_PRIVILEGES_RESULT); }
     @Override public ResultSet getBestRowIdentifier(String catalog, String schema, String table, int scope, boolean nullable) throws SQLException { return metadataResult(BEST_ROW_IDENTIFIER_RESULT); }
     @Override public ResultSet getVersionColumns(String catalog, String schema, String table) throws SQLException { return metadataResult(VERSION_COLUMNS_RESULT); }
-    @Override
-    public ResultSet getImportedKeys(String catalog, String schema, String table) throws SQLException {
-        return executeMetadataQuery(
-                importedKeysSql(table), null, raw -> importedKeysResult(raw, catalog, schema, table));
+    @Override public ResultSet getImportedKeys(String catalog, String schema, String table) throws SQLException {
+        return executeMetadataQuery(MetadataSql.importedKeys(table), null,
+                raw -> importedKeysResult(raw, catalog, schema, table));
     }
 
-    @Override
-    public ResultSet getExportedKeys(String catalog, String schema, String table) throws SQLException {
-        return executeMetadataQuery(
-                exportedKeysSql(table, null), null, raw -> exportedKeysResult(raw, catalog, schema, catalog, schema));
+    @Override public ResultSet getExportedKeys(String catalog, String schema, String table) throws SQLException {
+        return executeMetadataQuery(MetadataSql.exportedKeys(table, null), null,
+                raw -> exportedKeysResult(raw, catalog, schema, catalog, schema));
     }
 
     @Override
@@ -971,9 +878,7 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
         if (foreignTable == null) {
             return getImportedKeys(parentCatalog, parentSchema, parentTable);
         }
-        return executeMetadataQuery(
-                exportedKeysSql(parentTable, foreignTable),
-                null,
+        return executeMetadataQuery(MetadataSql.exportedKeys(parentTable, foreignTable), null,
                 raw -> exportedKeysResult(raw, parentCatalog, parentSchema, foreignCatalog, foreignSchema));
     }
 
@@ -985,20 +890,7 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     public ResultSet getTypeInfo() throws SQLException {
         return metadataResult(TYPE_INFO_RESULT);
     }
-    @Override public ResultSet getIndexInfo(String catalog, String schema, String table, boolean unique, boolean approximate) throws SQLException {
-        String escapedTable = escapeLiteral(table == null ? "" : table);
-        String sql = "SELECT NULL AS TABLE_CAT, NULL AS TABLE_SCHEM, '" + escapedTable + "' AS TABLE_NAME, " +
-                "CASE il.\"unique\" WHEN 1 THEN 0 ELSE 1 END AS NON_UNIQUE, " +
-                "NULL AS INDEX_QUALIFIER, il.name AS INDEX_NAME, 3 AS TYPE, " +
-                "ii.seqno + 1 AS ORDINAL_POSITION, ii.name AS COLUMN_NAME, " +
-                "'A' AS ASC_OR_DESC, 0 AS CARDINALITY, 0 AS PAGES, NULL AS FILTER_CONDITION " +
-                "FROM pragma_index_list('" + escapedTable + "') il, pragma_index_info(il.name) ii";
-        if (unique) {
-            sql += " WHERE il.\"unique\" = 1";
-        }
-        sql += " ORDER BY NON_UNIQUE, TYPE, INDEX_NAME, ORDINAL_POSITION";
-        return executeMetadataQuery(sql);
-    }
+    @Override public ResultSet getIndexInfo(String catalog, String schema, String table, boolean unique, boolean approximate) throws SQLException { return executeMetadataQuery(MetadataSql.indexInfo(table, unique)); }
     @Override public boolean supportsResultSetType(int type) throws SQLException { return type == ResultSet.TYPE_FORWARD_ONLY; }
     @Override public boolean supportsResultSetConcurrency(int type, int concurrency) throws SQLException { return type == ResultSet.TYPE_FORWARD_ONLY && concurrency == ResultSet.CONCUR_READ_ONLY; }
     @Override public boolean ownUpdatesAreVisible(int type) throws SQLException { return false; }
