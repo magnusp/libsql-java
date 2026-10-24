@@ -611,6 +611,37 @@ class LibsqlResultSetMetaDataTest {
     }
 
     @Test
+    void excludesHiddenColumnsFromMainSchemaStarExpansion() throws SQLException {
+        LibsqlResultSetMetaData metadata = metadataForSql(
+                "SELECT * FROM main.docs JOIN main.c ON 1",
+                connectionForHiddenColumns(),
+                List.of(new Col("title", "TEXT"), new Col("body", "TEXT"), new Col("z", "TEXT")));
+
+        // Star width comes from the xinfo catalogue. A hidden column would widen it past the three
+        // protocol columns, and the resolver blanks every table name on that mismatch.
+        assertThat(metadata.getTableName(1)).isEqualTo("docs");
+        assertThat(metadata.getTableName(2)).isEqualTo("docs");
+        assertThat(metadata.getTableName(3)).isEqualTo("c");
+        assertThat(metadata.isNullable(1)).isEqualTo(ResultSetMetaData.columnNoNulls);
+        assertThat(metadata.isNullable(2)).isEqualTo(ResultSetMetaData.columnNullable);
+    }
+
+    @Test
+    void excludesHiddenColumnsFromAttachedSchemaStarExpansion() throws SQLException {
+        LibsqlResultSetMetaData metadata = new LibsqlResultSetMetaData(
+                List.of(new Col("title", "TEXT"), new Col("body", "TEXT")),
+                List.of(),
+                "SELECT * FROM aux.docs",
+                connectionForHiddenColumns());
+
+        // Same width mismatch: the attached query must filter the hidden column too.
+        assertThat(metadata.getTableName(1)).isEqualTo("docs");
+        assertThat(metadata.getTableName(2)).isEqualTo("docs");
+        assertThat(metadata.isNullable(1)).isEqualTo(ResultSetMetaData.columnNullable);
+        assertThat(metadata.isAutoIncrement(1)).isFalse();
+    }
+
+    @Test
     void leavesEveryColumnUnknownWhenTheStarWidthDiffers() throws SQLException {
         LibsqlResultSetMetaData metadata = metadataForSql(
                 "SELECT * FROM (VALUES(1)) v, c",
@@ -726,9 +757,13 @@ class LibsqlResultSetMetaDataTest {
 
     private record FakeTable(String name, String sql, List<FakeColumn> columns) {}
 
-    private record FakeColumn(String name, boolean notNull, boolean primaryKey, boolean generated) {
+    private record FakeColumn(String name, boolean notNull, boolean primaryKey, boolean generated, boolean hidden) {
         FakeColumn(String name, boolean notNull, boolean primaryKey) {
-            this(name, notNull, primaryKey, false);
+            this(name, notNull, primaryKey, false, false);
+        }
+
+        FakeColumn(String name, boolean notNull, boolean primaryKey, boolean generated) {
+            this(name, notNull, primaryKey, generated, false);
         }
     }
 
@@ -827,6 +862,74 @@ class LibsqlResultSetMetaDataTest {
                     rows.add(new Row(List.of(
                             Value.of(table.name()),
                             Value.of(table.sql()),
+                            Value.of(column.name()),
+                            Value.of(column.notNull() ? 1L : 0L),
+                            Value.of(column.primaryKey() ? 1L : 0L))));
+                }
+                return new StmtResult(List.of(), rows, 0, null);
+            }
+        };
+    }
+
+    /**
+     * Answers both {@code pragma_table_xinfo} forms from one catalogue and drops a column exactly
+     * when the query filters {@code hidden = 1}, as SQLite does. Dispatch on the query text keeps a
+     * filter-free query seeing the hidden column, which widens star expansion. The attached schema
+     * reports a nullable {@code title} so its rows are distinguishable from the main schema's.
+     */
+    private static LibsqlConnection connectionForHiddenColumns() {
+        Map<String, FakeTable> tables = new LinkedHashMap<>();
+        tables.put(
+                "main.docs",
+                new FakeTable(
+                        "docs",
+                        "CREATE VIRTUAL TABLE docs USING fts5(title, body)",
+                        List.of(
+                                new FakeColumn("title", true, false),
+                                new FakeColumn("body", false, false),
+                                new FakeColumn("rank", false, false, false, true))));
+        tables.put(
+                "main.c",
+                new FakeTable("c", "CREATE TABLE c (z TEXT)", List.of(new FakeColumn("z", false, false))));
+        tables.put(
+                "aux.docs",
+                new FakeTable(
+                        "docs",
+                        "CREATE VIRTUAL TABLE docs USING fts5(title, body)",
+                        List.of(
+                                new FakeColumn("title", false, false),
+                                new FakeColumn("body", false, false),
+                                new FakeColumn("rank", false, false, false, true))));
+        List<Row> databases = List.of(
+                new Row(List.of(Value.of("main"))),
+                new Row(List.of(Value.of("temp"))),
+                new Row(List.of(Value.of("Aux"))));
+        StmtResult databaseList = new StmtResult(List.of(), databases, 0, null);
+
+        return new LibsqlConnection(null, null) {
+            @Override
+            public StmtResult executeStatement(Stmt stmt) throws SQLException {
+                if (stmt.sql().contains("pragma_database_list")) {
+                    return databaseList;
+                }
+                if (!stmt.sql().contains("pragma_table_xinfo")) {
+                    return new StmtResult(List.of(), List.of(), 0, null);
+                }
+                String table = argument(stmt, 0);
+                String schema = argument(stmt, 1);
+                FakeTable fake = tables.get((schema + "." + table).toLowerCase(Locale.ROOT));
+                if (fake == null) {
+                    return new StmtResult(List.of(), List.of(), 0, null);
+                }
+                boolean filtersHidden = stmt.sql().contains("p.hidden != 1");
+                List<Row> rows = new ArrayList<>();
+                for (FakeColumn column : fake.columns()) {
+                    if (column.hidden() && filtersHidden) {
+                        continue;
+                    }
+                    rows.add(new Row(List.of(
+                            Value.of(fake.name()),
+                            Value.of(fake.sql()),
                             Value.of(column.name()),
                             Value.of(column.notNull() ? 1L : 0L),
                             Value.of(column.primaryKey() ? 1L : 0L))));
