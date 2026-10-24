@@ -40,7 +40,10 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Hrana 3 client over a WebSocket, speaking the JSON encoding ({@code hrana3} subprotocol).
+ * Hrana 3 client over a WebSocket.
+ *
+ * <p>The supplied {@link HranaWsCodec} selects both the wire encoding and the subprotocol: {@code
+ * hrana3} for JSON text frames and {@code hrana3-protobuf} for Protobuf binary frames.
  *
  * <p>One WebSocket connection multiplexes any number of streams. Requests are matched to responses
  * by {@code request_id}, so the client may send a whole one-shot sequence (open, execute, close)
@@ -58,7 +61,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class LibsqlWebSocketClient implements LibsqlClient {
 
-    private static final String SUBPROTOCOL = "hrana3";
+    private static final String SUBPROTOCOL_JSON = "hrana3";
+    private static final String SUBPROTOCOL_PROTOBUF = "hrana3-protobuf";
     private static final String WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
     private static final int OP_CONTINUATION = 0x0;
@@ -73,6 +77,7 @@ public class LibsqlWebSocketClient implements LibsqlClient {
 
     private final LibsqlClientConfig config;
     private final HranaWsCodec codec;
+    private final String subprotocol;
     private final Duration timeout;
     private final Transport transport;
 
@@ -97,7 +102,8 @@ public class LibsqlWebSocketClient implements LibsqlClient {
         this.timeout = config.connectTimeout() != null
                 ? config.connectTimeout()
                 : LibsqlClientConfig.DEFAULT_CONNECT_TIMEOUT;
-        this.transport = new Transport(URI.create(config.url()), timeout);
+        this.subprotocol = codec.isBinary() ? SUBPROTOCOL_PROTOBUF : SUBPROTOCOL_JSON;
+        this.transport = new Transport(URI.create(config.url()), timeout, subprotocol);
 
         try {
             send(new WsClientMsg.Hello(authToken()));
@@ -359,14 +365,14 @@ public class LibsqlWebSocketClient implements LibsqlClient {
 
         private volatile boolean open = true;
 
-        private Transport(URI uri, Duration timeout) {
+        private Transport(URI uri, Duration timeout, String subprotocol) {
             Socket connected = null;
             try {
                 connected = connect(uri, timeout);
                 this.socket = connected;
                 this.in = connected.getInputStream();
                 this.out = connected.getOutputStream();
-                handshake(uri, in, out, timeout);
+                handshake(uri, in, out, timeout, subprotocol);
             } catch (IOException e) {
                 closeQuietly(connected);
                 throw new LibsqlException(
@@ -583,8 +589,8 @@ public class LibsqlWebSocketClient implements LibsqlClient {
         }
     }
 
-    private static void handshake(URI uri, InputStream in, OutputStream out, Duration timeout)
-            throws IOException {
+    private static void handshake(URI uri, InputStream in, OutputStream out, Duration timeout,
+            String subprotocol) throws IOException {
         String key = createKey();
         String expectedAccept = acceptKey(key);
         String path = uri.getRawPath() == null || uri.getRawPath().isEmpty() ? "/" : uri.getRawPath();
@@ -602,7 +608,7 @@ public class LibsqlWebSocketClient implements LibsqlClient {
                 .append("Connection: Upgrade\r\n")
                 .append("Sec-WebSocket-Key: ").append(key).append("\r\n")
                 .append("Sec-WebSocket-Version: 13\r\n")
-                .append("Sec-WebSocket-Protocol: ").append(SUBPROTOCOL).append("\r\n")
+                .append("Sec-WebSocket-Protocol: ").append(subprotocol).append("\r\n")
                 .append("\r\n");
         out.write(request.toString().getBytes(StandardCharsets.US_ASCII));
         out.flush();
@@ -627,8 +633,8 @@ public class LibsqlWebSocketClient implements LibsqlClient {
             throw new IOException("WebSocket upgrade response has an invalid Sec-WebSocket-Accept");
         }
         String negotiated = headers.get("sec-websocket-protocol");
-        if (!SUBPROTOCOL.equals(negotiated)) {
-            throw new IOException("Server did not negotiate subprotocol " + SUBPROTOCOL
+        if (!subprotocol.equals(negotiated)) {
+            throw new IOException("Server did not negotiate subprotocol " + subprotocol
                     + " (got " + negotiated + ")");
         }
     }
