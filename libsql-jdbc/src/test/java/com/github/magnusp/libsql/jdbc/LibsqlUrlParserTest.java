@@ -38,6 +38,23 @@ public class LibsqlUrlParserTest {
     }
 
     @Test
+    void testIgnoresSocketTimeoutWithoutConnectTimeout() throws SQLException {
+        String url = "jdbc:libsql:http://localhost:8080/dev/tenant?socketTimeout=5000";
+        LibsqlClientConfig config = LibsqlUrlParser.parse(url, new Properties());
+
+        assertThat(config.url()).isEqualTo("http://localhost:8080/dev/tenant");
+        assertThat(config.connectTimeout()).isEqualTo(LibsqlClientConfig.DEFAULT_CONNECT_TIMEOUT);
+    }
+
+    @Test
+    void testConnectTimeoutStillWinsAlongsideSocketTimeout() throws SQLException {
+        String url = "jdbc:libsql:http://localhost:8080/dev/tenant?socketTimeout=5000&connectTimeout=2500";
+        LibsqlClientConfig config = LibsqlUrlParser.parse(url, new Properties());
+
+        assertThat(config.connectTimeout().toMillis()).isEqualTo(2500);
+    }
+
+    @Test
     void testParseWebSocketUrlKeepsTheSchemeAndPath() throws SQLException {
         LibsqlClientConfig config = LibsqlUrlParser.parse(
                 "jdbc:libsql:ws://localhost:8080/dev/tenant?authToken=secretToken", new Properties());
