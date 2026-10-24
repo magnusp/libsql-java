@@ -689,30 +689,39 @@ public class DirectHranaJsonCodec implements HranaJsonCodec, HranaWsCodec {
     }
 
     private WsResponse parseWsResponse(FastJsonParser p) throws IOException {
+        // JSON object field order is not significant, so find the type before reading the payload.
+        int start = p.pos;
         p.expectObjectStart();
         String type = null;
-        StmtResult stmtResult = null;
-        BatchResult batchResult = null;
-
         while (!p.checkObjectEnd()) {
             String field = p.nextFieldName();
-            switch (field) {
-                case "type" -> type = p.nextString();
-                case "result" -> {
-                    if ("execute".equals(type)) {
-                        stmtResult = parseStmtResult(p);
-                    } else if ("batch".equals(type)) {
-                        batchResult = parseBatchResult(p);
-                    } else {
-                        p.skipValue();
-                    }
-                }
-                default -> p.skipValue();
+            if ("type".equals(field)) {
+                type = p.nextString();
+            } else {
+                p.skipValue();
             }
         }
-
         if (type == null) {
             throw new IOException("WebSocket response missing type field");
+        }
+
+        p.pos = start;
+        p.expectObjectStart();
+        StmtResult stmtResult = null;
+        BatchResult batchResult = null;
+        while (!p.checkObjectEnd()) {
+            String field = p.nextFieldName();
+            if ("result".equals(field)) {
+                if ("execute".equals(type)) {
+                    stmtResult = parseStmtResult(p);
+                } else if ("batch".equals(type)) {
+                    batchResult = parseBatchResult(p);
+                } else {
+                    p.skipValue();
+                }
+            } else {
+                p.skipValue();
+            }
         }
         return switch (type) {
             case "open_stream" -> WsResponse.OpenStream.INSTANCE;

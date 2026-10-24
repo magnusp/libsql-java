@@ -161,6 +161,18 @@ class DirectHranaWsJsonCodecTest {
     }
 
     @Test
+    void deserializesExecuteResponseRegardlessOfFieldOrder() throws IOException {
+        String json = """
+                {"response":{"result":{"cols":[],"rows":[],"affected_row_count":0},
+                "type":"execute"},"request_id":14,"type":"response_ok"}""";
+
+        StmtResult expected = new StmtResult(List.of(), List.of(), 0, null);
+
+        assertThat(codec.deserialize(utf8(json)))
+                .isEqualTo(new WsServerMsg.ResponseOk(14, new WsResponse.Execute(expected)));
+    }
+
+    @Test
     void deserializesResponseError() throws IOException {
         assertThat(codec.deserialize(utf8(
                         "{\"type\":\"response_error\",\"request_id\":13,"
