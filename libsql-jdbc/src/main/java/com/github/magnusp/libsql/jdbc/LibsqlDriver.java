@@ -1,7 +1,9 @@
 package com.github.magnusp.libsql.jdbc;
 
+import com.github.magnusp.libsql.client.LibsqlClient;
 import com.github.magnusp.libsql.client.LibsqlClientConfig;
 import com.github.magnusp.libsql.client.LibsqlHttpClient;
+import com.github.magnusp.libsql.client.LibsqlWebSocketClient;
 
 import java.sql.Connection;
 import java.sql.Driver;
@@ -31,8 +33,14 @@ public class LibsqlDriver implements Driver {
             return null;
         }
         LibsqlClientConfig config = LibsqlUrlParser.parse(url, info);
-        LibsqlHttpClient client = new LibsqlHttpClient(config);
+        LibsqlClient client = isWebSocketUrl(config.url())
+                ? new LibsqlWebSocketClient(config)
+                : new LibsqlHttpClient(config);
         return new LibsqlConnection(config, client);
+    }
+
+    private static boolean isWebSocketUrl(String url) {
+        return url.startsWith("ws://") || url.startsWith("wss://");
     }
 
     @Override

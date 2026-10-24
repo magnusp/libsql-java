@@ -1,21 +1,16 @@
 package com.github.magnusp.libsql.jdbc;
 
+import com.github.magnusp.libsql.client.LibsqlClient;
 import com.github.magnusp.libsql.client.LibsqlClientConfig;
 import com.github.magnusp.libsql.client.LibsqlException;
-import com.github.magnusp.libsql.client.LibsqlHttpClient;
 import com.github.magnusp.libsql.hrana.codec.Batch;
 import com.github.magnusp.libsql.hrana.codec.BatchCond;
+import com.github.magnusp.libsql.hrana.codec.BatchResult;
 import com.github.magnusp.libsql.hrana.codec.BatchStep;
 import com.github.magnusp.libsql.hrana.codec.HranaError;
-import com.github.magnusp.libsql.hrana.codec.PipelineReqBody;
-import com.github.magnusp.libsql.hrana.codec.PipelineRespBody;
 import com.github.magnusp.libsql.hrana.codec.Stmt;
 import com.github.magnusp.libsql.hrana.codec.StmtResult;
-import com.github.magnusp.libsql.hrana.codec.StreamRequest;
-import com.github.magnusp.libsql.hrana.codec.StreamResponse;
-import com.github.magnusp.libsql.hrana.codec.StreamResult;
 
-import java.net.URI;
 import java.sql.Array;
 import java.sql.BatchUpdateException;
 import java.sql.Blob;
@@ -44,9 +39,9 @@ import java.util.concurrent.Executor;
  * A JDBC connection whose state is serialized on one connection-level lock, the way sqlite-jdbc
  * serializes every call on its {@code DB} object.
  *
- * <p>Hrana over HTTP requires serialized requests per stream and consumes a baton once, so each
- * pipeline round trip and each transaction transition ({@link #setAutoCommit(boolean)}, {@link
- * #commit()}, {@link #rollback()}, {@link #close()}) runs while holding {@link #stateLock}.
+ * <p>Both transports serialize requests on one interactive stream, and Hrana over HTTP consumes a
+ * baton once, so each round trip and each transaction transition ({@link #setAutoCommit(boolean)},
+ * {@link #commit()}, {@link #rollback()}, {@link #close()}) runs while holding {@link #stateLock}.
  * Without it, two statements on one non-auto-commit connection can read the same baton, a commit
  * can land between another thread's begin and its send, and a close can leave a stream open.
  *
@@ -60,9 +55,9 @@ import java.util.concurrent.Executor;
 public class LibsqlConnection implements Connection {
 
     private final LibsqlClientConfig config;
-    private final LibsqlHttpClient client;
+    private final LibsqlClient client;
 
-    /** Guards every field below and every pipeline round trip. See the class javadoc. */
+    /** Guards every field below and every transport round trip. See the class javadoc. */
     private final Object stateLock = new Object();
 
     private boolean autoCommit = true;
@@ -103,11 +98,9 @@ public class LibsqlConnection implements Connection {
         }
     }
 
-    // Interactive stream state
-    private String baton = null;
-    private URI baseUrl = null;
+    // Interactive stream state lives in the client; see LibsqlClient.hasOpenStream().
 
-    public LibsqlConnection(LibsqlClientConfig config, LibsqlHttpClient client) {
+    public LibsqlConnection(LibsqlClientConfig config, LibsqlClient client) {
         this.config = config;
         this.client = client;
     }
@@ -133,23 +126,7 @@ public class LibsqlConnection implements Connection {
                     return client.executeOneShot(stmt);
                 } else {
                     ensureTransactionStarted();
-                    PipelineReqBody req = new PipelineReqBody(baton, List.of(new StreamRequest.Execute(stmt)));
-                    PipelineRespBody resp = client.sendPipeline(req, baseUrl);
-                    updateStreamState(resp);
-
-                    if (resp.results().isEmpty()) {
-                        throw new SQLException("Empty result received from server");
-                    }
-                    StreamResult sr = resp.results().get(0);
-                    return switch (sr) {
-                        case StreamResult.Ok ok -> {
-                            if (ok.response() instanceof StreamResponse.Execute exec) {
-                                yield exec.result();
-                            }
-                            throw new SQLException("Unexpected response: " + ok.response());
-                        }
-                        case StreamResult.Error err -> throw LibsqlErrorMapper.toSQLException(err.error());
-                    };
+                    return client.executeOnStream(stmt);
                 }
             } catch (LibsqlException e) {
                 throw LibsqlErrorMapper.toSQLException(e);
@@ -186,44 +163,25 @@ public class LibsqlConnection implements Connection {
                 }
                 Batch batch = new Batch(steps);
 
+                BatchResult result;
                 if (autoCommit) {
-                    // One-shot batch
-                    PipelineReqBody req = new PipelineReqBody(null, List.of(
-                            new StreamRequest.BatchReq(batch),
-                            StreamRequest.Close.INSTANCE
-                    ));
-                    PipelineRespBody resp = client.sendPipeline(req, baseUrl);
-                    return extractBatchResults(resp, statements.size());
+                    result = client.executeBatchOneShot(batch);
                 } else {
                     ensureTransactionStarted();
-                    PipelineReqBody req = new PipelineReqBody(baton, List.of(new StreamRequest.BatchReq(batch)));
-                    PipelineRespBody resp = client.sendPipeline(req, baseUrl);
-                    updateStreamState(resp);
-                    return extractBatchResults(resp, statements.size());
+                    result = client.executeBatchOnStream(batch);
                 }
+                return extractBatchResults(result, statements.size());
             } catch (LibsqlException e) {
                 throw LibsqlErrorMapper.toSQLException(e);
             }
         }
     }
 
-    private List<StmtResult> extractBatchResults(PipelineRespBody resp, int expectedSize)
+    private List<StmtResult> extractBatchResults(BatchResult batchResult, int expectedSize)
             throws SQLException {
-        if (resp.results().isEmpty()) {
-            throw new SQLException("Empty response for batch execution");
-        }
-        StreamResult sr = resp.results().get(0);
-        if (sr instanceof StreamResult.Error err) {
-            throw LibsqlErrorMapper.toSQLException(err.error());
-        }
-        StreamResponse response = ((StreamResult.Ok) sr).response();
-        if (!(response instanceof StreamResponse.BatchResp batchResp)) {
-            throw new SQLException("Unexpected batch response: " + response);
-        }
-
         List<StmtResult> results = new ArrayList<>(expectedSize);
         for (int i = 0; i < expectedSize; i++) {
-            HranaError error = batchResp.result().stepErrors().get(i);
+            HranaError error = batchResult.stepErrors().get(i);
             if (error != null) {
                 // JDBC stops the batch at the first failure and reports only the steps that ran.
                 // The mapped exception is the cause, so SQLState and vendor code survive too.
@@ -235,7 +193,7 @@ public class LibsqlConnection implements Connection {
                         steppedUpdateCounts(results),
                         mapped);
             }
-            StmtResult result = batchResp.result().stepResults().get(i);
+            StmtResult result = batchResult.stepResults().get(i);
             if (result == null) {
                 // A skipped step is legitimate only after a failed step, which the loop has
                 // already thrown on. Here the server executed the step but reported nothing.
@@ -262,59 +220,38 @@ public class LibsqlConnection implements Connection {
     }
 
     /**
-     * The begin-pending state is derived rather than stored: auto-commit is off and no stream is
-     * open, so the next statement must begin the transaction. A separate boolean would be a second
-     * source of truth for a fact the baton already carries.
+     * The begin-pending state is derived rather than stored: auto-commit is off and the client has
+     * no open stream, so the next statement must begin the transaction. A separate boolean would be
+     * a second source of truth for a fact the client's stream state already carries.
      *
      * <p>Callers hold {@link #stateLock}.
      */
     private boolean beginPending() {
-        return !autoCommit && baton == null;
+        return !autoCommit && !client.hasOpenStream();
     }
 
     /** Callers hold {@link #stateLock}. */
     private void beginTransaction() throws SQLException {
-        PipelineRespBody resp;
         try {
-            PipelineReqBody req = new PipelineReqBody(null,
-                    List.of(new StreamRequest.Execute(new Stmt(transactionMode.beginSql()))));
-            resp = client.sendPipeline(req, baseUrl);
+            client.executeOnStream(new Stmt(transactionMode.beginSql()));
         } catch (LibsqlException e) {
+            // The begin failed, so the fresh stream holds no transaction state.
+            closeStreamQuietly();
             throw LibsqlErrorMapper.toSQLException(e);
         }
-        updateStreamState(resp);
-        if (resp.results().isEmpty()) {
-            closeStreamSilently();
-            throw new SQLException("Empty result received from server");
-        }
-        StreamResult result = resp.results().get(0);
-        if (result instanceof StreamResult.Error error) {
-            closeStreamSilently();
-            throw LibsqlErrorMapper.toSQLException(error.error());
-        }
-        if (!(result instanceof StreamResult.Ok ok)
-                || !(ok.response() instanceof StreamResponse.Execute)) {
-            closeStreamSilently();
-            throw new SQLException("Unexpected response: " + result);
-        }
     }
 
     /** Callers hold {@link #stateLock}. */
-    private void updateStreamState(PipelineRespBody resp) {
-        this.baton = resp.baton();
-        if (resp.baseUrl() != null && !resp.baseUrl().isBlank()) {
-            this.baseUrl = URI.create(resp.baseUrl());
+    private void closeStreamQuietly() {
+        if (client == null) {
+            // Only a connection built directly with no transport (as some tests do) reaches this.
+            return;
         }
-    }
-
-    /** Callers hold {@link #stateLock}. */
-    private void closeStreamSilently() {
-        if (baton != null) {
-            try {
-                client.sendPipeline(new PipelineReqBody(baton, List.of(StreamRequest.Close.INSTANCE)), baseUrl);
-            } catch (Exception ignored) {
-            }
-            this.baton = null;
+        try {
+            client.closeStream();
+        } catch (LibsqlException ignored) {
+            // Closing a stream is best effort: the transaction is already over or the transport is
+            // gone, and the server reaps the stream either way.
         }
     }
 
@@ -417,33 +354,17 @@ public class LibsqlConnection implements Connection {
             return;
         }
 
-        PipelineRespBody resp;
         try {
-            PipelineReqBody req = new PipelineReqBody(baton,
-                    List.of(new StreamRequest.Execute(new Stmt(sql))));
-            resp = client.sendPipeline(req, baseUrl);
+            client.executeOnStream(new Stmt(sql));
         } catch (LibsqlException e) {
             throw LibsqlErrorMapper.toSQLException(e);
-        }
-        updateStreamState(resp);
-
-        if (resp.results().isEmpty()) {
-            throw new SQLException("Empty result received from server");
-        }
-        StreamResult result = resp.results().get(0);
-        if (result instanceof StreamResult.Error error) {
-            throw LibsqlErrorMapper.toSQLException(error.error());
-        }
-        if (!(result instanceof StreamResult.Ok ok)
-                || !(ok.response() instanceof StreamResponse.Execute)) {
-            throw new SQLException("Unexpected response: " + result);
         }
 
         // The server committed or rolled back, so the stream has no state left worth holding.
         // Closing it lets an idle connection drop its server-side stream. On an error above the
-        // baton stays, so the caller can retry or roll back on the same stream.
+        // stream stays, so the caller can retry or roll back on the same stream.
         clearSavepoints();
-        closeStreamSilently();
+        closeStreamQuietly();
     }
 
     @Override
@@ -452,7 +373,10 @@ public class LibsqlConnection implements Connection {
             if (!closed) {
                 closed = true;
                 clearSavepoints();
-                closeStreamSilently();
+                closeStreamQuietly();
+                if (client != null) {
+                    client.close();
+                }
             }
         }
     }
@@ -631,7 +555,7 @@ public class LibsqlConnection implements Connection {
                     executeTransactionStatement(sql);
                 } catch (SQLException e) {
                     // No transaction was started, so the fresh stream holds no state.
-                    closeStreamSilently();
+                    closeStreamQuietly();
                     throw e;
                 }
                 autoCommit = false;
@@ -686,7 +610,7 @@ public class LibsqlConnection implements Connection {
                     // new one, as after a commit.
                     transactionStartedBySavepoint = false;
                     savepointNames.clear();
-                    closeStreamSilently();
+                    closeStreamQuietly();
                 }
             }
         }
@@ -694,24 +618,10 @@ public class LibsqlConnection implements Connection {
 
     /** Callers hold {@link #stateLock}. */
     private void executeTransactionStatement(String sql) throws SQLException {
-        PipelineRespBody resp;
         try {
-            PipelineReqBody req = new PipelineReqBody(baton, List.of(new StreamRequest.Execute(new Stmt(sql))));
-            resp = client.sendPipeline(req, baseUrl);
+            client.executeOnStream(new Stmt(sql));
         } catch (LibsqlException e) {
             throw LibsqlErrorMapper.toSQLException(e);
-        }
-        updateStreamState(resp);
-        if (resp.results().isEmpty()) {
-            throw new SQLException("Empty result received from server");
-        }
-        StreamResult result = resp.results().get(0);
-        if (result instanceof StreamResult.Error error) {
-            throw LibsqlErrorMapper.toSQLException(error.error());
-        }
-        if (!(result instanceof StreamResult.Ok ok)
-                || !(ok.response() instanceof StreamResponse.Execute)) {
-            throw new SQLException("Unexpected response: " + result);
         }
     }
 

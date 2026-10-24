@@ -1,7 +1,10 @@
 package com.github.magnusp.libsql.jdbc;
 
+import com.github.magnusp.libsql.client.LibsqlClient;
 import com.github.magnusp.libsql.client.LibsqlClientConfig;
-import com.github.magnusp.libsql.client.LibsqlHttpClient;
+import com.github.magnusp.libsql.client.LibsqlException;
+import com.github.magnusp.libsql.hrana.codec.Batch;
+import com.github.magnusp.libsql.hrana.codec.BatchResult;
 import com.github.magnusp.libsql.hrana.codec.Col;
 import com.github.magnusp.libsql.hrana.codec.PipelineReqBody;
 import com.github.magnusp.libsql.hrana.codec.PipelineRespBody;
@@ -14,7 +17,6 @@ import com.github.magnusp.libsql.hrana.codec.StreamResult;
 import com.github.magnusp.libsql.hrana.codec.Value;
 import org.junit.jupiter.api.Test;
 
-import java.net.URI;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -303,7 +305,7 @@ class LibsqlStatementConcurrencyTest {
      * request on a stream at a time, and a baton that is consumed by its request. Every rule break
      * is recorded instead of thrown, so a failing case reports why the interleaving was invalid.
      */
-    private static final class ProtocolClient extends LibsqlHttpClient {
+    private static final class ProtocolClient implements LibsqlClient {
 
         private final Object lock = new Object();
         private final List<String> violations = new ArrayList<>();
@@ -317,18 +319,107 @@ class LibsqlStatementConcurrencyTest {
         private boolean streamOpen;
 
         private ProtocolClient(CyclicBarrier beginRace) {
-            super(CONFIG);
             this.beginRace = beginRace;
         }
 
         @Override
-        public PipelineRespBody sendPipeline(PipelineReqBody request, URI targetUri) {
+        public StmtResult executeOneShot(Stmt stmt) {
+            PipelineReqBody request = new PipelineReqBody(null, List.of(
+                    new StreamRequest.Execute(stmt),
+                    StreamRequest.Close.INSTANCE));
+            PipelineRespBody response = roundTrip(request, false, true);
+            StreamResult first = response.results().get(0);
+            return switch (first) {
+                case StreamResult.Ok ok -> {
+                    if (ok.response() instanceof StreamResponse.Execute exec) {
+                        yield exec.result();
+                    }
+                    throw new LibsqlException("Unexpected stream response: " + ok.response(), null, 200);
+                }
+                case StreamResult.Error err -> throw new LibsqlException(err.error());
+            };
+        }
+
+        @Override
+        public StmtResult executeOnStream(Stmt stmt) {
+            PipelineReqBody request = new PipelineReqBody(
+                    currentBaton(), List.of(new StreamRequest.Execute(stmt)));
+            StreamResult first = roundTrip(request, true, false).results().get(0);
+            return switch (first) {
+                case StreamResult.Ok ok -> {
+                    if (ok.response() instanceof StreamResponse.Execute exec) {
+                        yield exec.result();
+                    }
+                    throw new LibsqlException("Unexpected stream response: " + ok.response(), null, 200);
+                }
+                case StreamResult.Error err -> throw new LibsqlException(err.error());
+            };
+        }
+
+        @Override
+        public BatchResult executeBatchOneShot(Batch batch) {
+            PipelineReqBody request = new PipelineReqBody(null, List.of(
+                    new StreamRequest.BatchReq(batch),
+                    StreamRequest.Close.INSTANCE));
+            return batchResult(roundTrip(request, false, true).results().get(0));
+        }
+
+        @Override
+        public BatchResult executeBatchOnStream(Batch batch) {
+            PipelineReqBody request = new PipelineReqBody(
+                    currentBaton(), List.of(new StreamRequest.BatchReq(batch)));
+            return batchResult(roundTrip(request, true, false).results().get(0));
+        }
+
+        @Override
+        public boolean hasOpenStream() {
+            synchronized (lock) {
+                return streamOpen;
+            }
+        }
+
+        @Override
+        public void closeStream() {
+            PipelineReqBody request;
+            synchronized (lock) {
+                if (!streamOpen) {
+                    return;
+                }
+                request = new PipelineReqBody(liveBaton, List.of(StreamRequest.Close.INSTANCE));
+            }
+            roundTrip(request, false, true);
+        }
+
+        @Override
+        public void close() {
+            // No connection-level state to release.
+        }
+
+        private String currentBaton() {
+            synchronized (lock) {
+                return streamOpen ? liveBaton : null;
+            }
+        }
+
+        private static BatchResult batchResult(StreamResult result) {
+            return switch (result) {
+                case StreamResult.Ok ok -> {
+                    if (ok.response() instanceof StreamResponse.BatchResp batchResp) {
+                        yield batchResp.result();
+                    }
+                    throw new LibsqlException("Unexpected stream response: " + ok.response(), null, 200);
+                }
+                case StreamResult.Error err -> throw new LibsqlException(err.error());
+            };
+        }
+
+        private PipelineRespBody roundTrip(
+                PipelineReqBody request, boolean opensStream, boolean closesStream) {
             String baton = request.baton();
             StreamRequest first = request.requests().get(0);
             String sql = first instanceof StreamRequest.Execute execute
                     ? execute.stmt().sql()
                     : null;
-            boolean close = first instanceof StreamRequest.Close;
 
             synchronized (lock) {
                 if (inFlightRequests > 0) {
@@ -359,15 +450,15 @@ class LibsqlStatementConcurrencyTest {
                     }
                 }
                 synchronized (lock) {
-                    if (close) {
+                    if (closesStream) {
                         liveBaton = null;
                         streamOpen = false;
-                    } else {
+                    } else if (opensStream || streamOpen) {
                         liveBaton = "baton-" + (++batonCount);
                         streamOpen = true;
                     }
                     return new PipelineRespBody(
-                            close ? null : liveBaton, null, responsesFor(request));
+                            closesStream ? null : liveBaton, null, responsesFor(request));
                 }
             } finally {
                 synchronized (lock) {
@@ -426,12 +517,6 @@ class LibsqlStatementConcurrencyTest {
         private List<String> violations() {
             synchronized (lock) {
                 return List.copyOf(violations);
-            }
-        }
-
-        private boolean hasOpenStream() {
-            synchronized (lock) {
-                return streamOpen;
             }
         }
     }

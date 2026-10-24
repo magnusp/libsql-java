@@ -35,4 +35,46 @@ public class LibsqlUrlParserTest {
         assertThat(config.authToken()).isEqualTo("secretToken");
         assertThat(config.connectTimeout().toMillis()).isEqualTo(5000);
     }
+
+    @Test
+    void testParseWebSocketUrlKeepsTheSchemeAndPath() throws SQLException {
+        LibsqlClientConfig config = LibsqlUrlParser.parse(
+                "jdbc:libsql:ws://localhost:8080/dev/tenant?authToken=secretToken", new Properties());
+
+        assertThat(config.url()).isEqualTo("ws://localhost:8080/dev/tenant");
+        assertThat(config.authToken()).isEqualTo("secretToken");
+    }
+
+    @Test
+    void testParseWebSocketUrlFromSqlitePrefix() throws SQLException {
+        LibsqlClientConfig config = LibsqlUrlParser.parse(
+                "jdbc:sqlite:wss://example.com/dev/tenant", new Properties());
+
+        assertThat(config.url()).isEqualTo("wss://example.com/dev/tenant");
+    }
+
+    @Test
+    void testTlsUpgradesWebSocketToSecureWebSocket() throws SQLException {
+        LibsqlClientConfig config = LibsqlUrlParser.parse(
+                "jdbc:libsql:ws://localhost:8080?tls=true", new Properties());
+
+        assertThat(config.url()).isEqualTo("wss://localhost:8080");
+    }
+
+    @Test
+    void testTlsKeepsAlreadySecureSchemes() throws SQLException {
+        assertThat(LibsqlUrlParser.parse("jdbc:libsql:https://example.com?tls=true", new Properties()).url())
+                .isEqualTo("https://example.com");
+        assertThat(LibsqlUrlParser.parse("jdbc:libsql:wss://example.com?tls=true", new Properties()).url())
+                .isEqualTo("wss://example.com");
+    }
+
+    @Test
+    void testAcceptsWebSocketUrlForms() {
+        assertThat(LibsqlUrlParser.acceptsUrl("jdbc:libsql:ws://localhost:8080")).isTrue();
+        assertThat(LibsqlUrlParser.acceptsUrl("jdbc:libsql:wss://localhost:8080")).isTrue();
+        assertThat(LibsqlUrlParser.acceptsUrl("jdbc:sqlite:ws://localhost:8080")).isTrue();
+        assertThat(LibsqlUrlParser.acceptsUrl("jdbc:sqlite:wss://localhost:8080")).isTrue();
+        assertThat(LibsqlUrlParser.acceptsUrl("jdbc:other:ws://localhost:8080")).isFalse();
+    }
 }
