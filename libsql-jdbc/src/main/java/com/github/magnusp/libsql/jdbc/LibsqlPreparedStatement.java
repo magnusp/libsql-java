@@ -27,7 +27,6 @@ import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLXML;
 import java.sql.Time;
 import java.sql.Timestamp;
-import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.List;
@@ -40,16 +39,16 @@ import java.util.List;
  * so there is no post-close execute that could expose a result set. sqlite-jdbc 3.53.4.0 instead
  * returns generated keys, and rejects {@code addBatch()} with a different message; see issue #87.
  *
- * <p>Parameter metadata is derived locally. The placeholder count comes from the SQL text, but the
- * parameter type, precision, and scale stay unknown because Hrana has no describe request. The
- * stream and {@link Blob}/{@link Clob} setters convert to a TEXT or BLOB value locally. An unset
- * parameter, including one released by {@link #clearParameters()}, binds SQL NULL.
+ * <p>The stream and {@link Blob}/{@link Clob} setters convert to a TEXT or BLOB value locally. An
+ * unset parameter, including one released by {@link #clearParameters()}, binds SQL NULL. Parameter
+ * metadata lives in {@link ParameterMetaDataView}.
  */
 public class LibsqlPreparedStatement extends LibsqlStatement implements PreparedStatement, ParameterMetaData {
 
     private final String sql;
     private final boolean returnsResultSet;
     private final int parameterCount;
+    private final ParameterMetaDataView parameterMetaData;
     // Sequential list indexed by JDBC parameter position; no map or boxing overhead.
     private final List<Value> parameters = new ArrayList<>();
 
@@ -58,6 +57,7 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
         this.sql = sql;
         this.returnsResultSet = returnsResultSet(sql);
         this.parameterCount = SqlTokenizer.placeholderCount(sql);
+        this.parameterMetaData = new ParameterMetaDataView(this, parameterCount);
     }
 
     private void setParam(int parameterIndex, Value value) throws SQLException {
@@ -363,73 +363,18 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
         setString(parameterIndex, x != null ? x.toString() : null);
     }
 
-    @Override
-    public ParameterMetaData getParameterMetaData() throws SQLException {
-        checkClosed();
-        return this;
-    }
+    @Override public ParameterMetaData getParameterMetaData() throws SQLException { checkClosed(); return parameterMetaData; }
 
-    @Override
-    public int getParameterCount() throws SQLException {
-        checkClosed();
-        return parameterCount;
-    }
-
-    @Override
-    public int isNullable(int param) throws SQLException {
-        checkParameterIndex(param);
-        return ParameterMetaData.parameterNullableUnknown;
-    }
-
-    @Override
-    public boolean isSigned(int param) throws SQLException {
-        checkParameterIndex(param);
-        return true;
-    }
-
-    @Override
-    public int getPrecision(int param) throws SQLException {
-        checkParameterIndex(param);
-        return 0;
-    }
-
-    @Override
-    public int getScale(int param) throws SQLException {
-        checkParameterIndex(param);
-        return 0;
-    }
-
-    @Override
-    public int getParameterType(int param) throws SQLException {
-        checkParameterIndex(param);
-        // Hrana has no describe statement, so a parameter type is unknown until it is executed.
-        return Types.OTHER;
-    }
-
-    @Override
-    public String getParameterTypeName(int param) throws SQLException {
-        checkParameterIndex(param);
-        return "OTHER";
-    }
-
-    @Override
-    public String getParameterClassName(int param) throws SQLException {
-        checkParameterIndex(param);
-        return Object.class.getName();
-    }
-
-    @Override
-    public int getParameterMode(int param) throws SQLException {
-        checkParameterIndex(param);
-        return ParameterMetaData.parameterModeIn;
-    }
-
-    private void checkParameterIndex(int param) throws SQLException {
-        checkClosed();
-        if (param < 1 || param > parameterCount) {
-            throw new SQLException("Parameter index out of range: " + param);
-        }
-    }
+    // ParameterMetaData stays on the statement for instanceof compatibility; the view holds the checks.
+    @Override public int getParameterCount() throws SQLException { return parameterMetaData.getParameterCount(); }
+    @Override public int isNullable(int param) throws SQLException { return parameterMetaData.isNullable(param); }
+    @Override public boolean isSigned(int param) throws SQLException { return parameterMetaData.isSigned(param); }
+    @Override public int getPrecision(int param) throws SQLException { return parameterMetaData.getPrecision(param); }
+    @Override public int getScale(int param) throws SQLException { return parameterMetaData.getScale(param); }
+    @Override public int getParameterType(int param) throws SQLException { return parameterMetaData.getParameterType(param); }
+    @Override public String getParameterTypeName(int param) throws SQLException { return parameterMetaData.getParameterTypeName(param); }
+    @Override public String getParameterClassName(int param) throws SQLException { return parameterMetaData.getParameterClassName(param); }
+    @Override public int getParameterMode(int param) throws SQLException { return parameterMetaData.getParameterMode(param); }
 
     @Override
     public void setRowId(int parameterIndex, RowId x) throws SQLException {
