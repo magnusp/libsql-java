@@ -135,12 +135,21 @@ public class LibsqlResultSet implements ResultSet {
         if (closed) {
             return;
         }
-        this.closed = true;
+        closeDetached();
         if (statement != null
                 && (closeStatementOnClose
                         || (statement instanceof LibsqlStatement s && s.isCloseOnCompletion()))) {
             statement.close();
         }
+    }
+
+    /**
+     * Marks this result set closed without calling back into the statement. The owning statement
+     * calls this while it already holds its own lock, so closing a result set never re-enters it and
+     * never observes the statement as reopened.
+     */
+    void closeDetached() {
+        this.closed = true;
     }
 
     @Override

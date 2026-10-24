@@ -111,9 +111,14 @@ public class LibsqlStatement implements Statement {
         if (result.cols() == null || result.cols().isEmpty()) {
             throw new SQLException("Query did not produce a ResultSet: " + sql);
         }
-        LibsqlResultSet resultSet = new LibsqlResultSet(this, limitRows(result), sql, false);
+        LibsqlResultSet resultSet = newQueryResult(sql, result);
         assignResultSet(resultSet, result, sql, true);
         return resultSet;
+    }
+
+    /** Builds the result set both query paths attach, so the two cannot drift apart. */
+    protected LibsqlResultSet newQueryResult(String sql, StmtResult result) {
+        return new LibsqlResultSet(this, limitRows(result), sql, false);
     }
 
     protected void assignResultSet(LibsqlResultSet resultSet, boolean requested)
@@ -124,22 +129,7 @@ public class LibsqlStatement implements Statement {
     protected void assignResultSet(
             LibsqlResultSet resultSet, StmtResult result, String sql, boolean requested)
             throws SQLException {
-        if (!isClosed()) {
-            beforeResultSetAssignment();
-        }
-        synchronized (stateLock) {
-            if (closed) {
-                closeResultSet(resultSet);
-                currentResultSet = null;
-                resultSetRequested = false;
-                updateCount = -1;
-                return;
-            }
-            updateGeneratedKeys(sql, result);
-            currentResultSet = resultSet;
-            updateCount = -1;
-            resultSetRequested = requested;
-        }
+        attachResult(resultSet, result, sql, requested);
     }
 
     @Override
@@ -155,30 +145,48 @@ public class LibsqlStatement implements Statement {
 
     protected boolean executeResult(String sql, StmtResult result) throws SQLException {
         boolean hasResultSet = result.cols() != null && !result.cols().isEmpty();
-        LibsqlResultSet resultSet =
-                hasResultSet ? new LibsqlResultSet(this, limitRows(result), sql, false) : null;
+        LibsqlResultSet resultSet = hasResultSet ? newQueryResult(sql, result) : null;
+        return attachResult(resultSet, result, sql, false);
+    }
 
-        if (hasResultSet && !isClosed()) {
+    /**
+     * Attaches {@code resultSet} as the current result in one transition shared by the explicit
+     * {@code executeQuery} paths and the {@code execute} paths. When close wins the race, the result
+     * set is discarded instead of attached, so a result set produced after {@link #close()} is
+     * handed out closed and the statement stays closed.
+     */
+    protected boolean attachResult(
+            LibsqlResultSet resultSet, StmtResult result, String sql, boolean requested)
+            throws SQLException {
+        if (resultSet != null && !isClosed()) {
             beforeResultSetAssignment();
         }
-
         synchronized (stateLock) {
             if (closed) {
-                clearGeneratedKeys();
-                if (resultSet != null) {
-                    closeResultSet(resultSet);
-                }
-                currentResultSet = null;
-                resultSetRequested = false;
-                updateCount = hasResultSet ? -1 : result.affectedRowCount();
-                return hasResultSet;
+                discardCurrentResult(resultSet, resultSet == null ? result.affectedRowCount() : -1);
+                return resultSet != null;
             }
             updateGeneratedKeys(sql, result);
             currentResultSet = resultSet;
-            updateCount = hasResultSet ? -1 : result.affectedRowCount();
-            resultSetRequested = false;
-            return hasResultSet;
+            updateCount = resultSet == null ? result.affectedRowCount() : -1;
+            resultSetRequested = requested;
+            return resultSet != null;
         }
+    }
+
+    /**
+     * Clears the current result because the statement is closed. The result set closes without the
+     * close-on-completion callback, and nothing temporarily reopens the statement.
+     */
+    private void discardCurrentResult(LibsqlResultSet resultSet, long updateCountWhenNoResultSet)
+            throws SQLException {
+        if (resultSet != null) {
+            resultSet.closeDetached();
+        }
+        currentResultSet = null;
+        resultSetRequested = false;
+        updateCount = updateCountWhenNoResultSet;
+        clearGeneratedKeys();
     }
 
     private StmtResult executeSql(String sql) throws SQLException {
@@ -218,68 +226,9 @@ public class LibsqlStatement implements Statement {
         synchronized (stateLock) {
             enabled = escapeProcessing;
         }
-        if (enabled && hasEscapeSequence(sql)) {
+        if (enabled && JdbcEscapes.contains(sql)) {
             throw new SQLFeatureNotSupportedException("JDBC escape sequences are not supported");
         }
-    }
-
-    /**
-     * Whether the SQL contains a JDBC escape sequence. Braces inside string literals, quoted
-     * identifiers, and comments do not count, and a brace that does not start with an escape code
-     * is left to the server.
-     */
-    private static boolean hasEscapeSequence(String sql) {
-        if (sql == null || sql.indexOf('{') < 0) {
-            return false;
-        }
-        int n = sql.length();
-        int i = 0;
-        while (i < n) {
-            char c = sql.charAt(i);
-            if (c == '\'' || c == '"' || c == '`') {
-                i++;
-                while (i < n) {
-                    if (sql.charAt(i) == c) {
-                        if (i + 1 < n && sql.charAt(i + 1) == c) {
-                            i += 2;
-                            continue;
-                        }
-                        i++;
-                        break;
-                    }
-                    i++;
-                }
-            } else if (c == '[') {
-                i++;
-                while (i < n && sql.charAt(i) != ']') {
-                    i++;
-                }
-                i++;
-            } else if (c == '-' && i + 1 < n && sql.charAt(i + 1) == '-') {
-                i += 2;
-                while (i < n && sql.charAt(i) != '\n') {
-                    i++;
-                }
-            } else if (c == '/' && i + 1 < n && sql.charAt(i + 1) == '*') {
-                i += 2;
-                while (i + 1 < n && !(sql.charAt(i) == '*' && sql.charAt(i + 1) == '/')) {
-                    i++;
-                }
-                i += 2;
-            } else if (c == '{') {
-                int code = i + 1;
-                while (code < n && Character.isWhitespace(sql.charAt(code))) {
-                    code++;
-                }
-                if (code < n && "dDtTfFoOeEcC".indexOf(sql.charAt(code)) >= 0) {
-                    return true;
-                }
-                i++;
-            } else {
-                i++;
-            }
-        }
-        return false;
     }
 
     /**
@@ -321,22 +270,7 @@ public class LibsqlStatement implements Statement {
             currentResultSet = null;
             resultSetRequested = false;
             if (resultSet != null) {
-                closeResultSet(resultSet);
-            }
-        }
-    }
-
-    private void closeResultSet(LibsqlResultSet resultSet) throws SQLException {
-        synchronized (stateLock) {
-            boolean wasClosed = closed;
-            boolean wasClosing = closing;
-            closed = false;
-            closing = true;
-            try {
-                resultSet.close();
-            } finally {
-                closed = wasClosed;
-                closing = wasClosing;
+                resultSet.closeDetached();
             }
         }
     }
@@ -398,7 +332,7 @@ public class LibsqlStatement implements Statement {
             ResultSet keys = generatedKeys;
             generatedKeys = null;
             if (keys instanceof LibsqlResultSet libsqlKeys) {
-                closeResultSet(libsqlKeys);
+                libsqlKeys.closeDetached();
             } else if (keys != null) {
                 keys.close();
             }
@@ -541,7 +475,7 @@ public class LibsqlStatement implements Statement {
                 resultSetRequested = false;
                 clearGeneratedKeys();
                 if (resultSet != null) {
-                    closeResultSet(resultSet);
+                    resultSet.closeDetached();
                 }
             } finally {
                 closed = true;
