@@ -284,6 +284,92 @@ class LibsqlPreparedStatementTest {
     }
 
     @Test
+    void getParameterMetaDataReturnsAViewWithThePlaceholderCount() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        try (LibsqlPreparedStatement statement = new LibsqlPreparedStatement(
+                connection, "select id from t where id = ? and name = ?")) {
+            ParameterMetaData meta = statement.getParameterMetaData();
+
+            assertThat(meta).isNotNull();
+            assertThat(meta.getParameterCount()).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void getParameterMetaDataAfterCloseThrows() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "select ?");
+        statement.close();
+
+        assertThatThrownBy(statement::getParameterMetaData)
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Statement is closed");
+    }
+
+    @Test
+    void parameterMetadataViewTakenBeforeCloseStillThrowsAfterClose() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "select ?");
+        ParameterMetaData meta = statement.getParameterMetaData();
+        statement.close();
+
+        assertThatThrownBy(meta::getParameterCount)
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Statement is closed");
+        assertThatThrownBy(() -> meta.getParameterType(1))
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Statement is closed");
+    }
+
+    @Test
+    void parameterMetadataRejectsAnOutOfRangeIndex() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "select ?")) {
+            ParameterMetaData meta = statement.getParameterMetaData();
+
+            assertThatThrownBy(() -> meta.getParameterType(0))
+                    .isInstanceOf(SQLException.class)
+                    .hasMessage("Parameter index out of range: 0");
+        }
+    }
+
+    @Test
+    void preparedStatementRemainsAParameterMetaData() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "select ?")) {
+            assertThat(statement).isInstanceOf(ParameterMetaData.class);
+        }
+    }
+
+    @Test
+    void getParameterMetaDataReturnsTheSameCachedView() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "select ?")) {
+            ParameterMetaData first = statement.getParameterMetaData();
+            ParameterMetaData second = statement.getParameterMetaData();
+
+            assertThat(first).isSameAs(second);
+        }
+    }
+
+    @Test
+    void parameterMetadataUnwrapReachesTheStatement() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "select ?")) {
+            ParameterMetaData meta = statement.getParameterMetaData();
+
+            assertThat(meta.isWrapperFor(ParameterMetaData.class)).isTrue();
+            assertThat(meta.unwrap(ParameterMetaData.class)).isSameAs(statement);
+        }
+    }
+
+    @Test
     void clearParametersBindsNullArguments() throws SQLException {
         RecordingConnection connection = new RecordingConnection(NO_ROWS);
         try (LibsqlPreparedStatement statement =
