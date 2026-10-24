@@ -6,6 +6,7 @@ import java.net.URI;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 
@@ -76,6 +77,22 @@ public class LibsqlUrlParser {
             };
         }
 
+        // Encoding selection. JSON stays the default; Protobuf exists only for WebSocket.
+        LibsqlClientConfig.Encoding encoding = LibsqlClientConfig.Encoding.JSON;
+        String encodingParam = queryParams.get("encoding");
+        if (encodingParam != null) {
+            switch (encodingParam.toLowerCase(Locale.ROOT)) {
+                case "json" -> encoding = LibsqlClientConfig.Encoding.JSON;
+                case "protobuf", "proto" -> encoding = LibsqlClientConfig.Encoding.PROTOBUF;
+                default -> throw new SQLException(
+                        "Unsupported encoding '" + encodingParam + "': expected json or protobuf");
+            }
+        }
+        if (encoding == LibsqlClientConfig.Encoding.PROTOBUF
+                && !"ws".equals(scheme) && !"wss".equals(scheme)) {
+            throw new SQLException("encoding=protobuf is only supported for ws/wss URLs");
+        }
+
         // Timeouts
         Duration connectTimeout = LibsqlClientConfig.DEFAULT_CONNECT_TIMEOUT;
         if (queryParams.containsKey("connectTimeout") || queryParams.containsKey("socketTimeout")) {
@@ -102,7 +119,8 @@ public class LibsqlUrlParser {
         }
         endpointUrl.append(path);
 
-        return new LibsqlClientConfig(endpointUrl.toString(), authToken, connectTimeout, busyTimeout);
+        return new LibsqlClientConfig(
+                endpointUrl.toString(), authToken, connectTimeout, busyTimeout, encoding);
     }
 
     private static Map<String, String> parseQuery(String query) {

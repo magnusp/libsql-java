@@ -4,6 +4,9 @@ import com.github.magnusp.libsql.client.LibsqlClient;
 import com.github.magnusp.libsql.client.LibsqlClientConfig;
 import com.github.magnusp.libsql.client.LibsqlHttpClient;
 import com.github.magnusp.libsql.client.LibsqlWebSocketClient;
+import com.github.magnusp.libsql.hrana.codec.DirectHranaJsonCodec;
+import com.github.magnusp.libsql.hrana.codec.HranaWsCodec;
+import com.github.magnusp.libsql.hrana.codec.HranaWsProtobufCodec;
 
 import java.sql.Connection;
 import java.sql.Driver;
@@ -33,9 +36,15 @@ public class LibsqlDriver implements Driver {
             return null;
         }
         LibsqlClientConfig config = LibsqlUrlParser.parse(url, info);
-        LibsqlClient client = isWebSocketUrl(config.url())
-                ? new LibsqlWebSocketClient(config)
-                : new LibsqlHttpClient(config);
+        LibsqlClient client;
+        if (isWebSocketUrl(config.url())) {
+            HranaWsCodec codec = config.encoding() == LibsqlClientConfig.Encoding.PROTOBUF
+                    ? new HranaWsProtobufCodec()
+                    : new DirectHranaJsonCodec();
+            client = new LibsqlWebSocketClient(config, codec);
+        } else {
+            client = new LibsqlHttpClient(config);
+        }
         return new LibsqlConnection(config, client);
     }
 
