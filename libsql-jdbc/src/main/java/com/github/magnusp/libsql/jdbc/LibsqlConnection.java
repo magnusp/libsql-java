@@ -71,6 +71,9 @@ public class LibsqlConnection implements Connection {
     private boolean closed = false;
     private TransactionMode transactionMode = TransactionMode.DEFERRED;
     private LibsqlDatabaseMetaData meta;
+    private int nextSavepointId = 0;
+    private boolean transactionStartedBySavepoint = false;
+    private final List<String> savepointNames = new ArrayList<>();
 
     /**
      * Transaction begin mode, matching xerial sqlite-jdbc's
@@ -439,6 +442,7 @@ public class LibsqlConnection implements Connection {
         // The server committed or rolled back, so the stream has no state left worth holding.
         // Closing it lets an idle connection drop its server-side stream. On an error above the
         // baton stays, so the caller can retry or roll back on the same stream.
+        clearSavepoints();
         closeStreamSilently();
     }
 
@@ -447,6 +451,7 @@ public class LibsqlConnection implements Connection {
         synchronized (stateLock) {
             if (!closed) {
                 closed = true;
+                clearSavepoints();
                 closeStreamSilently();
             }
         }
@@ -592,24 +597,154 @@ public class LibsqlConnection implements Connection {
         }
     }
 
+    /**
+     * Creates an unnamed savepoint. When the connection is in auto-commit mode this starts a
+     * transaction, matching xerial sqlite-jdbc 3.53.4.0 and SQLite itself: a {@code SAVEPOINT}
+     * issued outside a transaction behaves as {@code BEGIN DEFERRED}, so the savepoint is sent on
+     * a new Hrana stream without a preceding {@code BEGIN} and releasing that outermost savepoint
+     * later commits. Inside a transaction begun by {@link #setAutoCommit(boolean)} the savepoint
+     * is nested in the lazily begun transaction instead.
+     */
     @Override
     public Savepoint setSavepoint() throws SQLException {
-        throw new SQLException("Savepoints not supported yet");
+        return setSavepointInternal(null);
     }
 
     @Override
     public Savepoint setSavepoint(String name) throws SQLException {
-        throw new SQLException("Savepoints not supported yet");
+        synchronized (stateLock) {
+            checkClosed();
+            if (name == null || name.isBlank()) {
+                throw new SQLException("Savepoint name cannot be null or empty");
+            }
+        }
+        return setSavepointInternal(name);
+    }
+
+    private Savepoint setSavepointInternal(String name) throws SQLException {
+        synchronized (stateLock) {
+            checkClosed();
+            LibsqlSavepoint savepoint = new LibsqlSavepoint(++nextSavepointId, name);
+            String sql = "SAVEPOINT " + quoteSavepointName(savepoint.sqlName());
+            if (autoCommit) {
+                try {
+                    executeTransactionStatement(sql);
+                } catch (SQLException e) {
+                    // No transaction was started, so the fresh stream holds no state.
+                    closeStreamSilently();
+                    throw e;
+                }
+                autoCommit = false;
+                transactionStartedBySavepoint = true;
+                savepointNames.clear();
+                savepointNames.add(savepoint.sqlName());
+            } else {
+                ensureTransactionStarted();
+                executeTransactionStatement(sql);
+                savepointNames.add(savepoint.sqlName());
+            }
+            return savepoint;
+        }
     }
 
     @Override
     public void rollback(Savepoint savepoint) throws SQLException {
-        throw new SQLException("Savepoints not supported yet");
+        synchronized (stateLock) {
+            checkClosed();
+            String sqlName = savepointSqlName(savepoint);
+            if (autoCommit) {
+                throw new SQLException("Cannot rollback to a savepoint when in autoCommit mode");
+            }
+            ensureTransactionStarted();
+            executeTransactionStatement("ROLLBACK TO SAVEPOINT " + quoteSavepointName(sqlName));
+            int index = savepointNames.lastIndexOf(sqlName);
+            if (index >= 0) {
+                // Rolling back cancels the savepoints created after the target; the target
+                // itself stays active.
+                savepointNames.subList(index + 1, savepointNames.size()).clear();
+            }
+        }
     }
 
     @Override
     public void releaseSavepoint(Savepoint savepoint) throws SQLException {
-        throw new SQLException("Savepoints not supported yet");
+        synchronized (stateLock) {
+            checkClosed();
+            String sqlName = savepointSqlName(savepoint);
+            if (autoCommit) {
+                throw new SQLException("Cannot release a savepoint when in autoCommit mode");
+            }
+            ensureTransactionStarted();
+            executeTransactionStatement("RELEASE SAVEPOINT " + quoteSavepointName(sqlName));
+            int index = savepointNames.lastIndexOf(sqlName);
+            if (index >= 0) {
+                boolean outermost = index == 0;
+                savepointNames.subList(index, savepointNames.size()).clear();
+                if (outermost && transactionStartedBySavepoint) {
+                    // Releasing the savepoint that started the transaction commits it, so the
+                    // stream holds no transaction state and the next statement lazily begins a
+                    // new one, as after a commit.
+                    transactionStartedBySavepoint = false;
+                    savepointNames.clear();
+                    closeStreamSilently();
+                }
+            }
+        }
+    }
+
+    /** Callers hold {@link #stateLock}. */
+    private void executeTransactionStatement(String sql) throws SQLException {
+        PipelineRespBody resp;
+        try {
+            PipelineReqBody req = new PipelineReqBody(baton, List.of(new StreamRequest.Execute(new Stmt(sql))));
+            resp = client.sendPipeline(req, baseUrl);
+        } catch (LibsqlException e) {
+            throw LibsqlErrorMapper.toSQLException(e);
+        }
+        updateStreamState(resp);
+        if (resp.results().isEmpty()) {
+            throw new SQLException("Empty result received from server");
+        }
+        StreamResult result = resp.results().get(0);
+        if (result instanceof StreamResult.Error error) {
+            throw LibsqlErrorMapper.toSQLException(error.error());
+        }
+        if (!(result instanceof StreamResult.Ok ok)
+                || !(ok.response() instanceof StreamResponse.Execute)) {
+            throw new SQLException("Unexpected response: " + result);
+        }
+    }
+
+    private static String savepointSqlName(Savepoint savepoint) throws SQLException {
+        if (savepoint == null) {
+            throw new SQLException("Savepoint cannot be null");
+        }
+        if (savepoint instanceof LibsqlSavepoint libsqlSavepoint) {
+            return libsqlSavepoint.sqlName();
+        }
+        try {
+            String name = savepoint.getSavepointName();
+            if (name != null && !name.isBlank()) {
+                return name;
+            }
+        } catch (SQLException ignored) {
+            // An unnamed foreign savepoint has no name; its id identifies it below.
+        }
+        try {
+            return "SQLITE_SAVEPOINT_" + savepoint.getSavepointId();
+        } catch (SQLException e) {
+            throw new SQLException("Savepoint has no usable name or id", e);
+        }
+    }
+
+    private static String quoteSavepointName(String name) {
+        return "\"" + name.replace("\"", "\"\"") + "\"";
+    }
+
+    /** Callers hold {@link #stateLock}. */
+    private void clearSavepoints() {
+        savepointNames.clear();
+        transactionStartedBySavepoint = false;
     }
 
     @Override
