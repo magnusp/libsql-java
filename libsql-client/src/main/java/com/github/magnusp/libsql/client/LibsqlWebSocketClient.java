@@ -16,7 +16,7 @@ import org.apache.hc.client5.http.websocket.api.WebSocketClientConfig;
 import org.apache.hc.client5.http.websocket.api.WebSocketListener;
 import org.apache.hc.client5.http.websocket.client.CloseableWebSocketClient;
 import org.apache.hc.client5.http.websocket.client.WebSocketClients;
-import org.apache.hc.core5.util.TimeValue;
+import org.apache.hc.core5.io.CloseMode;
 import org.apache.hc.core5.util.Timeout;
 
 import java.io.ByteArrayOutputStream;
@@ -67,7 +67,6 @@ public class LibsqlWebSocketClient implements LibsqlClient {
      */
     private static final int MAX_MESSAGE_BYTES = 1024 * 1024 * 1024;
 
-    private static final Duration SHUTDOWN_TIMEOUT = Duration.ofSeconds(5);
     private static final Duration CLOSE_TIMEOUT = Duration.ofSeconds(1);
 
     private final LibsqlClientConfig config;
@@ -277,19 +276,15 @@ public class LibsqlWebSocketClient implements LibsqlClient {
     }
 
     /**
-     * Stops the IO reactor. sqld does not echo the close frame, so the close handshake is not
-     * awaited: the reactor shutdown tears the socket down after {@link #CLOSE_TIMEOUT}.
+     * Stops the IO reactor, the executor, and the connection pool in one step. The socket close
+     * frame is queued first, but sqld never echoes it, so the teardown does not wait for the
+     * handshake.
      */
     private void shutdown() {
         if (socket != null) {
             socket.close(CLOSE_NORMAL, "closing");
         }
-        client.initiateShutdown();
-        try {
-            client.awaitShutdown(TimeValue.of(SHUTDOWN_TIMEOUT));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        client.close(CloseMode.IMMEDIATE);
     }
 
     private void awaitHello() {
@@ -350,6 +345,7 @@ public class LibsqlWebSocketClient implements LibsqlClient {
         } catch (IOException e) {
             failAll(new LibsqlException(
                     "Failed to decode Hrana WebSocket message: " + e.getMessage(), e));
+            socket.close(CLOSE_NORMAL, "protocol violation");
             return;
         }
 
