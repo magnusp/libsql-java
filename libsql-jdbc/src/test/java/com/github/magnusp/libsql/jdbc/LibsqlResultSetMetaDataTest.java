@@ -55,6 +55,34 @@ class LibsqlResultSetMetaDataTest {
     }
 
     @Test
+    void resolvesAttachedTableMetadataThroughPragmaDatabaseList() throws SQLException {
+        LibsqlResultSetMetaData metadata = new LibsqlResultSetMetaData(
+                List.of(new Col("id", "INTEGER"), new Col("name", "TEXT")),
+                List.of(),
+                "SELECT id, name FROM aux.People",
+                connectionForAttachedSchema("main", "temp", "Aux"));
+
+        assertThat(metadata.getTableName(1)).isEqualTo("People");
+        assertThat(metadata.getTableName(2)).isEqualTo("People");
+        assertThat(metadata.isNullable(1)).isEqualTo(ResultSetMetaData.columnNoNulls);
+        assertThat(metadata.isNullable(2)).isEqualTo(ResultSetMetaData.columnNoNulls);
+        assertThat(metadata.isAutoIncrement(1)).isTrue();
+        assertThat(metadata.isAutoIncrement(2)).isFalse();
+    }
+
+    @Test
+    void reportsNoTableMetadataForASchemaMissingFromPragmaDatabaseList() throws SQLException {
+        LibsqlResultSetMetaData metadata = new LibsqlResultSetMetaData(
+                List.of(new Col("id", "INTEGER")),
+                List.of(),
+                "SELECT id FROM ghost.People",
+                connectionForAttachedSchema("main", "temp", "Aux"));
+
+        assertThat(metadata.getTableName(1)).isEmpty();
+        assertThat(metadata.isNullable(1)).isEqualTo(ResultSetMetaData.columnNullableUnknown);
+    }
+
+    @Test
     void resolvesNonAsciiTableName() throws SQLException {
         LibsqlResultSetMetaData metadata = new LibsqlResultSetMetaData(
                 List.of(new Col("namn_ö", "TEXT")),
@@ -749,6 +777,61 @@ class LibsqlResultSetMetaDataTest {
             @Override
             public StmtResult executeStatement(Stmt stmt) throws SQLException {
                 return result;
+            }
+        };
+    }
+
+    /**
+     * Answers {@code pragma_database_list} with the given schema names and every per-schema table
+     * lookup from a fixed catalogue, so the caller sees metadata only for schemas that the database
+     * list actually reports.
+     */
+    private static LibsqlConnection connectionForAttachedSchema(String... databaseNames) {
+        Map<String, FakeTable> tables = new LinkedHashMap<>();
+        tables.put(
+                "Aux",
+                new FakeTable(
+                        "People",
+                        "CREATE TABLE People (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
+                        List.of(new FakeColumn("id", true, true), new FakeColumn("name", true, false))));
+        tables.put(
+                "main",
+                new FakeTable(
+                        "People",
+                        "CREATE TABLE People (id INTEGER, name TEXT)",
+                        List.of(new FakeColumn("id", false, false), new FakeColumn("name", false, false))));
+        tables.put(
+                "ghost",
+                new FakeTable(
+                        "People",
+                        "CREATE TABLE People (id INTEGER)",
+                        List.of(new FakeColumn("id", false, false))));
+        List<Row> databases = new ArrayList<>();
+        for (String name : databaseNames) {
+            databases.add(new Row(List.of(Value.of(name))));
+        }
+        StmtResult databaseList = new StmtResult(List.of(), databases, 0, null);
+
+        return new LibsqlConnection(null, null) {
+            @Override
+            public StmtResult executeStatement(Stmt stmt) throws SQLException {
+                if (stmt.sql().contains("pragma_database_list")) {
+                    return databaseList;
+                }
+                FakeTable table = tables.get(argument(stmt, 1));
+                if (table == null) {
+                    return new StmtResult(List.of(), List.of(), 0, null);
+                }
+                List<Row> rows = new ArrayList<>();
+                for (FakeColumn column : table.columns()) {
+                    rows.add(new Row(List.of(
+                            Value.of(table.name()),
+                            Value.of(table.sql()),
+                            Value.of(column.name()),
+                            Value.of(column.notNull() ? 1L : 0L),
+                            Value.of(column.primaryKey() ? 1L : 0L))));
+                }
+                return new StmtResult(List.of(), rows, 0, null);
             }
         };
     }

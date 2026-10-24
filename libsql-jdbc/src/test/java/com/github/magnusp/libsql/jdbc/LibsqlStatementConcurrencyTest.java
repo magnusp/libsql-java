@@ -34,6 +34,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class LibsqlStatementConcurrencyTest {
 
@@ -181,6 +182,32 @@ class LibsqlStatementConcurrencyTest {
         }
     }
 
+    @Test
+    void executeBatchThatLosesTheRaceToCloseFailsWithStatementClosed() throws Exception {
+        Pause pause = new Pause();
+        LibsqlStatement statement = new LibsqlStatement(new PausingBatchConnection(pause));
+        statement.addBatch("insert into t(value) values (1)");
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<int[]> batch = executor.submit(statement::executeBatch);
+
+            assertThat(pause.awaitReached()).isTrue();
+            AtomicReference<Throwable> closeFailure = new AtomicReference<>();
+            joinAndCheck(closeInThread(statement, closeFailure), closeFailure);
+            assertThat(statement.isClosed()).isTrue();
+            pause.resume();
+
+            assertThatThrownBy(() -> batch.get(5, TimeUnit.SECONDS))
+                    .isInstanceOf(ExecutionException.class)
+                    .cause()
+                    .isInstanceOf(SQLException.class)
+                    .hasMessageContaining("Statement is closed");
+        } finally {
+            pause.resume();
+            executor.shutdownNow();
+        }
+    }
+
     private static Void executeRepeatedly(LibsqlStatement statement, int count) throws SQLException {
         for (int i = 0; i < count; i++) {
             statement.execute("SELECT " + i);
@@ -297,6 +324,27 @@ class LibsqlStatementConcurrencyTest {
         @Override
         protected void beforeResultSetAssignment() throws SQLException {
             pause.await();
+        }
+    }
+
+    /**
+     * Holds the batch inside the connection round trip so a close can land before the statement
+     * reaches its own cleanup.
+     */
+    private static final class PausingBatchConnection extends LibsqlConnection {
+        private final Pause pause;
+
+        private PausingBatchConnection(Pause pause) {
+            super(null, null);
+            this.pause = pause;
+        }
+
+        @Override
+        public List<StmtResult> executeBatchResults(List<Stmt> statements) throws SQLException {
+            pause.await();
+            return statements.stream()
+                    .map(statement -> new StmtResult(List.of(), List.of(), 1, null))
+                    .toList();
         }
     }
 
