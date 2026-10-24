@@ -211,9 +211,15 @@ public class LibsqlConnection implements Connection {
         return sending(() -> client.executeBatchOnStream(batch));
     }
 
+    /** Callers hold {@link #stateLock}. */
     private void ensureTransactionStarted() throws SQLException {
-        if (beginPending()) {
-            beginTransaction();
+        if (!beginPending()) return;
+        try {
+            sendOnStream(new Stmt(transactionMode.beginSql()));
+        } catch (SQLException e) {
+            // The begin failed, so the fresh stream holds no transaction state.
+            closeStreamQuietly();
+            throw e;
         }
     }
 
@@ -226,17 +232,6 @@ public class LibsqlConnection implements Connection {
      */
     private boolean beginPending() {
         return !autoCommit && !client.hasOpenStream();
-    }
-
-    /** Callers hold {@link #stateLock}. */
-    private void beginTransaction() throws SQLException {
-        try {
-            sendOnStream(new Stmt(transactionMode.beginSql()));
-        } catch (SQLException e) {
-            // The begin failed, so the fresh stream holds no transaction state.
-            closeStreamQuietly();
-            throw e;
-        }
     }
 
     /** Callers hold {@link #stateLock}. */
@@ -327,9 +322,7 @@ public class LibsqlConnection implements Connection {
     public void commit() throws SQLException {
         synchronized (stateLock) {
             checkClosed();
-            if (autoCommit) {
-                throw new SQLException("Cannot commit when in autoCommit mode");
-            }
+            requireManualCommit("commit");
             endTransaction("COMMIT");
         }
     }
@@ -338,9 +331,7 @@ public class LibsqlConnection implements Connection {
     public void rollback() throws SQLException {
         synchronized (stateLock) {
             checkClosed();
-            if (autoCommit) {
-                throw new SQLException("Cannot rollback when in autoCommit mode");
-            }
+            requireManualCommit("rollback");
             endTransaction("ROLLBACK");
         }
     }
@@ -516,12 +507,9 @@ public class LibsqlConnection implements Connection {
     }
 
     /**
-     * Creates an unnamed savepoint. When the connection is in auto-commit mode this starts a
-     * transaction, matching xerial sqlite-jdbc 3.53.4.0 and SQLite itself: a {@code SAVEPOINT}
-     * issued outside a transaction behaves as {@code BEGIN DEFERRED}, so the savepoint is sent on
-     * a new Hrana stream without a preceding {@code BEGIN} and releasing that outermost savepoint
-     * later commits. Inside a transaction begun by {@link #setAutoCommit(boolean)} the savepoint
-     * is nested in the lazily begun transaction instead.
+     * Creates a savepoint. When the connection is in auto-commit mode this starts a transaction,
+     * matching xerial sqlite-jdbc 3.53.4.0 and SQLite itself; inside a transaction begun by {@link
+     * #setAutoCommit(boolean)} the savepoint is nested in the lazily begun transaction instead.
      */
     @Override
     public Savepoint setSavepoint() throws SQLException {
@@ -530,11 +518,9 @@ public class LibsqlConnection implements Connection {
 
     @Override
     public Savepoint setSavepoint(String name) throws SQLException {
-        synchronized (stateLock) {
-            checkClosed();
-            if (name == null || name.isBlank()) {
-                throw new SQLException("Savepoint name cannot be null or empty");
-            }
+        checkClosed();
+        if (name == null || name.isBlank()) {
+            throw new SQLException("Savepoint name cannot be null or empty");
         }
         return setSavepointInternal(name);
     }
@@ -543,44 +529,55 @@ public class LibsqlConnection implements Connection {
         synchronized (stateLock) {
             checkClosed();
             LibsqlSavepoint savepoint = new LibsqlSavepoint(++nextSavepointId, name);
-            String sql = "SAVEPOINT " + quoteSavepointName(savepoint.sqlName());
+            String sqlName = savepoint.sqlName();
+            Stmt stmt = new Stmt("SAVEPOINT " + quoteSavepointName(sqlName));
             if (autoCommit) {
-                try {
-                    sendOnStream(new Stmt(sql));
-                } catch (SQLException e) {
-                    // No transaction was started, so the fresh stream holds no state.
-                    closeStreamQuietly();
-                    throw e;
-                }
-                autoCommit = false;
-                transactionStartedBySavepoint = true;
-                savepointNames.clear();
-                savepointNames.add(savepoint.sqlName());
+                beginSavepointTransaction(stmt, sqlName);
             } else {
                 ensureTransactionStarted();
-                sendOnStream(new Stmt(sql));
-                savepointNames.add(savepoint.sqlName());
+                sendOnStream(stmt);
+                savepointNames.add(sqlName);
             }
             return savepoint;
         }
+    }
+
+    /**
+     * Starts the transaction an auto-commit savepoint owns. SQLite gives the savepoint the begin,
+     * so no {@code BEGIN} is sent; releasing this savepoint later commits the transaction and
+     * closes the stream. Callers hold {@link #stateLock}.
+     */
+    private void beginSavepointTransaction(Stmt stmt, String sqlName) throws SQLException {
+        try {
+            sendOnStream(stmt);
+        } catch (SQLException e) {
+            // No transaction was started, so the fresh stream holds no state.
+            closeStreamQuietly();
+            throw e;
+        }
+        autoCommit = false;
+        transactionStartedBySavepoint = true;
+        savepointNames.clear();
+        savepointNames.add(sqlName);
     }
 
     @Override
     public void rollback(Savepoint savepoint) throws SQLException {
         synchronized (stateLock) {
             checkClosed();
-            String sqlName = savepointSqlName(savepoint);
-            if (autoCommit) {
-                throw new SQLException("Cannot rollback to a savepoint when in autoCommit mode");
-            }
+            String sqlName = LibsqlSavepoint.sqlNameOf(savepoint);
+            requireManualCommit("rollback to a savepoint");
             ensureTransactionStarted();
             sendOnStream(new Stmt("ROLLBACK TO SAVEPOINT " + quoteSavepointName(sqlName)));
-            int index = savepointNames.lastIndexOf(sqlName);
-            if (index >= 0) {
-                // Rolling back cancels the savepoints created after the target; the target
-                // itself stays active.
-                savepointNames.subList(index + 1, savepointNames.size()).clear();
-            }
+            discardSavepointsAfter(sqlName);
+        }
+    }
+
+    /** Cancels the savepoints created after the target, which stays active. Callers hold {@link #stateLock}. */
+    private void discardSavepointsAfter(String sqlName) {
+        int index = savepointNames.lastIndexOf(sqlName);
+        if (index >= 0) {
+            savepointNames.subList(index + 1, savepointNames.size()).clear();
         }
     }
 
@@ -588,47 +585,36 @@ public class LibsqlConnection implements Connection {
     public void releaseSavepoint(Savepoint savepoint) throws SQLException {
         synchronized (stateLock) {
             checkClosed();
-            String sqlName = savepointSqlName(savepoint);
-            if (autoCommit) {
-                throw new SQLException("Cannot release a savepoint when in autoCommit mode");
-            }
+            String sqlName = LibsqlSavepoint.sqlNameOf(savepoint);
+            requireManualCommit("release a savepoint");
             ensureTransactionStarted();
             sendOnStream(new Stmt("RELEASE SAVEPOINT " + quoteSavepointName(sqlName)));
-            int index = savepointNames.lastIndexOf(sqlName);
-            if (index >= 0) {
-                boolean outermost = index == 0;
-                savepointNames.subList(index, savepointNames.size()).clear();
-                if (outermost && transactionStartedBySavepoint) {
-                    // Releasing the savepoint that started the transaction commits it, so the
-                    // stream holds no transaction state and the next statement lazily begins a
-                    // new one, as after a commit.
-                    transactionStartedBySavepoint = false;
-                    savepointNames.clear();
-                    closeStreamQuietly();
-                }
-            }
+            closeTransactionOwnedBySavepoint(sqlName);
         }
     }
 
-    private static String savepointSqlName(Savepoint savepoint) throws SQLException {
-        if (savepoint == null) {
-            throw new SQLException("Savepoint cannot be null");
-        }
-        if (savepoint instanceof LibsqlSavepoint libsqlSavepoint) {
-            return libsqlSavepoint.sqlName();
-        }
-        try {
-            String name = savepoint.getSavepointName();
-            if (name != null && !name.isBlank()) {
-                return name;
-            }
-        } catch (SQLException ignored) {
-            // An unnamed foreign savepoint has no name; its id identifies it below.
-        }
-        try {
-            return "SQLITE_SAVEPOINT_" + savepoint.getSavepointId();
-        } catch (SQLException e) {
-            throw new SQLException("Savepoint has no usable name or id", e);
+    /**
+     * Drops the released savepoint and the ones nested inside it. A duplicated name resolves to the
+     * later savepoint, so only releasing the outermost one closes the stream: that release commits
+     * the transaction the savepoint started. Callers hold {@link #stateLock}.
+     */
+    private void closeTransactionOwnedBySavepoint(String sqlName) {
+        int index = savepointNames.lastIndexOf(sqlName);
+        if (index < 0) return;
+        savepointNames.subList(index, savepointNames.size()).clear();
+        if (index > 0 || !transactionStartedBySavepoint) return;
+        transactionStartedBySavepoint = false;
+        closeStreamQuietly();
+    }
+
+    /**
+     * Rejects work JDBC allows only with auto-commit off. The action finishes the message, so
+     * commit, rollback, and savepoint release each keep their own wording. Callers hold {@link
+     * #stateLock}.
+     */
+    private void requireManualCommit(String action) throws SQLException {
+        if (autoCommit) {
+            throw new SQLException("Cannot " + action + " when in autoCommit mode");
         }
     }
 

@@ -25,6 +25,33 @@ final class LibsqlSavepoint implements Savepoint {
         return sqlName;
     }
 
+    /**
+     * The SQL name of any savepoint handed to this driver: its own name, else the name or generated
+     * id a foreign {@link Savepoint} reports. The messages are part of the JDBC contract; the
+     * connection keeps only the transitions.
+     */
+    static String sqlNameOf(Savepoint savepoint) throws SQLException {
+        if (savepoint == null) {
+            throw new SQLException("Savepoint cannot be null");
+        }
+        if (savepoint instanceof LibsqlSavepoint libsqlSavepoint) {
+            return libsqlSavepoint.sqlName();
+        }
+        try {
+            String name = savepoint.getSavepointName();
+            if (name != null && !name.isBlank()) {
+                return name;
+            }
+        } catch (SQLException ignored) {
+            // An unnamed foreign savepoint has no name; its id identifies it below.
+        }
+        try {
+            return "SQLITE_SAVEPOINT_" + savepoint.getSavepointId();
+        } catch (SQLException e) {
+            throw new SQLException("Savepoint has no usable name or id", e);
+        }
+    }
+
     @Override
     public int getSavepointId() throws SQLException {
         if (name != null) {
