@@ -4,6 +4,8 @@ import com.github.magnusp.libsql.client.LibsqlClientConfig;
 import com.github.magnusp.libsql.jdbc.LibsqlUrlParser;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
@@ -12,6 +14,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Properties;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -19,16 +22,26 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Drives the JDBC driver over Hrana 3 JSON on a WebSocket ({@code hrana3} subprotocol), which is
  * the same server and the same protocol structures as the HTTP transport but a different envelope.
+ * Every case runs over plain {@code ws://} and over {@code wss://} through a TLS terminator.
  */
 public class WebSocketTransportIT extends SqldContainerBase {
 
-    private static Connection connect() throws SQLException {
-        return DriverManager.getConnection("jdbc:libsql:" + getWebSocketUrl());
+    static Stream<String> schemes() {
+        return Stream.of("ws", "wss");
     }
 
-    @Test
-    void selectReturnsTypedValues() throws SQLException {
-        try (Connection connection = connect();
+    private static String url(String scheme) {
+        return "wss".equals(scheme) ? getSecureWebSocketUrl() : getWebSocketUrl();
+    }
+
+    private static Connection connect(String scheme) throws SQLException {
+        return DriverManager.getConnection("jdbc:libsql:" + url(scheme));
+    }
+
+    @ParameterizedTest
+    @MethodSource("schemes")
+    void selectReturnsTypedValues(String scheme) throws SQLException {
+        try (Connection connection = connect(scheme);
                 Statement statement = connection.createStatement();
                 ResultSet resultSet = statement.executeQuery(
                         "SELECT 1 AS i, 1.5 AS f, 'hello' AS t, x'010203' AS b, NULL AS n")) {
@@ -42,27 +55,30 @@ public class WebSocketTransportIT extends SqldContainerBase {
         }
     }
 
-    @Test
-    void transactionCommitsAndRollsBackOnOneStream() throws SQLException {
-        try (Connection connection = connect()) {
+    @ParameterizedTest
+    @MethodSource("schemes")
+    void transactionCommitsAndRollsBackOnOneStream(String scheme) throws SQLException {
+        try (Connection connection = connect(scheme)) {
             try (Statement statement = connection.createStatement()) {
-                statement.execute("CREATE TABLE ws_tx (id INTEGER PRIMARY KEY, name TEXT)");
+                statement.execute(
+                        "CREATE TABLE ws_tx_" + scheme + " (id INTEGER PRIMARY KEY, name TEXT)");
             }
 
             connection.setAutoCommit(false);
             try (Statement statement = connection.createStatement()) {
-                statement.execute("INSERT INTO ws_tx VALUES (1, 'committed')");
+                statement.execute("INSERT INTO ws_tx_" + scheme + " VALUES (1, 'committed')");
             }
             connection.commit();
 
             try (Statement statement = connection.createStatement()) {
-                statement.execute("INSERT INTO ws_tx VALUES (2, 'rolled back')");
+                statement.execute("INSERT INTO ws_tx_" + scheme + " VALUES (2, 'rolled back')");
             }
             connection.rollback();
             connection.setAutoCommit(true);
 
             try (Statement statement = connection.createStatement();
-                    ResultSet resultSet = statement.executeQuery("SELECT id, name FROM ws_tx ORDER BY id")) {
+                    ResultSet resultSet = statement.executeQuery(
+                            "SELECT id, name FROM ws_tx_" + scheme + " ORDER BY id")) {
                 assertThat(resultSet.next()).isTrue();
                 assertThat(resultSet.getInt(1)).isEqualTo(1);
                 assertThat(resultSet.getString(2)).isEqualTo("committed");
@@ -71,9 +87,10 @@ public class WebSocketTransportIT extends SqldContainerBase {
         }
     }
 
-    @Test
-    void failingStatementMapsToSqlExceptionAndLeavesTheConnectionUsable() throws SQLException {
-        try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+    @ParameterizedTest
+    @MethodSource("schemes")
+    void failingStatementMapsToSqlExceptionAndLeavesTheConnectionUsable(String scheme) throws SQLException {
+        try (Connection connection = connect(scheme); Statement statement = connection.createStatement()) {
             assertThatThrownBy(() -> statement.executeQuery("SELECT * FROM ws_missing_table"))
                     .isInstanceOf(SQLException.class)
                     .hasMessageContaining("no such table");
@@ -85,22 +102,25 @@ public class WebSocketTransportIT extends SqldContainerBase {
         }
     }
 
-    @Test
-    void metadataAndBatchWorkOverWebSocket() throws SQLException {
-        try (Connection connection = connect()) {
+    @ParameterizedTest
+    @MethodSource("schemes")
+    void metadataAndBatchWorkOverWebSocket(String scheme) throws SQLException {
+        try (Connection connection = connect(scheme)) {
             DatabaseMetaData metaData = connection.getMetaData();
             assertThat(metaData.getDatabaseProductName()).isEqualTo("SQLite (libSQL)");
-            assertThat(metaData.getURL()).isEqualTo(getWebSocketUrl());
+            assertThat(metaData.getURL()).isEqualTo(url(scheme));
 
             try (Statement statement = connection.createStatement()) {
-                statement.execute("CREATE TABLE ws_batch (id INTEGER PRIMARY KEY, name TEXT)");
-                statement.addBatch("INSERT INTO ws_batch VALUES (1, 'a')");
-                statement.addBatch("INSERT INTO ws_batch VALUES (2, 'b')");
+                statement.execute(
+                        "CREATE TABLE ws_batch_" + scheme + " (id INTEGER PRIMARY KEY, name TEXT)");
+                statement.addBatch("INSERT INTO ws_batch_" + scheme + " VALUES (1, 'a')");
+                statement.addBatch("INSERT INTO ws_batch_" + scheme + " VALUES (2, 'b')");
                 assertThat(statement.executeBatch()).containsExactly(1, 1);
             }
 
             try (Statement statement = connection.createStatement();
-                    ResultSet resultSet = statement.executeQuery("SELECT COUNT(*) FROM ws_batch")) {
+                    ResultSet resultSet = statement.executeQuery(
+                            "SELECT COUNT(*) FROM ws_batch_" + scheme)) {
                 assertThat(resultSet.next()).isTrue();
                 assertThat(resultSet.getInt(1)).isEqualTo(2);
             }

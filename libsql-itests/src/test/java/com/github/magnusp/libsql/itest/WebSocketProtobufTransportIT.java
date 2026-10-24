@@ -1,30 +1,38 @@
 package com.github.magnusp.libsql.itest;
 
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Drives the JDBC driver over Hrana 3 Protobuf on a WebSocket ({@code hrana3-protobuf}
- * subprotocol). The observable JDBC behavior must match the JSON transport.
+ * subprotocol). The observable JDBC behavior must match the JSON transport, over {@code ws://} and
+ * {@code wss://} alike.
  */
 public class WebSocketProtobufTransportIT extends SqldContainerBase {
 
-    private static Connection connect() throws SQLException {
-        return DriverManager.getConnection(
-                "jdbc:libsql:" + getWebSocketUrl() + "?encoding=protobuf");
+    static Stream<String> schemes() {
+        return Stream.of("ws", "wss");
     }
 
-    @Test
-    void selectReturnsTypedValuesIncluding64BitIntegerAndBlob() throws SQLException {
-        try (Connection connection = connect();
+    private static Connection connect(String scheme) throws SQLException {
+        String url = "wss".equals(scheme) ? getSecureWebSocketUrl() : getWebSocketUrl();
+        return DriverManager.getConnection("jdbc:libsql:" + url + "?encoding=protobuf");
+    }
+
+    @ParameterizedTest
+    @MethodSource("schemes")
+    void selectReturnsTypedValuesIncluding64BitIntegerAndBlob(String scheme) throws SQLException {
+        try (Connection connection = connect(scheme);
                 Statement statement = connection.createStatement();
                 ResultSet resultSet = statement.executeQuery(
                         "SELECT 9007199254740993 AS big, -9223372036854775808 AS min,"
@@ -40,28 +48,30 @@ public class WebSocketProtobufTransportIT extends SqldContainerBase {
         }
     }
 
-    @Test
-    void transactionCommitsAndRollsBackOnOneStream() throws SQLException {
-        try (Connection connection = connect()) {
+    @ParameterizedTest
+    @MethodSource("schemes")
+    void transactionCommitsAndRollsBackOnOneStream(String scheme) throws SQLException {
+        try (Connection connection = connect(scheme)) {
             try (Statement statement = connection.createStatement()) {
-                statement.execute("CREATE TABLE ws_proto_tx (id INTEGER PRIMARY KEY, name TEXT)");
+                statement.execute(
+                        "CREATE TABLE ws_proto_tx_" + scheme + " (id INTEGER PRIMARY KEY, name TEXT)");
             }
 
             connection.setAutoCommit(false);
             try (Statement statement = connection.createStatement()) {
-                statement.execute("INSERT INTO ws_proto_tx VALUES (1, 'committed')");
+                statement.execute("INSERT INTO ws_proto_tx_" + scheme + " VALUES (1, 'committed')");
             }
             connection.commit();
 
             try (Statement statement = connection.createStatement()) {
-                statement.execute("INSERT INTO ws_proto_tx VALUES (2, 'rolled back')");
+                statement.execute("INSERT INTO ws_proto_tx_" + scheme + " VALUES (2, 'rolled back')");
             }
             connection.rollback();
             connection.setAutoCommit(true);
 
             try (Statement statement = connection.createStatement();
                     ResultSet resultSet = statement.executeQuery(
-                            "SELECT id, name FROM ws_proto_tx ORDER BY id")) {
+                            "SELECT id, name FROM ws_proto_tx_" + scheme + " ORDER BY id")) {
                 assertThat(resultSet.next()).isTrue();
                 assertThat(resultSet.getInt(1)).isEqualTo(1);
                 assertThat(resultSet.getString(2)).isEqualTo("committed");
@@ -70,9 +80,10 @@ public class WebSocketProtobufTransportIT extends SqldContainerBase {
         }
     }
 
-    @Test
-    void failingStatementMapsToSqlExceptionAndLeavesTheConnectionUsable() throws SQLException {
-        try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+    @ParameterizedTest
+    @MethodSource("schemes")
+    void failingStatementMapsToSqlExceptionAndLeavesTheConnectionUsable(String scheme) throws SQLException {
+        try (Connection connection = connect(scheme); Statement statement = connection.createStatement()) {
             assertThatThrownBy(() -> statement.executeQuery("SELECT * FROM ws_proto_missing_table"))
                     .isInstanceOf(SQLException.class)
                     .hasMessageContaining("no such table");
