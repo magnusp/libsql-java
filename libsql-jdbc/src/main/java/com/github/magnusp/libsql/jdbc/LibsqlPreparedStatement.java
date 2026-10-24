@@ -100,7 +100,7 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
             throw new SQLException("Query returns results");
         }
         execute();
-        return (int) updateCount;
+        return snapshotUpdateCount();
     }
 
     private static boolean returnsResultSet(String sql) {
