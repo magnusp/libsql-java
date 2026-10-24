@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.Executor;
+import java.util.function.Supplier;
 
 /**
  * A JDBC connection whose state is serialized on one connection-level lock, the way sqlite-jdbc
@@ -120,65 +121,44 @@ public class LibsqlConnection implements Connection {
     public StmtResult executeStatement(Stmt stmt) throws SQLException {
         synchronized (stateLock) {
             checkClosed();
-            try {
-                if (autoCommit) {
-                    // One-shot: single-round-trip close, so no idle stream is left for the server to reap.
-                    return client.executeOneShot(stmt);
-                } else {
-                    ensureTransactionStarted();
-                    return client.executeOnStream(stmt);
-                }
-            } catch (LibsqlException e) {
-                throw LibsqlErrorMapper.toSQLException(e);
+            if (autoCommit) {
+                // One-shot: single-round-trip close, so no idle stream is left for the server to reap.
+                return sending(() -> client.executeOneShot(stmt));
             }
+            ensureTransactionStarted();
+            return sendOnStream(stmt);
         }
     }
 
     public int[] executeBatch(List<Stmt> statements) throws SQLException {
-        List<StmtResult> results = executeBatchResults(statements);
-        int[] updateCounts = new int[results.size()];
-        for (int i = 0; i < results.size(); i++) {
-            updateCounts[i] = (int) results.get(i).affectedRowCount();
-        }
-        return updateCounts;
+        return steppedUpdateCounts(executeBatchResults(statements));
     }
 
-    /**
-     * Executes a batch and returns the {@code BatchResult} step results, one per statement. The
-     * caller derives both the update counts and the generated keys from these results, so the
-     * driver needs no follow-up query and no extra round trip.
-     */
+    /** Executes a batch and returns one step result per statement, so counts and keys need no follow-up query. */
     List<StmtResult> executeBatchResults(List<Stmt> statements) throws SQLException {
         synchronized (stateLock) {
             checkClosed();
             if (statements == null || statements.isEmpty()) {
                 return List.of();
             }
-
-            try {
-                List<BatchStep> steps = new ArrayList<>(statements.size());
-                for (int i = 0; i < statements.size(); i++) {
-                    BatchCond condition = i == 0 ? null : new BatchCond.StepOk(i - 1);
-                    steps.add(new BatchStep(condition, statements.get(i)));
-                }
-                Batch batch = new Batch(steps);
-
-                BatchResult result;
-                if (autoCommit) {
-                    result = client.executeBatchOneShot(batch);
-                } else {
-                    ensureTransactionStarted();
-                    result = client.executeBatchOnStream(batch);
-                }
-                return extractBatchResults(result, statements.size());
-            } catch (LibsqlException e) {
-                throw LibsqlErrorMapper.toSQLException(e);
+            List<BatchStep> steps = new ArrayList<>(statements.size());
+            for (int i = 0; i < statements.size(); i++) {
+                BatchCond condition = i == 0 ? null : new BatchCond.StepOk(i - 1);
+                steps.add(new BatchStep(condition, statements.get(i)));
             }
+            Batch batch = new Batch(steps);
+            BatchResult result;
+            if (autoCommit) {
+                result = sending(() -> client.executeBatchOneShot(batch));
+            } else {
+                ensureTransactionStarted();
+                result = sendBatchOnStream(batch);
+            }
+            return extractBatchResults(result, statements.size());
         }
     }
 
-    private List<StmtResult> extractBatchResults(BatchResult batchResult, int expectedSize)
-            throws SQLException {
+    private List<StmtResult> extractBatchResults(BatchResult batchResult, int expectedSize) throws SQLException {
         List<StmtResult> results = new ArrayList<>(expectedSize);
         for (int i = 0; i < expectedSize; i++) {
             HranaError error = batchResult.stepErrors().get(i);
@@ -213,6 +193,24 @@ public class LibsqlConnection implements Connection {
         return updateCounts;
     }
 
+    /** Maps a transport failure into the JDBC exception hierarchy. */
+    private <T> T sending(Supplier<T> call) throws SQLException {
+        try {
+            return call.get();
+        } catch (LibsqlException e) {
+            throw LibsqlErrorMapper.toSQLException(e);
+        }
+    }
+
+    /** Stream sends. Callers hold {@link #stateLock}. */
+    private StmtResult sendOnStream(Stmt stmt) throws SQLException {
+        return sending(() -> client.executeOnStream(stmt));
+    }
+
+    private BatchResult sendBatchOnStream(Batch batch) throws SQLException {
+        return sending(() -> client.executeBatchOnStream(batch));
+    }
+
     private void ensureTransactionStarted() throws SQLException {
         if (beginPending()) {
             beginTransaction();
@@ -233,11 +231,11 @@ public class LibsqlConnection implements Connection {
     /** Callers hold {@link #stateLock}. */
     private void beginTransaction() throws SQLException {
         try {
-            client.executeOnStream(new Stmt(transactionMode.beginSql()));
-        } catch (LibsqlException e) {
+            sendOnStream(new Stmt(transactionMode.beginSql()));
+        } catch (SQLException e) {
             // The begin failed, so the fresh stream holds no transaction state.
             closeStreamQuietly();
-            throw LibsqlErrorMapper.toSQLException(e);
+            throw e;
         }
     }
 
@@ -354,11 +352,7 @@ public class LibsqlConnection implements Connection {
             return;
         }
 
-        try {
-            client.executeOnStream(new Stmt(sql));
-        } catch (LibsqlException e) {
-            throw LibsqlErrorMapper.toSQLException(e);
-        }
+        sendOnStream(new Stmt(sql));
 
         // The server committed or rolled back, so the stream has no state left worth holding.
         // Closing it lets an idle connection drop its server-side stream. On an error above the
@@ -552,7 +546,7 @@ public class LibsqlConnection implements Connection {
             String sql = "SAVEPOINT " + quoteSavepointName(savepoint.sqlName());
             if (autoCommit) {
                 try {
-                    executeTransactionStatement(sql);
+                    sendOnStream(new Stmt(sql));
                 } catch (SQLException e) {
                     // No transaction was started, so the fresh stream holds no state.
                     closeStreamQuietly();
@@ -564,7 +558,7 @@ public class LibsqlConnection implements Connection {
                 savepointNames.add(savepoint.sqlName());
             } else {
                 ensureTransactionStarted();
-                executeTransactionStatement(sql);
+                sendOnStream(new Stmt(sql));
                 savepointNames.add(savepoint.sqlName());
             }
             return savepoint;
@@ -580,7 +574,7 @@ public class LibsqlConnection implements Connection {
                 throw new SQLException("Cannot rollback to a savepoint when in autoCommit mode");
             }
             ensureTransactionStarted();
-            executeTransactionStatement("ROLLBACK TO SAVEPOINT " + quoteSavepointName(sqlName));
+            sendOnStream(new Stmt("ROLLBACK TO SAVEPOINT " + quoteSavepointName(sqlName)));
             int index = savepointNames.lastIndexOf(sqlName);
             if (index >= 0) {
                 // Rolling back cancels the savepoints created after the target; the target
@@ -599,7 +593,7 @@ public class LibsqlConnection implements Connection {
                 throw new SQLException("Cannot release a savepoint when in autoCommit mode");
             }
             ensureTransactionStarted();
-            executeTransactionStatement("RELEASE SAVEPOINT " + quoteSavepointName(sqlName));
+            sendOnStream(new Stmt("RELEASE SAVEPOINT " + quoteSavepointName(sqlName)));
             int index = savepointNames.lastIndexOf(sqlName);
             if (index >= 0) {
                 boolean outermost = index == 0;
@@ -613,15 +607,6 @@ public class LibsqlConnection implements Connection {
                     closeStreamQuietly();
                 }
             }
-        }
-    }
-
-    /** Callers hold {@link #stateLock}. */
-    private void executeTransactionStatement(String sql) throws SQLException {
-        try {
-            client.executeOnStream(new Stmt(sql));
-        } catch (LibsqlException e) {
-            throw LibsqlErrorMapper.toSQLException(e);
         }
     }
 
