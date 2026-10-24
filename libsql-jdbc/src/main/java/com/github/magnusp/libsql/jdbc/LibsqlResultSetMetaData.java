@@ -8,7 +8,6 @@ import com.github.magnusp.libsql.hrana.codec.Value;
 
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
-import java.sql.Types;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -113,7 +112,7 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         }
         // An expression column has no declared type, so signedness follows the
         // storage class of the current value, as xerial does.
-        return switch (storageType(runtimeValue(column))) {
+        return switch (XerialColumnType.storageClass(runtimeValue(column))) {
             case INTEGER, FLOAT, NULL -> true;
             case TEXT, BLOB -> false;
         };
@@ -185,91 +184,7 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         getCol(column);
         String typeName = getColumnTypeName(column);
         Value value = runtimeValue(column);
-        SampleType valueType = storageType(value);
-
-        if (valueType == SampleType.INTEGER || valueType == SampleType.NULL) {
-            if ("BOOLEAN".equals(typeName)) {
-                return Types.BOOLEAN;
-            }
-            if ("TINYINT".equals(typeName)) {
-                return Types.TINYINT;
-            }
-            if ("SMALLINT".equals(typeName) || "INT2".equals(typeName)) {
-                return Types.SMALLINT;
-            }
-            if ("BIGINT".equals(typeName)
-                    || "INT8".equals(typeName)
-                    || "UNSIGNED BIG INT".equals(typeName)) {
-                return Types.BIGINT;
-            }
-            if ("DATE".equals(typeName)) {
-                return Types.DATE;
-            }
-            if ("DATETIME".equals(typeName) || "TIMESTAMP".equals(typeName)) {
-                return Types.TIMESTAMP;
-            }
-            if (valueType == SampleType.INTEGER
-                    || "INT".equals(typeName)
-                    || "INTEGER".equals(typeName)
-                    || "MEDIUMINT".equals(typeName)) {
-                long val = integer(value);
-                return val > Integer.MAX_VALUE || val < Integer.MIN_VALUE ? Types.BIGINT : Types.INTEGER;
-            }
-        }
-
-        if (valueType == SampleType.FLOAT || valueType == SampleType.NULL) {
-            if ("DECIMAL".equals(typeName)) {
-                return Types.DECIMAL;
-            }
-            if ("DOUBLE".equals(typeName) || "DOUBLE PRECISION".equals(typeName)) {
-                return Types.DOUBLE;
-            }
-            if ("NUMERIC".equals(typeName)) {
-                return Types.NUMERIC;
-            }
-            if ("REAL".equals(typeName)) {
-                return Types.REAL;
-            }
-            if (valueType == SampleType.FLOAT || "FLOAT".equals(typeName)) {
-                return Types.FLOAT;
-            }
-        }
-
-        if (valueType == SampleType.TEXT || valueType == SampleType.NULL) {
-            if ("CHARACTER".equals(typeName)
-                    || "NCHAR".equals(typeName)
-                    || "NATIVE CHARACTER".equals(typeName)
-                    || "CHAR".equals(typeName)) {
-                return Types.CHAR;
-            }
-            if ("CLOB".equals(typeName)) {
-                return Types.CLOB;
-            }
-            if ("DATE".equals(typeName)) {
-                return Types.DATE;
-            }
-            if ("DATETIME".equals(typeName) || "TIMESTAMP".equals(typeName)) {
-                return Types.TIMESTAMP;
-            }
-            if (valueType == SampleType.TEXT
-                    || "VARCHAR".equals(typeName)
-                    || "VARYING CHARACTER".equals(typeName)
-                    || "NVARCHAR".equals(typeName)
-                    || "TEXT".equals(typeName)) {
-                return Types.VARCHAR;
-            }
-        }
-
-        if (valueType == SampleType.BLOB || valueType == SampleType.NULL) {
-            if ("BINARY".equals(typeName)) {
-                return Types.BINARY;
-            }
-            if (valueType == SampleType.BLOB || "BLOB".equals(typeName)) {
-                return Types.BLOB;
-            }
-        }
-
-        return Types.NUMERIC;
+        return XerialColumnType.jdbcType(value, typeName);
     }
 
     @Override
@@ -305,23 +220,7 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
     @Override
     public String getColumnClassName(int column) throws SQLException {
         getCol(column);
-        return className(runtimeValue(column));
-    }
-
-    private static String className(Value value) {
-        if (value instanceof Value.Integer i) {
-            long val = i.value();
-            return val > Integer.MAX_VALUE || val < Integer.MIN_VALUE
-                    ? Long.class.getName()
-                    : Integer.class.getName();
-        }
-        if (value instanceof Value.Float) {
-            return Double.class.getName();
-        }
-        if (value instanceof Value.Text) {
-            return String.class.getName();
-        }
-        return Object.class.getName();
+        return XerialColumnType.className(runtimeValue(column));
     }
 
     private String declType(int column) throws SQLException {
@@ -361,22 +260,6 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
             }
         }
         return null;
-    }
-
-    private static SampleType storageType(Value value) {
-        if (value instanceof Value.Integer) {
-            return SampleType.INTEGER;
-        }
-        if (value instanceof Value.Float) {
-            return SampleType.FLOAT;
-        }
-        if (value instanceof Value.Blob) {
-            return SampleType.BLOB;
-        }
-        if (value instanceof Value.Text) {
-            return SampleType.TEXT;
-        }
-        return SampleType.NULL;
     }
 
     private TableInfo tableForColumn(int column) throws SQLException {
@@ -505,7 +388,9 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
             if (columnName != null) {
                 columns.put(
                         columnName.toLowerCase(Locale.ROOT),
-                        new ColumnInfo(integer(values.get(3)) != 0, integer(values.get(4)) != 0));
+                        new ColumnInfo(
+                                XerialColumnType.integer(values.get(3)) != 0,
+                                XerialColumnType.integer(values.get(4)) != 0));
             }
         }
         return new TableInfo(tableName != null ? tableName : fallbackName, createSql, columns);
@@ -513,18 +398,6 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
 
     private static String text(Value value) {
         return value instanceof Value.Text t ? t.value() : null;
-    }
-
-    private static long integer(Value value) {
-        return value instanceof Value.Integer i ? i.value() : 0L;
-    }
-
-    private enum SampleType {
-        INTEGER,
-        FLOAT,
-        BLOB,
-        TEXT,
-        NULL
     }
 
     private record ColumnInfo(boolean notNull, boolean primaryKey) {}
