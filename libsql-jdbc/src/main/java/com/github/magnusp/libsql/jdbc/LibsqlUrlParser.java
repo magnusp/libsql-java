@@ -95,7 +95,7 @@ public class LibsqlUrlParser {
 
         // Timeouts
         Duration connectTimeout = LibsqlClientConfig.DEFAULT_CONNECT_TIMEOUT;
-        if (queryParams.containsKey("connectTimeout") || queryParams.containsKey("socketTimeout")) {
+        if (queryParams.containsKey("connectTimeout")) {
             connectTimeout = Duration.ofMillis(Long.parseLong(queryParams.get("connectTimeout")));
         } else if (info != null && info.containsKey("connectTimeout")) {
             connectTimeout = Duration.ofMillis(Long.parseLong(info.getProperty("connectTimeout")));
