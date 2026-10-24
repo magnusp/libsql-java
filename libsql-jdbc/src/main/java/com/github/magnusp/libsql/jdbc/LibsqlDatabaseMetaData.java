@@ -23,17 +23,12 @@ import java.util.regex.Pattern;
 
 public class LibsqlDatabaseMetaData implements DatabaseMetaData {
 
-    private static final Pattern INTEGER_TYPE = Pattern.compile(".*(INT|BOOL).*");
-    private static final Pattern VARCHAR_TYPE = Pattern.compile(".*(CHAR|CLOB|TEXT|BLOB).*");
-    private static final Pattern FLOAT_TYPE = Pattern.compile(".*(REAL|FLOA|DOUB|DEC|NUM).*");
     private static final Pattern NAMED_PRIMARY_KEY = Pattern.compile(
             "\\bCONSTRAINT\\s*(\"[^\"]+\"|`[^`]+`|\\[[^\\]]+\\]|'[^']+'|[^\\s]+)\\s*PRIMARY\\s+KEY\\b",
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     private static final Pattern NAMED_FOREIGN_KEY = Pattern.compile(
             "\\bCONSTRAINT\\s+(\"[^\"]+\"|`[^`]+`|\\[[^\\]]+\\]|'[^']+'|[^\\s]+)\\s+FOREIGN\\s+KEY\\b",
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
-    private static final int UNKNOWN_COLUMN_SIZE = 2_000_000_000;
-    private static final int DEFAULT_DECIMAL_DIGITS = 10;
 
     private static final List<Col> FOREIGN_KEY_COLUMNS = List.of(
             new Col("PKTABLE_CAT", "TEXT"),
@@ -50,6 +45,32 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
             new Col("FK_NAME", "TEXT"),
             new Col("PK_NAME", "TEXT"),
             new Col("DEFERRABILITY", "INTEGER"));
+
+    private static final List<Col> COLUMN_COLUMNS = List.of(
+            new Col("TABLE_CAT", "TEXT"),
+            new Col("TABLE_SCHEM", "TEXT"),
+            new Col("TABLE_NAME", "TEXT"),
+            new Col("COLUMN_NAME", "TEXT"),
+            new Col("DATA_TYPE", "INTEGER"),
+            new Col("TYPE_NAME", "TEXT"),
+            new Col("COLUMN_SIZE", "INTEGER"),
+            new Col("BUFFER_LENGTH", "INTEGER"),
+            new Col("DECIMAL_DIGITS", "INTEGER"),
+            new Col("NUM_PREC_RADIX", "INTEGER"),
+            new Col("NULLABLE", "INTEGER"),
+            new Col("REMARKS", "TEXT"),
+            new Col("COLUMN_DEF", "TEXT"),
+            new Col("SQL_DATA_TYPE", "INTEGER"),
+            new Col("SQL_DATETIME_SUB", "INTEGER"),
+            new Col("CHAR_OCTET_LENGTH", "INTEGER"),
+            new Col("ORDINAL_POSITION", "INTEGER"),
+            new Col("IS_NULLABLE", "TEXT"),
+            new Col("SCOPE_CATALOG", "TEXT"),
+            new Col("SCOPE_SCHEMA", "TEXT"),
+            new Col("SCOPE_TABLE", "TEXT"),
+            new Col("SOURCE_DATA_TYPE", "INTEGER"),
+            new Col("IS_AUTOINCREMENT", "TEXT"),
+            new Col("IS_GENERATEDCOLUMN", "TEXT"));
 
     private static final List<Col> PRIMARY_KEY_COLUMNS = List.of(
             new Col("TABLE_CAT", "TEXT"),
@@ -458,130 +479,8 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
         String columnPattern = columnNamePattern == null || columnNamePattern.isEmpty() ? "%" : columnNamePattern;
         // getColumns synthesizes its column labels, so the raw SQL must not drive column-origin
         // resolution for the result set.
-        return executeMetadataQuery(MetadataSql.columns(tablePattern, columnPattern), null, LibsqlDatabaseMetaData::columnsResult);
-    }
-
-    private static StmtResult columnsResult(StmtResult raw) {
-        List<Col> columns = List.of(
-                new Col("TABLE_CAT", "TEXT"),
-                new Col("TABLE_SCHEM", "TEXT"),
-                new Col("TABLE_NAME", "TEXT"),
-                new Col("COLUMN_NAME", "TEXT"),
-                new Col("DATA_TYPE", "INTEGER"),
-                new Col("TYPE_NAME", "TEXT"),
-                new Col("COLUMN_SIZE", "INTEGER"),
-                new Col("BUFFER_LENGTH", "INTEGER"),
-                new Col("DECIMAL_DIGITS", "INTEGER"),
-                new Col("NUM_PREC_RADIX", "INTEGER"),
-                new Col("NULLABLE", "INTEGER"),
-                new Col("REMARKS", "TEXT"),
-                new Col("COLUMN_DEF", "TEXT"),
-                new Col("SQL_DATA_TYPE", "INTEGER"),
-                new Col("SQL_DATETIME_SUB", "INTEGER"),
-                new Col("CHAR_OCTET_LENGTH", "INTEGER"),
-                new Col("ORDINAL_POSITION", "INTEGER"),
-                new Col("IS_NULLABLE", "TEXT"),
-                new Col("SCOPE_CATALOG", "TEXT"),
-                new Col("SCOPE_SCHEMA", "TEXT"),
-                new Col("SCOPE_TABLE", "TEXT"),
-                new Col("SOURCE_DATA_TYPE", "INTEGER"),
-                new Col("IS_AUTOINCREMENT", "TEXT"),
-                new Col("IS_GENERATEDCOLUMN", "TEXT"));
-        List<Row> rows = new ArrayList<>();
-        if (raw != null && raw.rows() != null) {
-            for (Row row : raw.rows()) {
-                List<Value> values = row.values();
-                String tableName = text(values.get(0));
-                String createSql = text(values.get(1));
-                long cid = integer(values.get(2));
-                String columnName = text(values.get(3));
-                String declaredType = text(values.get(4));
-                boolean notNull = integer(values.get(5)) != 0;
-                String columnDefault = text(values.get(6));
-                boolean primaryKey = integer(values.get(7)) != 0;
-                long hidden = integer(values.get(8));
-
-                ColumnShape shape = columnShape(declaredType);
-                boolean autoIncrement = primaryKey
-                        && SqlAutoIncrement.isAutoIncrementColumn(createSql, columnName);
-                boolean generated = hidden == 2 || hidden == 3;
-
-                rows.add(new Row(List.of(
-                        Value.ofNull(),
-                        Value.ofNull(),
-                        Value.of(tableName),
-                        Value.of(columnName),
-                        Value.of(shape.jdbcType()),
-                        Value.of(shape.typeName()),
-                        Value.of(shape.columnSize()),
-                        Value.of(UNKNOWN_COLUMN_SIZE),
-                        Value.of(shape.decimalDigits()),
-                        Value.of(10),
-                        Value.of(notNull ? DatabaseMetaData.columnNoNulls : DatabaseMetaData.columnNullable),
-                        Value.ofNull(),
-                        Value.of(columnDefault),
-                        Value.of(0),
-                        Value.of(0),
-                        Value.of(UNKNOWN_COLUMN_SIZE),
-                        Value.of(cid + 1),
-                        Value.of(notNull ? "NO" : "YES"),
-                        Value.ofNull(),
-                        Value.ofNull(),
-                        Value.ofNull(),
-                        Value.ofNull(),
-                        Value.of(autoIncrement ? "YES" : "NO"),
-                        Value.of(generated ? "YES" : "NO"))));
-            }
-        }
-        return new StmtResult(columns, rows, 0, null);
-    }
-
-    private static ColumnShape columnShape(String declaredType) {
-        String typeName = declaredType == null ? "TEXT" : declaredType.toUpperCase(Locale.ENGLISH);
-        int jdbcType;
-        int decimalDigits = DEFAULT_DECIMAL_DIGITS;
-        if (INTEGER_TYPE.matcher(typeName).find()) {
-            jdbcType = Types.INTEGER;
-            decimalDigits = 0;
-        } else if (VARCHAR_TYPE.matcher(typeName).find()) {
-            jdbcType = Types.VARCHAR;
-            decimalDigits = 0;
-        } else if (FLOAT_TYPE.matcher(typeName).find()) {
-            jdbcType = Types.FLOAT;
-        } else {
-            jdbcType = Types.VARCHAR;
-        }
-
-        int columnSize = UNKNOWN_COLUMN_SIZE;
-        int startOfDimension = typeName.indexOf('(');
-        if (startOfDimension > 0) {
-            int endOfDimension = typeName.indexOf(')', startOfDimension);
-            if (endOfDimension > 0) {
-                int dimensionSeparator = typeName.indexOf(',', startOfDimension);
-                String integerPart;
-                String decimalPart;
-                if (dimensionSeparator > 0) {
-                    integerPart = typeName.substring(startOfDimension + 1, dimensionSeparator);
-                    decimalPart = typeName.substring(dimensionSeparator + 1, endOfDimension);
-                } else {
-                    integerPart = typeName.substring(startOfDimension + 1, endOfDimension);
-                    decimalPart = null;
-                }
-                try {
-                    int integerValue = Integer.parseUnsignedInt(integerPart.trim());
-                    if (decimalPart != null) {
-                        decimalDigits = Integer.parseUnsignedInt(decimalPart.trim());
-                        columnSize = integerValue + decimalDigits;
-                    } else {
-                        decimalDigits = 0;
-                        columnSize = integerValue;
-                    }
-                } catch (NumberFormatException ignored) {
-                }
-            }
-            typeName = typeName.substring(0, startOfDimension).trim();
-        }
-        return new ColumnShape(jdbcType, typeName, columnSize, decimalDigits);
+        return executeMetadataQuery(MetadataSql.columns(tablePattern, columnPattern), null,
+                raw -> ColumnMetadata.columns(raw, COLUMN_COLUMNS));
     }
 
     private static String text(Value value) {
@@ -824,8 +723,6 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
                     Value.of(DatabaseMetaData.importedKeyInitiallyDeferred)));
         }
     }
-
-    private record ColumnShape(int jdbcType, String typeName, int columnSize, int decimalDigits) {}
 
     @Override public ResultSet getPrimaryKeys(String catalog, String schema, String table) throws SQLException {
         return executeMetadataQuery(MetadataSql.primaryKeys(table), null, raw -> primaryKeysResult(raw, table));
