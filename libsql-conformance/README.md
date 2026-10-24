@@ -164,8 +164,10 @@ same namespace; for example, `data/example.db` and `/work/data/example.db` match
 the process working directory is `/work`. Normalization resolves `.` and `..` but does
 not resolve symbolic links.
 
-The query string is ignored when deriving the namespace, so URL pragmas such as
-`?journal_mode=WAL` have no effect on the conformance server. No local SQLite file is
+The query string is part of the namespace identity, so two URLs that differ only in
+their query string address different namespaces. The option values themselves are not
+applied to the conformance server; a URL pragma such as `?journal_mode=WAL` selects a
+separate namespace rather than changing server behavior. No local SQLite file is
 created; the data lives in the sqld namespace.
 
 ## Persistence
