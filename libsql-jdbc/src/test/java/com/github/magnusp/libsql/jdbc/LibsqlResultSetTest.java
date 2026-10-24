@@ -5,10 +5,13 @@ import com.github.magnusp.libsql.hrana.codec.Row;
 import com.github.magnusp.libsql.hrana.codec.StmtResult;
 import com.github.magnusp.libsql.hrana.codec.Value;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.Reader;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.sql.Array;
 import java.sql.Blob;
@@ -136,6 +139,39 @@ class LibsqlResultSetTest {
         LibsqlResultSet rs = resultSet(new Value.Text(" 42xyz"));
         assertThat(rs.next()).isTrue();
         assertNumeric(rs, 1, 42, 42L, 42.0f, 42.0);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {" ", "\t", "\n", "\r", "\u000b", "\f"})
+    void everySqliteWhitespaceCharacterIsSkippedBeforeTheNumericPrefix(String whitespace) throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Text(whitespace + "42xyz"));
+        assertThat(rs.next()).isTrue();
+        assertNumeric(rs, 1, 42, 42L, 42.0f, 42.0);
+    }
+
+    @Test
+    void largeIntegerTextBelowLongMaxIsReturnedUnchanged() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Text("6000000000000000000"));
+        assertThat(rs.next()).isTrue();
+
+        assertThat(rs.getLong(1)).isEqualTo(6_000_000_000_000_000_000L);
+        assertThat(rs.getBigDecimal(1)).isEqualByComparingTo(new BigDecimal("6000000000000000000"));
+    }
+
+    @Test
+    void textJustPastLongMaxSaturatesToLongMax() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Text("9223372036854775808"));
+        assertThat(rs.next()).isTrue();
+
+        assertThat(rs.getLong(1)).isEqualTo(Long.MAX_VALUE);
+    }
+
+    @Test
+    void textJustPastLongMinSaturatesToLongMin() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Text("-9223372036854775809"));
+        assertThat(rs.next()).isTrue();
+
+        assertThat(rs.getLong(1)).isEqualTo(Long.MIN_VALUE);
     }
 
     @Test
