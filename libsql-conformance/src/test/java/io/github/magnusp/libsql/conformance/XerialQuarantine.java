@@ -22,11 +22,6 @@ public final class XerialQuarantine implements PostDiscoveryFilter {
     static final List<Quarantined> QUARANTINED =
             List.of(
                     new Quarantined(
-                            "org.sqlite.StatementTest",
-                            "bytesTest",
-                            "xerial allows getBytes on a declared BLOB; Table B-6 lists getBytes"
-                                    + " only for BINARY, VARBINARY and LONGVARBINARY"),
-                    new Quarantined(
                             "org.sqlite.RSMetaDataTest",
                             "columnTypes",
                             "xerial reports a declared NCHAR as Types.CHAR; Appendix B defines"

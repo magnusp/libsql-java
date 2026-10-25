@@ -19,11 +19,9 @@ import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.OffsetDateTime;
 import java.time.OffsetTime;
-import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 
@@ -43,9 +41,12 @@ import java.util.TreeSet;
  *
  * <p>{@code ARRAY}, {@code STRUCT}, {@code REF}, {@code JAVA_OBJECT}, and {@code DISTINCT} are
  * recorded as {@link Support#UNSUPPORTED}. SQLite has no interoperable representation for them, so
- * the driver rejects the declared type instead of returning a value of the wrong Java type. The
- * Table B-6 getter matrix is stored on each supported entry as a bitmask, which keeps a declared
- * column's getter check to one field read and one mask test.
+ * the driver rejects the declared type instead of returning a value of the wrong Java type.
+ *
+ * <p>Reads are not restricted to the Table B-6 matrix. A representable declared column is not
+ * rejected because of its declared type, and the stored value decides whether the conversion
+ * succeeds, matching sqlite-jdbc. Rejection on declared-type grounds is limited to the five
+ * {@link Support#UNSUPPORTED} types; unimplemented getters still throw for any column.
  */
 final class JdbcTypeMapping {
 
@@ -63,58 +64,12 @@ final class JdbcTypeMapping {
         NULL
     }
 
-    /** One ResultSet getter, named for Table B-6 and for an error message. */
-    enum Getter {
-        GET_BYTE("getByte"),
-        GET_SHORT("getShort"),
-        GET_INT("getInt"),
-        GET_LONG("getLong"),
-        GET_FLOAT("getFloat"),
-        GET_DOUBLE("getDouble"),
-        GET_BIG_DECIMAL("getBigDecimal"),
-        GET_BOOLEAN("getBoolean"),
-        GET_STRING("getString"),
-        GET_N_STRING("getNString"),
-        GET_BYTES("getBytes"),
-        GET_DATE("getDate"),
-        GET_TIME("getTime"),
-        GET_TIMESTAMP("getTimestamp"),
-        GET_ASCII_STREAM("getAsciiStream"),
-        GET_BINARY_STREAM("getBinaryStream"),
-        GET_CHARACTER_STREAM("getCharacterStream"),
-        GET_N_CHARACTER_STREAM("getNCharacterStream"),
-        GET_CLOB("getClob"),
-        GET_N_CLOB("getNClob"),
-        GET_BLOB("getBlob"),
-        GET_ARRAY("getArray"),
-        GET_REF("getRef"),
-        GET_URL("getURL"),
-        GET_OBJECT("getObject"),
-        GET_ROW_ID("getRowId"),
-        GET_SQLXML("getSQLXML");
-
-        private final String methodName;
-
-        Getter(String methodName) {
-            this.methodName = methodName;
-        }
-
-        String methodName() {
-            return methodName;
-        }
-
-        int mask() {
-            return 1 << ordinal();
-        }
-    }
-
     record JdbcType(
             int sqlType,
             Class<?> javaClass,
             Class<?> objectClass,
             StorageClass storage,
-            Support support,
-            int getterMask) {}
+            Support support) {}
 
     private static final JdbcType INTEGER_FALLBACK =
             fallback(Types.INTEGER, int.class, Integer.class, StorageClass.INTEGER);
@@ -129,7 +84,6 @@ final class JdbcTypeMapping {
     private static final JdbcType NULL_FALLBACK =
             fallback(Types.NUMERIC, Object.class, Object.class, StorageClass.NULL);
 
-    private static final Map<Getter, Set<String>> GETTER_SUPPORT = getterSupport();
     private static final Map<String, JdbcType> DECLARED = declaredTypeRegistry();
     private static final Map<String, JdbcType> ALIASES = aliasTypes();
 
@@ -165,10 +119,6 @@ final class JdbcTypeMapping {
 
     static boolean isUnsupported(JdbcType type) {
         return type.support() == Support.UNSUPPORTED;
-    }
-
-    static boolean supports(JdbcType type, Getter getter) {
-        return (type.getterMask() & getter.mask()) != 0;
     }
 
     /** The JDBC type names this driver reads, for the compliance profile. */
@@ -227,91 +177,7 @@ final class JdbcTypeMapping {
     }
 
     private static JdbcType fallback(int sqlType, Class<?> javaClass, Class<?> objectClass, StorageClass storage) {
-        return new JdbcType(sqlType, javaClass, objectClass, storage, Support.FALLBACK, 0);
-    }
-
-    /**
-     * The Table B-6 supported JDBC types for each getter. A declared column resolves through this
-     * table; an expression column has no declared type and keeps the permissive storage fallback.
-     */
-    private static Map<Getter, Set<String>> getterSupport() {
-        Set<String> numeric = Set.of(
-                "TINYINT",
-                "SMALLINT",
-                "INTEGER",
-                "BIGINT",
-                "REAL",
-                "FLOAT",
-                "DOUBLE",
-                "DECIMAL",
-                "NUMERIC",
-                "BIT",
-                "BOOLEAN",
-                "CHAR",
-                "VARCHAR",
-                "LONGVARCHAR");
-        Set<String> numericWithRowId = union(numeric, "ROWID");
-        Set<String> strings = union(numeric, "BINARY", "VARBINARY", "LONGVARBINARY", "DATE", "TIME",
-                "TIMESTAMP", "DATALINK", "NCHAR", "NVARCHAR", "LONGNVARCHAR");
-        Set<String> binary = Set.of("BINARY", "VARBINARY", "LONGVARBINARY");
-        Set<String> date = Set.of("CHAR", "VARCHAR", "LONGVARCHAR", "DATE", "TIMESTAMP");
-        Set<String> time = Set.of("CHAR", "VARCHAR", "LONGVARCHAR", "TIME", "TIMESTAMP");
-        Set<String> timestamp = Set.of("CHAR", "VARCHAR", "LONGVARCHAR", "DATE", "TIME", "TIMESTAMP");
-        Set<String> asciiStream = union(binary, "CHAR", "VARCHAR", "LONGVARCHAR", "CLOB", "NCLOB");
-        Set<String> characterStream = union(
-                binary, "CHAR", "VARCHAR", "LONGVARCHAR", "CLOB", "NCHAR", "NVARCHAR", "LONGNVARCHAR",
-                "NCLOB", "SQLXML");
-        Set<String> clob = Set.of("CLOB", "NCLOB");
-        Set<String> all = union(
-                strings, "CLOB", "BLOB", "ARRAY", "STRUCT", "REF", "DATALINK", "JAVA_OBJECT",
-                "ROWID", "NCLOB", "SQLXML", "TIME_WITH_TIMEZONE", "TIMESTAMP_WITH_TIMEZONE");
-
-        Map<Getter, Set<String>> support = new EnumMap<>(Getter.class);
-        support.put(Getter.GET_BYTE, numericWithRowId);
-        support.put(Getter.GET_SHORT, numeric);
-        support.put(Getter.GET_INT, numeric);
-        support.put(Getter.GET_LONG, numeric);
-        support.put(Getter.GET_FLOAT, numeric);
-        support.put(Getter.GET_DOUBLE, numeric);
-        support.put(Getter.GET_BIG_DECIMAL, numeric);
-        support.put(Getter.GET_BOOLEAN, numeric);
-        support.put(Getter.GET_STRING, strings);
-        support.put(Getter.GET_N_STRING, strings);
-        support.put(Getter.GET_BYTES, binary);
-        support.put(Getter.GET_DATE, date);
-        support.put(Getter.GET_TIME, time);
-        support.put(Getter.GET_TIMESTAMP, timestamp);
-        support.put(Getter.GET_ASCII_STREAM, asciiStream);
-        support.put(Getter.GET_BINARY_STREAM, binary);
-        support.put(Getter.GET_CHARACTER_STREAM, characterStream);
-        support.put(Getter.GET_N_CHARACTER_STREAM, characterStream);
-        support.put(Getter.GET_CLOB, clob);
-        support.put(Getter.GET_N_CLOB, clob);
-        support.put(Getter.GET_BLOB, Set.of("BLOB"));
-        support.put(Getter.GET_ARRAY, Set.of("ARRAY"));
-        support.put(Getter.GET_REF, Set.of("REF"));
-        support.put(Getter.GET_URL, Set.of("DATALINK"));
-        // B-6 omits DISTINCT from getObject; the other four N/A types are rejected before the mask.
-        support.put(Getter.GET_OBJECT, all);
-        support.put(Getter.GET_ROW_ID, Set.of("ROWID"));
-        support.put(Getter.GET_SQLXML, Set.of("SQLXML"));
-        return Map.copyOf(support);
-    }
-
-    private static Set<String> union(Set<String> base, String... extra) {
-        Set<String> result = new java.util.HashSet<>(base);
-        result.addAll(List.of(extra));
-        return Set.copyOf(result);
-    }
-
-    private static int getterMask(String typeName) {
-        int mask = 0;
-        for (Getter getter : Getter.values()) {
-            if (GETTER_SUPPORT.get(getter).contains(typeName)) {
-                mask |= getter.mask();
-            }
-        }
-        return mask;
+        return new JdbcType(sqlType, javaClass, objectClass, storage, Support.FALLBACK);
     }
 
     private static Map<String, JdbcType> declaredTypeRegistry() {
@@ -368,20 +234,14 @@ final class JdbcTypeMapping {
             String name, int sqlType, Class<?> javaClass, Class<?> objectClass, StorageClass storage) {
         return Map.entry(
                 name,
-                new JdbcType(
-                        sqlType,
-                        javaClass,
-                        objectClass,
-                        storage,
-                        Support.SUPPORTED,
-                        getterMask(name)));
+                new JdbcType(sqlType, javaClass, objectClass, storage, Support.SUPPORTED));
     }
 
     private static Map.Entry<String, JdbcType> unsupported(
             String name, int sqlType, Class<?> javaClass, Class<?> objectClass, StorageClass storage) {
         return Map.entry(
                 name,
-                new JdbcType(sqlType, javaClass, objectClass, storage, Support.UNSUPPORTED, 0));
+                new JdbcType(sqlType, javaClass, objectClass, storage, Support.UNSUPPORTED));
     }
 
     /**

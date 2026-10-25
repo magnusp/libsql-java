@@ -55,8 +55,9 @@ import static org.junit.jupiter.api.Assertions.fail;
  * <p>B-1 is defined for CallableStatement getters, which this driver rejects. It is therefore
  * exercised through the natural ResultSet getter for each JDBC type (the same Java type the
  * CallableStatement getter would return). B-3 is exercised through {@code getObject(int)}. B-6 is
- * exercised cell by cell: a listed conversion must succeed and return a non-null value of the
- * getter's Java type, and an unlisted conversion must reject the value with a {@link SQLException}.
+ * exercised through its required cells and through every representable declared type. B-6's
+ * required conversions must succeed. A declared type is never rejected because B-6 omits a cell;
+ * the stored value decides whether the conversion succeeds.
  */
 class Jdbc4AppendixBReadTest {
 
@@ -156,7 +157,7 @@ class Jdbc4AppendixBReadTest {
         Object read(ResultSet resultSet, int column) throws SQLException;
     }
 
-    record Accessor(String name, Class<?> javaType, SqlReader reader, Set<String> supported) {}
+    record Accessor(String name, Class<?> javaType, SqlReader reader, Set<String> required) {}
 
     private static final Accessor GET_BYTE =
             new Accessor("getByte", byte.class, ResultSet::getByte, numericTextWithRowId());
@@ -281,6 +282,23 @@ class Jdbc4AppendixBReadTest {
             GET_ROW_ID,
             GET_SQLXML);
 
+    /**
+     * Getters whose conversion can fail for a value the declared type permits. Every other
+     * implemented getter converts all five storage classes.
+     */
+    private static final Set<String> VALUE_GATED = set(
+            "getByte",
+            "getShort",
+            "getInt",
+            "getLong",
+            "getFloat",
+            "getDouble",
+            "getBigDecimal",
+            "getDate",
+            "getTime",
+            "getTimestamp",
+            "getURL");
+
     private static final Map<String, Accessor> B1_ACCESSORS = b1Accessors();
 
     private static Map<String, Accessor> b1Accessors() {
@@ -397,22 +415,22 @@ class Jdbc4AppendixBReadTest {
     }
 
     // ---------------------------------------------------------------------
-    // Table B-6: which JDBC types each getter may read.
+    // Table B-6: the conversions the driver must support.
     // ---------------------------------------------------------------------
 
     static Stream<Arguments> b6Cases() {
         List<Arguments> arguments = new ArrayList<>();
         for (Accessor accessor : ACCESSORS) {
             for (JdbcType type : JDBC_TYPES) {
-                arguments.add(Arguments.of(accessor, type, accessor.supported().contains(type.name())));
+                arguments.add(Arguments.of(accessor, type, accessor.required().contains(type.name())));
             }
         }
         return arguments.stream();
     }
 
-    @ParameterizedTest(name = "B-6 {0} on {1} ({2})")
+    @ParameterizedTest(name = "B-6 {0} on {1} (required={2})")
     @MethodSource("b6Cases")
-    void b6GetterHonoursSupportedJdbcTypes(Accessor getter, JdbcType type, boolean supported)
+    void b6RequiredConversionsAndPermissiveReads(Accessor getter, JdbcType type, boolean required)
             throws SQLException {
         LibsqlResultSet resultSet = oneRow(type, fixtureFor(getter, type));
         assertThat(resultSet.next()).isTrue();
@@ -426,7 +444,7 @@ class Jdbc4AppendixBReadTest {
             return;
         }
 
-        if (supported) {
+        if (required) {
             Object value;
             try {
                 value = getter.reader().read(resultSet, 1);
@@ -434,23 +452,58 @@ class Jdbc4AppendixBReadTest {
                 throw new AssertionError(
                         "B-6: " + getter.name() + " must support " + type.name() + " but threw " + e, e);
             }
-            assertThat(value)
-                    .as("B-6: %s must support %s", getter.name(), type.name())
-                    .isNotNull();
-            if (getter.javaType() != Object.class && getter.javaType() != byte[].class) {
-                assertThat(value)
-                        .as("B-6: %s on %s must return %s", getter.name(), type.name(), getter.javaType())
-                        .isInstanceOf(boxed(getter.javaType()));
-            }
-        } else {
-            try {
-                Object value = getter.reader().read(resultSet, 1);
-                fail("B-6: " + getter.name() + " must reject " + type.name()
-                        + " but returned " + value);
-            } catch (SQLException expected) {
-                // The specification lists no conversion, so rejection is the contract.
-            }
+            assertGetterResult(getter, type, value);
+            return;
         }
+
+        try {
+            assertGetterResult(getter, type, getter.reader().read(resultSet, 1));
+        } catch (SQLFeatureNotSupportedException e) {
+            if (getter == GET_ARRAY || getter == GET_REF) {
+                // These optional getters are unimplemented for every declared type.
+                return;
+            }
+            fail("B-6: " + getter.name() + " must not reject declared " + type.name()
+                    + " on type grounds but threw " + e);
+        } catch (SQLException conversionFailure) {
+            if (!VALUE_GATED.contains(getter.name())) {
+                throw new AssertionError("B-6: " + getter.name() + " must read declared "
+                        + type.name() + " but the conversion threw " + conversionFailure, conversionFailure);
+            }
+            // The stored value, not the declared type, decided the conversion is not defined.
+        }
+    }
+
+    private static void assertGetterResult(Accessor getter, JdbcType type, Object value) {
+        assertThat(value)
+                .as("B-6: %s must support %s", getter.name(), type.name())
+                .isNotNull();
+        if (getter.javaType() != Object.class && getter.javaType() != byte[].class) {
+            assertThat(value)
+                    .as("B-6: %s on %s must return %s", getter.name(), type.name(), getter.javaType())
+                    .isInstanceOf(boxed(getter.javaType()));
+        }
+    }
+
+    @Test
+    void b6UnlistedConversionsReadTheStoredValue() throws Exception {
+        LibsqlResultSet blobRow = oneRow(jdbcType("BLOB"), BYTES_ABC);
+        assertThat(blobRow.next()).isTrue();
+        assertThat(blobRow.getBytes(1)).isEqualTo("abc".getBytes(StandardCharsets.UTF_8));
+        assertThat(blobRow.getObject(1, byte[].class)).isEqualTo("abc".getBytes(StandardCharsets.UTF_8));
+        assertThat(blobRow.getBinaryStream(1).readAllBytes())
+                .isEqualTo("abc".getBytes(StandardCharsets.UTF_8));
+        assertThat(blobRow.getString(1)).isEqualTo("abc");
+
+        LibsqlResultSet textRow = oneRow(jdbcType("VARCHAR"), TEXT_ABC);
+        assertThat(textRow.next()).isTrue();
+        assertThat(textRow.getBytes(1)).isEqualTo("abc".getBytes(StandardCharsets.UTF_8));
+        assertThat(textRow.getBlob(1).getBytes(1, 3)).isEqualTo("abc".getBytes(StandardCharsets.UTF_8));
+
+        LibsqlResultSet nullBlob = oneRow(jdbcType("BLOB"), new Value.Null());
+        assertThat(nullBlob.next()).isTrue();
+        assertThat(nullBlob.getBytes(1)).isNull();
+        assertThat(nullBlob.wasNull()).isTrue();
     }
 
     @Test
