@@ -14,7 +14,7 @@ The unit suites are `Jdbc4AppendixBReadTest`, `Jdbc4AppendixBSetObjectTest`, and
 
 ## Table B-1, JDBC types mapped to Java types
 
-Table B-1 is observed through the natural ResultSet getter for each JDBC type.
+Table B-1 is observed through the natural ResultSet getter for each JDBC type. `TIME_WITH_TIMEZONE` and `TIMESTAMP_WITH_TIMEZONE` are not Table B-1 rows; Tables B-5 and B-6 cover them, so the profile test listing them as supported does not conflict with this table.
 
 | Appendix B row | Status | Reason | Test |
 |---|---|---|---|
@@ -74,18 +74,18 @@ Table B-2 is observed through the standard setter for each Java type.
 | `java.sql.Timestamp` | emulated | Binds SQLite timestamp text. | `Jdbc4AppendixBTypeMappingIT#b2StandardSettersMapJavaTypeToJdbcType` |
 | `java.sql.Clob` | emulated | Reads the character stream and binds text. | `Jdbc4AppendixBTypeMappingIT#b2StandardSettersMapJavaTypeToJdbcType` |
 | `java.sql.Blob` | supported | Reads the binary stream and binds a blob. | `Jdbc4AppendixBTypeMappingIT#b2StandardSettersMapJavaTypeToJdbcType` |
-| `java.sql.Array` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBProfileTest#everyUnsupportedDeclaredTypeThrowsFeatureNotSupported` |
-| `java.sql.Struct` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBProfileTest#everyUnsupportedDeclaredTypeThrowsFeatureNotSupported` |
-| `java.sql.Ref` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBProfileTest#everyUnsupportedDeclaredTypeThrowsFeatureNotSupported` |
+| `java.sql.Array` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBTypeMappingIT#b2StandardSettersMapJavaTypeToJdbcType` |
+| `java.sql.Struct` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBTypeMappingIT#b2StandardSettersMapJavaTypeToJdbcType` |
+| `java.sql.Ref` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBTypeMappingIT#b2StandardSettersMapJavaTypeToJdbcType` |
 | `java.net.URL` | emulated | Binds the URL as text. | `Jdbc4AppendixBTypeMappingIT#b2StandardSettersMapJavaTypeToJdbcType` |
-| `Java class` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBProfileTest#everyUnsupportedDeclaredTypeThrowsFeatureNotSupported` |
+| `Java class` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBTypeMappingIT#b2StandardSettersMapJavaTypeToJdbcType` |
 | `java.sql.RowId` | emulated | Binds the RowId bytes as a Hrana blob. | `Jdbc4AppendixBTypeMappingIT#b2StandardSettersMapJavaTypeToJdbcType` |
 | `java.sql.NClob` | emulated | Reads the character stream and binds text. | `Jdbc4AppendixBTypeMappingIT#b2StandardSettersMapJavaTypeToJdbcType` |
 | `java.sql.SQLXML` | emulated | Reads the SQLXML text and binds it. | `Jdbc4AppendixBTypeMappingIT#b2StandardSettersMapJavaTypeToJdbcType` |
 
 ## Table B-3, JDBC types mapped to Java object types
 
-Table B-3 is observed through `getObject(int)` for each declared type.
+Table B-3 is observed through `getObject(int)` for each declared type. `TIME_WITH_TIMEZONE` and `TIMESTAMP_WITH_TIMEZONE` are not Table B-3 rows; Tables B-5 and B-6 cover them, so the profile test listing them as supported does not conflict with this table.
 
 | Appendix B row | Status | Reason | Test |
 |---|---|---|---|
@@ -146,11 +146,11 @@ Table B-4 is observed through `setObject(int, Object)` with no target type.
 | `java.sql.Timestamp` | emulated | Binds SQLite timestamp text. | `Jdbc4AppendixBTypeMappingIT#b4SetObjectMapsJavaObjectTypeToJdbcType` |
 | `java.sql.Clob` | emulated | Reads the character stream and binds text. | `Jdbc4AppendixBTypeMappingIT#b4SetObjectMapsJavaObjectTypeToJdbcType` |
 | `java.sql.Blob` | supported | Reads the binary stream and binds a blob. | `Jdbc4AppendixBTypeMappingIT#b4SetObjectMapsJavaObjectTypeToJdbcType` |
-| `java.sql.Array` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBProfileTest#everyUnsupportedDeclaredTypeThrowsFeatureNotSupported` |
-| `java.sql.Struct` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBProfileTest#everyUnsupportedDeclaredTypeThrowsFeatureNotSupported` |
-| `java.sql.Ref` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBProfileTest#everyUnsupportedDeclaredTypeThrowsFeatureNotSupported` |
+| `java.sql.Array` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBTypeMappingIT#b4SetObjectMapsJavaObjectTypeToJdbcType` |
+| `java.sql.Struct` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBTypeMappingIT#b4SetObjectMapsJavaObjectTypeToJdbcType` |
+| `java.sql.Ref` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBTypeMappingIT#b4SetObjectMapsJavaObjectTypeToJdbcType` |
 | `java.net.URL` | emulated | Binds the URL as text. | `Jdbc4AppendixBTypeMappingIT#b4SetObjectMapsJavaObjectTypeToJdbcType` |
-| `Java class` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBProfileTest#everyUnsupportedDeclaredTypeThrowsFeatureNotSupported` |
+| `Java class` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBTypeMappingIT#b4SetObjectMapsJavaObjectTypeToJdbcType` |
 | `java.sql.RowId` | emulated | Binds the RowId bytes as a Hrana blob. | `Jdbc4AppendixBTypeMappingIT#b4SetObjectMapsJavaObjectTypeToJdbcType` |
 | `java.sql.NClob` | emulated | Reads the character stream and binds text. | `Jdbc4AppendixBTypeMappingIT#b4SetObjectMapsJavaObjectTypeToJdbcType` |
 | `java.sql.SQLXML` | emulated | Reads the SQLXML text and binds it. | `Jdbc4AppendixBTypeMappingIT#b4SetObjectMapsJavaObjectTypeToJdbcType` |
@@ -182,13 +182,13 @@ Table B-5 is observed through `setObject(int, Object, int)`. A listed pair must 
 | `java.sql.Date` | emulated | DATE and TIMESTAMP bind the SQLite text form. | `Jdbc4AppendixBTypeMappingIT#b5SetObjectConvertsToExplicitTargetType`, `Jdbc4AppendixBSetObjectTest#b5SetObjectRejectsUnlistedTargetTypes` |
 | `java.sql.Time` | emulated | TIME and TIMESTAMP bind the SQLite text form. | `Jdbc4AppendixBTypeMappingIT#b5SetObjectConvertsToExplicitTargetType`, `Jdbc4AppendixBSetObjectTest#b5SetObjectRejectsUnlistedTargetTypes` |
 | `java.sql.Timestamp` | emulated | DATE, TIME and TIMESTAMP bind the SQLite text form. | `Jdbc4AppendixBTypeMappingIT#b5SetObjectConvertsToExplicitTargetType`, `Jdbc4AppendixBSetObjectTest#b5SetObjectRejectsUnlistedTargetTypes` |
-| `java.sql.Array` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBProfileTest#everyUnsupportedDeclaredTypeThrowsFeatureNotSupported` |
+| `java.sql.Array` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBSetObjectTest#b5SetObjectRejectsUnsupportedTypesAndValues` |
 | `java.sql.Blob` | supported | BLOB binds the blob bytes. | `Jdbc4AppendixBTypeMappingIT#b5SetObjectConvertsToExplicitTargetType`, `Jdbc4AppendixBSetObjectTest#b5SetObjectRejectsUnlistedTargetTypes` |
 | `java.sql.Clob` | emulated | CLOB reads the character stream and binds text. | `Jdbc4AppendixBTypeMappingIT#b5SetObjectConvertsToExplicitTargetType`, `Jdbc4AppendixBSetObjectTest#b5SetObjectRejectsUnlistedTargetTypes` |
-| `java.sql.Struct` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBProfileTest#everyUnsupportedDeclaredTypeThrowsFeatureNotSupported` |
-| `java.sql.Ref` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBProfileTest#everyUnsupportedDeclaredTypeThrowsFeatureNotSupported` |
+| `java.sql.Struct` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBSetObjectTest#b5SetObjectRejectsUnsupportedTypesAndValues` |
+| `java.sql.Ref` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBSetObjectTest#b5SetObjectRejectsUnsupportedTypesAndValues` |
 | `java.net.URL` | emulated | DATALINK binds the URL text. | `Jdbc4AppendixBTypeMappingIT#b5SetObjectConvertsToExplicitTargetType`, `Jdbc4AppendixBSetObjectTest#b5SetObjectRejectsUnlistedTargetTypes` |
-| `Java class` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBProfileTest#everyUnsupportedDeclaredTypeThrowsFeatureNotSupported` |
+| `Java class` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBSetObjectTest#b5SetObjectRejectsUnsupportedTypesAndValues` |
 | `java.sql.RowId` | emulated | ROWID binds the RowId bytes. | `Jdbc4AppendixBTypeMappingIT#b5SetObjectConvertsToExplicitTargetType`, `Jdbc4AppendixBSetObjectTest#b5SetObjectRejectsUnlistedTargetTypes` |
 | `java.sql.NClob` | emulated | NCLOB reads the character stream and binds text. | `Jdbc4AppendixBTypeMappingIT#b5SetObjectConvertsToExplicitTargetType`, `Jdbc4AppendixBSetObjectTest#b5SetObjectRejectsUnlistedTargetTypes` |
 | `java.sql.SQLXML` | emulated | SQLXML binds the XML text. | `Jdbc4AppendixBTypeMappingIT#b5SetObjectConvertsToExplicitTargetType`, `Jdbc4AppendixBSetObjectTest#b5SetObjectRejectsUnlistedTargetTypes` |
