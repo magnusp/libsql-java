@@ -122,9 +122,25 @@ final class JdbcValueConverter {
         if (value instanceof Blob blob) {
             return Value.of(binaryBytes(blob));
         }
-        // Table B-4 maps every other Java class to JAVA_OBJECT. PR-5 decides whether those types
-        // are supported; until then they keep the sqlite-jdbc text binding.
-        return Value.of(value.toString());
+        if (value instanceof URL || value instanceof RowId || value instanceof SQLXML) {
+            // Table B-4 maps these to DATALINK, ROWID and SQLXML, which the driver supports.
+            return Value.of(value.toString());
+        }
+        // Table B-4 maps Array, Struct, Ref and every other class to an N/A JDBC type.
+        throw unsupported(value, unsupportedSourceType(value));
+    }
+
+    private static int unsupportedSourceType(Object value) {
+        if (value instanceof Array) {
+            return Types.ARRAY;
+        }
+        if (value instanceof Struct) {
+            return Types.STRUCT;
+        }
+        if (value instanceof Ref) {
+            return Types.REF;
+        }
+        return Types.JAVA_OBJECT;
     }
 
     /** Converts a value to the target JDBC type, then to the Hrana value of that type. */
@@ -153,15 +169,12 @@ final class JdbcValueConverter {
             case Types.TIME -> Value.of(timeText(value, targetSqlType));
             case Types.TIMESTAMP -> Value.of(timestampText(value, targetSqlType));
             case Types.DATALINK -> Value.of(datalinkText(value));
-            case Types.ARRAY -> Value.of(arrayText(value));
-            case Types.STRUCT -> Value.of(structText(value));
-            case Types.REF -> Value.of(refText(value));
-            case Types.JAVA_OBJECT -> Value.of(javaObjectText(value));
+            case Types.ARRAY, Types.STRUCT, Types.REF, Types.JAVA_OBJECT, Types.DISTINCT ->
+                    throw unsupported(value, targetSqlType);
             case Types.ROWID -> Value.of(rowIdText(value));
             case Types.SQLXML -> Value.of(sqlXmlText(value));
             case Types.TIME_WITH_TIMEZONE -> Value.of(offsetTimeText(value));
             case Types.TIMESTAMP_WITH_TIMEZONE -> Value.of(offsetDateTimeText(value));
-            case Types.DISTINCT -> Value.of(value.toString());
             default -> throw unsupported(value, targetSqlType);
         };
     }
@@ -368,31 +381,6 @@ final class JdbcValueConverter {
         throw unsupported(value, Types.DATALINK);
     }
 
-    private static String arrayText(Object value) throws SQLException {
-        if (value instanceof Array array) {
-            return array.toString();
-        }
-        // Table B-5 lists ARRAY for Calendar and java.util.Date, but not for their SQL subclasses.
-        if (value instanceof Calendar || value.getClass() == java.util.Date.class) {
-            return value.toString();
-        }
-        throw unsupported(value, Types.ARRAY);
-    }
-
-    private static String structText(Object value) throws SQLException {
-        if (value instanceof Struct struct) {
-            return struct.toString();
-        }
-        throw unsupported(value, Types.STRUCT);
-    }
-
-    private static String refText(Object value) throws SQLException {
-        if (value instanceof Ref ref) {
-            return ref.toString();
-        }
-        throw unsupported(value, Types.REF);
-    }
-
     private static String rowIdText(Object value) throws SQLException {
         if (value instanceof RowId rowId) {
             return rowId.toString();
@@ -405,13 +393,6 @@ final class JdbcValueConverter {
             return xml.toString();
         }
         throw unsupported(value, Types.SQLXML);
-    }
-
-    private static String javaObjectText(Object value) throws SQLException {
-        if (knownSourceFamily(value)) {
-            throw unsupported(value, Types.JAVA_OBJECT);
-        }
-        return value.toString();
     }
 
     private static String offsetTimeText(Object value) throws SQLException {
@@ -429,28 +410,6 @@ final class JdbcValueConverter {
             return dateTime.toString();
         }
         throw unsupported(value, Types.TIMESTAMP_WITH_TIMEZONE);
-    }
-
-    private static boolean knownSourceFamily(Object value) {
-        return value instanceof String
-                || value instanceof Number
-                || value instanceof Boolean
-                || value instanceof byte[]
-                || value instanceof java.util.Date
-                || value instanceof Calendar
-                || value instanceof LocalDate
-                || value instanceof LocalTime
-                || value instanceof LocalDateTime
-                || value instanceof OffsetTime
-                || value instanceof OffsetDateTime
-                || value instanceof Clob
-                || value instanceof Blob
-                || value instanceof Array
-                || value instanceof Struct
-                || value instanceof Ref
-                || value instanceof URL
-                || value instanceof RowId
-                || value instanceof SQLXML;
     }
 
     private static LocalDateTime localDateTime(java.time.Instant instant) {

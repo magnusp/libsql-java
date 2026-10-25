@@ -18,6 +18,7 @@ import java.sql.NClob;
 import java.sql.Ref;
 import java.sql.RowId;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLXML;
 import java.sql.Struct;
 import java.sql.Time;
@@ -36,6 +37,7 @@ import java.util.Set;
 import java.util.TimeZone;
 import java.util.stream.Stream;
 
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -92,7 +94,12 @@ class Jdbc4AppendixBSetObjectTest {
             new Target("NCLOB", Types.NCLOB),
             new Target("SQLXML", Types.SQLXML),
             new Target("TIME_WITH_TIMEZONE", Types.TIME_WITH_TIMEZONE),
-            new Target("TIMESTAMP_WITH_TIMEZONE", Types.TIMESTAMP_WITH_TIMEZONE));
+            new Target("TIMESTAMP_WITH_TIMEZONE", Types.TIMESTAMP_WITH_TIMEZONE),
+            new Target("DISTINCT", Types.DISTINCT));
+
+    /** The N/A policy: these target JDBC types are rejected by setObject. */
+    private static final Set<Integer> NA_TARGETS = Set.of(
+            Types.ARRAY, Types.STRUCT, Types.REF, Types.JAVA_OBJECT, Types.DISTINCT);
 
     record JavaRow(String name, Object value, Set<Integer> targets) {}
 
@@ -211,7 +218,7 @@ class Jdbc4AppendixBSetObjectTest {
     void b5SetObjectRejectsUnlistedTargetTypes(JavaRow row) {
         List<Executable> checks = new ArrayList<>();
         for (Target target : TARGETS) {
-            if (row.targets().contains(target.sqlType())) {
+            if (row.targets().contains(target.sqlType()) || NA_TARGETS.contains(target.sqlType())) {
                 continue;
             }
             checks.add(() -> {
@@ -232,12 +239,36 @@ class Jdbc4AppendixBSetObjectTest {
     void b5SetObjectAcceptsListedTargetTypes() throws SQLException {
         for (JavaRow row : ROWS) {
             for (Target target : TARGETS) {
-                if (!row.targets().contains(target.sqlType())) {
+                if (!row.targets().contains(target.sqlType())
+                        || NA_TARGETS.contains(target.sqlType())) {
                     continue;
                 }
                 LibsqlPreparedStatement statement = new LibsqlPreparedStatement(null, "?");
                 statement.setObject(1, row.value(), target.sqlType());
             }
+        }
+    }
+
+    @Test
+    void b5SetObjectRejectsUnsupportedTypesAndValues() {
+        for (Target target : TARGETS) {
+            if (!NA_TARGETS.contains(target.sqlType())) {
+                continue;
+            }
+            assertThatThrownBy(() -> new LibsqlPreparedStatement(null, "?")
+                            .setObject(1, "42", target.sqlType()))
+                    .as("B-5: setObject(%s) is N/A", target.name())
+                    .isInstanceOf(SQLFeatureNotSupportedException.class);
+        }
+
+        // Table B-4 maps these Java object types to the N/A JDBC types.
+        Object[] unsupportedValues = {
+            stub(Array.class), stub(Struct.class), stub(Ref.class), new Object()
+        };
+        for (Object value : unsupportedValues) {
+            assertThatThrownBy(() -> new LibsqlPreparedStatement(null, "?").setObject(1, value))
+                    .as("B-4: setObject(%s) is N/A", value.getClass().getName())
+                    .isInstanceOf(SQLFeatureNotSupportedException.class);
         }
     }
 
