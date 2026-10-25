@@ -84,6 +84,41 @@ mise exec -- ./mvnw clean verify
 mise exec -- ./mvnw spotless:apply
 ```
 
+### JDBC 4.3 Appendix B checks
+
+Run the Appendix B unit suite.
+
+```bash
+./mvnw -q -pl libsql-jdbc -Dtest='Jdbc4AppendixB*' -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Run the full `libsql-jdbc` unit suite.
+
+```bash
+./mvnw -q -pl libsql-jdbc test
+```
+
+Run the Appendix B server suite. The install step puts the current driver in the local repository. Under the nono sandbox, the Docker config path is required.
+
+```bash
+./mvnw -q -DskipTests install -pl libsql-hrana-codec,libsql-client,libsql-jdbc
+DOCKER_CONFIG="$PWD/libsql-conformance/src/test/docker-config" ./mvnw -pl libsql-itests -Dit.test=Jdbc4AppendixBTypeMappingIT -Dtest=NoSuchTest -Dsurefire.failIfNoSpecifiedTests=false verify
+```
+
+Run the xerial conformance suite.
+
+```bash
+./mvnw -pl libsql-conformance -am verify
+```
+
+Run the full gate.
+
+```bash
+DOCKER_CONFIG="$PWD/libsql-conformance/src/test/docker-config" ./mvnw clean verify
+```
+
+The compliance profile is in [`docs/jdbc-appendix-b-compliance.md`](docs/jdbc-appendix-b-compliance.md).
+
 ## Contributing
 
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and development workflow, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community standards.
