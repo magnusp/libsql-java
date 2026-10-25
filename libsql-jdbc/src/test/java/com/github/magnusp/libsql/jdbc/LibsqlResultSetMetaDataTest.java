@@ -7,6 +7,7 @@ import com.github.magnusp.libsql.hrana.codec.StmtResult;
 import com.github.magnusp.libsql.hrana.codec.Value;
 import org.junit.jupiter.api.Test;
 
+import java.sql.Blob;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Types;
@@ -175,7 +176,7 @@ class LibsqlResultSetMetaDataTest {
     }
 
     @Test
-    void usesFirstNonNullValueForIntegerTypeAndClass() throws SQLException {
+    void usesDeclaredIntegerTypeForEveryValueMagnitude() throws SQLException {
         LibsqlResultSetMetaData metadata = new LibsqlResultSetMetaData(
                 List.of(new Col("wide", "INTEGER"), new Col("narrow", "INTEGER")),
                 List.of(
@@ -184,14 +185,14 @@ class LibsqlResultSetMetaDataTest {
                 "SELECT 1",
                 null);
 
-        assertThat(metadata.getColumnClassName(1)).isEqualTo(Long.class.getName());
-        assertThat(metadata.getColumnType(1)).isEqualTo(Types.BIGINT);
+        assertThat(metadata.getColumnClassName(1)).isEqualTo(Integer.class.getName());
+        assertThat(metadata.getColumnType(1)).isEqualTo(Types.INTEGER);
         assertThat(metadata.getColumnClassName(2)).isEqualTo(Integer.class.getName());
         assertThat(metadata.getColumnType(2)).isEqualTo(Types.INTEGER);
     }
 
     @Test
-    void usesRuntimeValueMappingForNonIntegerValuesInIntegerColumn() throws SQLException {
+    void usesDeclaredTypeForNonNumericValuesInIntegerColumn() throws SQLException {
         LibsqlResultSetMetaData metadata = new LibsqlResultSetMetaData(
                 List.of(new Col("value", "INTEGER")),
                 List.of(
@@ -200,12 +201,12 @@ class LibsqlResultSetMetaDataTest {
                 "SELECT 1",
                 null);
 
-        assertThat(metadata.getColumnClassName(1)).isEqualTo(String.class.getName());
-        assertThat(metadata.getColumnType(1)).isEqualTo(Types.VARCHAR);
+        assertThat(metadata.getColumnClassName(1)).isEqualTo(Integer.class.getName());
+        assertThat(metadata.getColumnType(1)).isEqualTo(Types.INTEGER);
     }
 
     @Test
-    void usesRuntimeStorageClassForDeclaredTypes() throws SQLException {
+    void usesDeclaredTypesInsteadOfRuntimeStorageClass() throws SQLException {
         StmtResult result = new StmtResult(
                 List.of(
                         new Col("bi", "BIGINT"),
@@ -218,10 +219,10 @@ class LibsqlResultSetMetaDataTest {
         LibsqlResultSet resultSet = new LibsqlResultSet(null, result);
         ResultSetMetaData metadata = resultSet.getMetaData();
 
-        assertRuntimeTypes(metadata);
+        assertDeclaredTypes(metadata);
 
         assertThat(resultSet.next()).isTrue();
-        assertRuntimeTypes(metadata);
+        assertDeclaredTypes(metadata);
     }
 
     @Test
@@ -360,11 +361,19 @@ class LibsqlResultSetMetaDataTest {
                 null);
         LibsqlResultSet resultSet = new LibsqlResultSet(null, result);
         ResultSetMetaData metadata = resultSet.getMetaData();
+        List<String> expected = List.of(
+                Integer.class.getName(),
+                Long.class.getName(),
+                Object.class.getName(),
+                Blob.class.getName(),
+                Boolean.class.getName(),
+                Float.class.getName(),
+                Object.class.getName());
 
         for (int column = 1; column <= metadata.getColumnCount(); column++) {
             assertThat(metadata.getColumnClassName(column))
                     .as("column %d before the first row", column)
-                    .isEqualTo(Object.class.getName());
+                    .isEqualTo(expected.get(column - 1));
         }
 
         assertThat(resultSet.next()).isFalse();
@@ -372,7 +381,7 @@ class LibsqlResultSetMetaDataTest {
         for (int column = 1; column <= metadata.getColumnCount(); column++) {
             assertThat(metadata.getColumnClassName(column))
                     .as("column %d after the last row", column)
-                    .isEqualTo(Object.class.getName());
+                    .isEqualTo(expected.get(column - 1));
         }
     }
 
@@ -473,7 +482,7 @@ class LibsqlResultSetMetaDataTest {
     }
 
     @Test
-    void reflectsStorageClassChangesBetweenRows() throws SQLException {
+    void keepsDeclaredBigintTypeAcrossStorageClassChanges() throws SQLException {
         StmtResult result = new StmtResult(
                 List.of(new Col("bi", "BIGINT")),
                 List.of(new Row(List.of(Value.of(1.5))), new Row(List.of(Value.of(2L)))),
@@ -482,23 +491,16 @@ class LibsqlResultSetMetaDataTest {
         LibsqlResultSet resultSet = new LibsqlResultSet(null, result);
         ResultSetMetaData metadata = resultSet.getMetaData();
 
-        assertThat(metadata.getColumnType(1)).isEqualTo(Types.FLOAT);
+        assertThat(metadata.getColumnType(1)).isEqualTo(Types.BIGINT);
 
         assertThat(resultSet.next()).isTrue();
-        assertThat(metadata.getColumnType(1)).isEqualTo(Types.FLOAT);
+        assertThat(metadata.getColumnType(1)).isEqualTo(Types.BIGINT);
 
         assertThat(resultSet.next()).isTrue();
         assertThat(metadata.getColumnType(1)).isEqualTo(Types.BIGINT);
 
         assertThat(resultSet.next()).isFalse();
         assertThat(metadata.getColumnType(1)).isEqualTo(Types.BIGINT);
-    }
-
-    private static void assertRuntimeTypes(ResultSetMetaData metadata) throws SQLException {
-        assertThat(metadata.getColumnType(1)).isEqualTo(Types.FLOAT);
-        assertThat(metadata.getColumnType(2)).isEqualTo(Types.VARCHAR);
-        assertThat(metadata.getColumnType(3)).isEqualTo(Types.INTEGER);
-        assertThat(metadata.getColumnType(4)).isEqualTo(Types.INTEGER);
     }
 
     private static void assertDeclaredTypes(ResultSetMetaData metadata) throws SQLException {

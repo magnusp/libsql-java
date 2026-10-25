@@ -44,13 +44,15 @@ class LibsqlResultSetTest {
             null);
 
     @Test
-    void getObjectReturnsIntegerInRangeAndLongOutside() throws SQLException {
+    void getObjectReturnsDeclaredIntegerAndRejectsAValueThatDoesNotFit() throws SQLException {
         LibsqlResultSet resultSet = new LibsqlResultSet(new LibsqlStatement(null), INTEGER_ROWS);
 
         assertThat(resultSet.next()).isTrue();
         assertThat(resultSet.getObject(1)).isInstanceOf(Integer.class).isEqualTo(42);
         assertThat(resultSet.next()).isTrue();
-        assertThat(resultSet.getObject(1)).isInstanceOf(Long.class).isEqualTo(5_000_000_000L);
+        assertThatThrownBy(() -> resultSet.getObject(1))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("INTEGER");
     }
 
     @Test
