@@ -418,7 +418,7 @@ public class Jdbc4AppendixBTypeMappingIT extends SqldContainerBase {
             new WriteRow("java.sql.RowId", rowId(TEXT_ROWID), "ROWID", Types.ROWID, UNSPECIFIED,
                     ResultSet::getRowId, Expected.any(RowId.class)),
             new WriteRow("java.sql.NClob", nclob("abc"), "NCLOB", Types.NCLOB, TEXT,
-                    ResultSet::getNClob, Expected.any(NClob.class)),
+                    Jdbc4AppendixBTypeMappingIT::nclobText, Expected.of("abc")),
             new WriteRow("java.sql.SQLXML", sqlxml(TEXT_XML), "SQLXML", Types.SQLXML, UNSPECIFIED,
                     ResultSet::getSQLXML, Expected.any(SQLXML.class)));
 
@@ -542,7 +542,7 @@ public class Jdbc4AppendixBTypeMappingIT extends SqldContainerBase {
             new WriteRow("java.sql.RowId", stub(RowId.class), "ROWID", Types.ROWID, UNSPECIFIED,
                     ResultSet::getRowId, Expected.any(RowId.class)),
             new WriteRow("java.sql.NClob", nclob("abc"), "NCLOB", Types.NCLOB, TEXT,
-                    ResultSet::getNClob, Expected.any(NClob.class)),
+                    Jdbc4AppendixBTypeMappingIT::nclobText, Expected.of("abc")),
             new WriteRow("java.sql.SQLXML", stub(SQLXML.class), "SQLXML", Types.SQLXML, UNSPECIFIED,
                     ResultSet::getSQLXML, Expected.any(SQLXML.class)),
             new WriteRow("java.util.Calendar", CALENDAR, "TIMESTAMP", Types.TIMESTAMP, TEXT,
@@ -881,7 +881,7 @@ public class Jdbc4AppendixBTypeMappingIT extends SqldContainerBase {
             case "TIMESTAMP" -> ResultSet::getTimestamp;
             case "CLOB" -> Jdbc4AppendixBTypeMappingIT::clobText;
             case "BLOB" -> Jdbc4AppendixBTypeMappingIT::blobBytes;
-            case "NCLOB" -> ResultSet::getNClob;
+            case "NCLOB" -> Jdbc4AppendixBTypeMappingIT::nclobText;
             case "ARRAY" -> ResultSet::getArray;
             case "STRUCT" -> (rs, i) -> rs.getObject(i);
             case "REF" -> ResultSet::getRef;
@@ -926,7 +926,7 @@ public class Jdbc4AppendixBTypeMappingIT extends SqldContainerBase {
             case "TIME" -> timeExpected(source);
             case "TIMESTAMP" -> timestampExpected(source);
             case "CLOB" -> Expected.of(clobTextValue(source));
-            case "NCLOB" -> Expected.any(NClob.class);
+            case "NCLOB" -> Expected.of(clobTextValue(source));
             case "BLOB" -> Expected.of(bytesForm(source));
             case "BINARY", "VARBINARY", "LONGVARBINARY" -> Expected.of(bytesForm(source));
             case "DATALINK" -> Expected.any(URL.class);
@@ -1125,6 +1125,14 @@ public class Jdbc4AppendixBTypeMappingIT extends SqldContainerBase {
     private static String clobText(ResultSet resultSet, int column) throws SQLException {
         Clob clob = resultSet.getClob(column);
         return clob == null ? null : clob.getSubString(1, (int) clob.length());
+    }
+
+    private static String nclobText(ResultSet resultSet, int column) throws SQLException {
+        NClob nclob = resultSet.getNClob(column);
+        assertThat(nclob)
+                .as("NCLOB column must read as an NClob wrapper")
+                .isInstanceOf(NClob.class);
+        return nclob.getSubString(1, (int) nclob.length());
     }
 
     private static byte[] blobBytes(ResultSet resultSet, int column) throws SQLException {
