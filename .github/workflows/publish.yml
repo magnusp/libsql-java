@@ -1,20 +1,26 @@
-name: Publish to GitHub Packages
+name: Publish
 
 on:
   push:
+    branches:
+      - 'main'
     tags:
       - 'v*'
 
 permissions:
   contents: read
-  packages: write
-  id-token: write # Required for generating build provenance and cryptographic attestation
-  attestations: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
 
 jobs:
   publish:
-    name: Build, Attest & Publish
+    name: Publish to GitHub Packages
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -25,20 +31,44 @@ jobs:
           distribution: 'corretto'
           java-version: '25'
           cache: 'maven'
+          server-id: 'github'
+          server-username-env-var: 'GITHUB_ACTOR'
+          server-password-env-var: 'GITHUB_TOKEN'
 
-      - name: Build & Publish to GitHub Packages
+      # Branch builds are immutable SHA prereleases; tag builds use the tag version.
+      # Neither path may produce a Maven SNAPSHOT version.
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            REVISION="${GITHUB_REF_NAME#v}"
+            SHA1=""
+          else
+            REVISION="$(./mvnw --batch-mode --quiet --no-transfer-progress -N help:evaluate -Dexpression=revision -DforceStdout)"
+            SHA1="-${GITHUB_SHA::12}"
+          fi
+          CHANGELIST=""
+          VERSION="${REVISION}${SHA1}${CHANGELIST}"
+          case "${VERSION}" in
+            *-SNAPSHOT|*-snapshot)
+              echo "::error::refusing to publish Maven SNAPSHOT version ${VERSION}"
+              exit 1
+              ;;
+          esac
+          echo "revision=${REVISION}" >> "$GITHUB_OUTPUT"
+          echo "sha1=${SHA1}" >> "$GITHUB_OUTPUT"
+          echo "changelist=${CHANGELIST}" >> "$GITHUB_OUTPUT"
+          echo "Publishing ${VERSION} to GitHub Packages"
+
+      - name: Publish to GitHub Packages
         env:
+          GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          RELEASE_VERSION="${GITHUB_REF_NAME#v}"
-          echo "Publishing release version ${RELEASE_VERSION}"
-          mvn --batch-mode clean deploy \
+          ./mvnw --batch-mode clean deploy \
             -Prelease \
-            -Drevision="${RELEASE_VERSION}" \
+            -Drevision="${{ steps.version.outputs.revision }}" \
+            -Dsha1="${{ steps.version.outputs.sha1 }}" \
+            -Dchangelist="${{ steps.version.outputs.changelist }}" \
             -DskipTests \
-            -DaltDeploymentRepository=github::https://maven.pkg.github.com/${{ github.repository }}
-
-      - name: Generate Artifact Attestation (Provenance)
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: '**/target/*.jar'
+            -DskipITs

@@ -30,13 +30,27 @@ A pure-Java JDBC driver, client library, and protocol codec for **libSQL** and *
 
 ### Maven Dependency
 
+Artifacts are hosted on GitHub Packages. Add the repository and configure credentials as
+described in [Publishing](docs/publishing.md).
+
+```xml
+<repositories>
+    <repository>
+        <id>github</id>
+        <url>https://maven.pkg.github.com/magnusp/libsql-java</url>
+    </repository>
+</repositories>
+```
+
 ```xml
 <dependency>
-    <groupId>com.github.magnusp.libsql</groupId>
+    <groupId>io.github.magnusp.libsql</groupId>
     <artifactId>libsql-jdbc</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>0.2.0</version>
 </dependency>
 ```
+
+Prerelease builds from `main` use `0.2.0-<shortsha>`. No `-SNAPSHOT` versions are published.
 
 ### JDBC Usage Example
 

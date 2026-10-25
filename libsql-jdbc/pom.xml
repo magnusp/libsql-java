@@ -4,9 +4,9 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <parent>
-        <groupId>com.github.magnusp.libsql</groupId>
+        <groupId>io.github.magnusp.libsql</groupId>
         <artifactId>libsql-java-parent</artifactId>
-        <version>${revision}</version>
+        <version>${revision}${sha1}${changelist}</version>
     </parent>
 
     <artifactId>libsql-jdbc</artifactId>
@@ -15,7 +15,7 @@
 
     <dependencies>
         <dependency>
-            <groupId>com.github.magnusp.libsql</groupId>
+            <groupId>io.github.magnusp.libsql</groupId>
             <artifactId>libsql-client</artifactId>
         </dependency>
         <dependency>
@@ -61,11 +61,11 @@
                             <relocations>
                                 <relocation>
                                     <pattern>com.google.protobuf</pattern>
-                                    <shadedPattern>com.github.magnusp.libsql.internal.protobuf</shadedPattern>
+                                    <shadedPattern>io.github.magnusp.libsql.internal.protobuf</shadedPattern>
                                 </relocation>
                                 <relocation>
                                     <pattern>com.fasterxml.jackson</pattern>
-                                    <shadedPattern>com.github.magnusp.libsql.internal.jackson</shadedPattern>
+                                    <shadedPattern>io.github.magnusp.libsql.internal.jackson</shadedPattern>
                                 </relocation>
                             </relocations>
                             <transformers>

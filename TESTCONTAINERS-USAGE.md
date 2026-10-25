@@ -8,7 +8,7 @@ This document explains how Testcontainers is configured and utilized in this pro
 
 Testing a pure-Java JDBC driver for libSQL requires verifying real SQLite behavior, lock contention, HTTP pipeline batons, and network edge cases over the wire. Rather than mocking HTTP endpoints, we run real `sqld` instances using Testcontainers.
 
-The integration tests live in `libsql-itests/src/test/java/com/github/magnusp/libsql/itest/`:
+The integration tests live in `libsql-itests/src/test/java/io/github/magnusp/libsql/itest/`:
 
 * `SqldContainerBase` — shared singleton `sqld` container that the JDBC and client tests extend.
 * `LibsqlJdbcIT`, `LibsqlHttpClientIT`, `HikariCpIntegrationIT`, `TransactionLifecycleIT`, `GeneratedKeysIT`, and `DatabaseMetaDataIT` — extend `SqldContainerBase`.
@@ -32,11 +32,11 @@ test JVMs. To test a different version, override the property:
 
 ## 2. Base Container Setup (`SqldContainerBase.java`)
 
-All standard integration tests inherit from [`SqldContainerBase`](libsql-itests/src/test/java/com/github/magnusp/libsql/itest/SqldContainerBase.java) in the `com.github.magnusp.libsql.itest` package to share a managed, singleton container instance across test executions.
+All standard integration tests inherit from [`SqldContainerBase`](libsql-itests/src/test/java/io/github/magnusp/libsql/itest/SqldContainerBase.java) in the `io.github.magnusp.libsql.itest` package to share a managed, singleton container instance across test executions.
 
 ### Implementation
 ```java
-package com.github.magnusp.libsql.itest;
+package io.github.magnusp.libsql.itest;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.testcontainers.containers.GenericContainer;
@@ -123,7 +123,7 @@ JSON body, so standard `GET /` health checks can be misleading:
 
 ## 4. Advanced: Network Toxicity Simulation with Toxiproxy
 
-To verify driver resiliency against real-world network anomalies (e.g. latency spikes, connection cuts, and packet fragmentation), [`NetworkToxicityIT`](libsql-itests/src/test/java/com/github/magnusp/libsql/itest/NetworkToxicityIT.java) pairs `sqld` with a **Shopify Toxiproxy** container within a dedicated Docker bridge network. Unlike the tests above, `NetworkToxicityIT` does not extend `SqldContainerBase`; it declares its own `sqld` container on that network and reuses `SqldContainerBase.LIBSQL_IMAGE` for the image name.
+To verify driver resiliency against real-world network anomalies (e.g. latency spikes, connection cuts, and packet fragmentation), [`NetworkToxicityIT`](libsql-itests/src/test/java/io/github/magnusp/libsql/itest/NetworkToxicityIT.java) pairs `sqld` with a **Shopify Toxiproxy** container within a dedicated Docker bridge network. Unlike the tests above, `NetworkToxicityIT` does not extend `SqldContainerBase`; it declares its own `sqld` container on that network and reuses `SqldContainerBase.LIBSQL_IMAGE` for the image name.
 
 ### Architecture
 

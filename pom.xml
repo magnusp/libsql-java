@@ -4,9 +4,9 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>com.github.magnusp.libsql</groupId>
+    <groupId>io.github.magnusp.libsql</groupId>
     <artifactId>libsql-java-parent</artifactId>
-    <version>${revision}</version>
+    <version>${revision}${sha1}${changelist}</version>
     <packaging>pom</packaging>
 
     <name>libSQL Java Parent</name>
@@ -19,6 +19,20 @@
             <url>https://opensource.org/licenses/MIT</url>
         </license>
     </licenses>
+
+    <developers>
+        <developer>
+            <id>magnusp</id>
+            <name>Magnus Persson</name>
+            <url>https://github.com/magnusp</url>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:https://github.com/magnusp/libsql-java.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/magnusp/libsql-java.git</developerConnection>
+        <url>https://github.com/magnusp/libsql-java</url>
+    </scm>
 
     <distributionManagement>
         <repository>
@@ -37,7 +51,9 @@
     </modules>
 
     <properties>
-        <revision>0.1.0-SNAPSHOT</revision>
+        <revision>0.2.0</revision>
+        <sha1/>
+        <changelist>-dev</changelist>
         <maven.compiler.release>25</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <jackson.version>2.22.4</jackson.version>
@@ -56,17 +72,17 @@
         <dependencies>
             <!-- Internal Modules -->
             <dependency>
-                <groupId>com.github.magnusp.libsql</groupId>
+                <groupId>io.github.magnusp.libsql</groupId>
                 <artifactId>libsql-hrana-codec</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.github.magnusp.libsql</groupId>
+                <groupId>io.github.magnusp.libsql</groupId>
                 <artifactId>libsql-client</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.github.magnusp.libsql</groupId>
+                <groupId>io.github.magnusp.libsql</groupId>
                 <artifactId>libsql-jdbc</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -175,7 +191,7 @@
             </plugins>
         </pluginManagement>
         <plugins>
-            <!-- Flatten Maven Plugin for CI friendly ${revision} versions -->
+            <!-- Flatten Maven Plugin for CI-friendly ${revision}${sha1}${changelist} versions -->
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>flatten-maven-plugin</artifactId>

@@ -32,6 +32,25 @@ Run integration tests (requires Docker/Podman):
 mise exec -- ./mvnw clean verify
 ```
 
+### Versioning
+
+The build uses [Maven CI-friendly versions](https://maven.apache.org/guides/mini/guide-maven-ci-friendly.html).
+The project version is `${revision}${sha1}${changelist}`, with the defaults defined in the root
+`pom.xml`.
+
+| Build | Command | Resolved version |
+|---|---|---|
+| Local development | `./mvnw clean install` | `0.2.0-dev` |
+| CI prerelease | push to `main` | `0.2.0-<12-char-sha>` |
+| Release | tag `v0.2.0` | `0.2.0` |
+| Custom | `./mvnw -Drevision=0.3.0 -Dsha1= -Dchangelist= clean install` | `0.3.0` |
+
+No Maven `-SNAPSHOT` versions are produced or published. GitHub Packages Maven is immutable, so
+every published version must be a concrete prerelease or release. The publish workflow rejects
+any resolved version containing `-SNAPSHOT`. The flatten plugin rewrites the installed and
+deployed POMs so consumers see the resolved version, not the placeholders. See
+[Publishing](docs/publishing.md) for the target, authentication, and release process.
+
 ## Project Structure
 
 The repository is organized as a multi-module Maven project:
