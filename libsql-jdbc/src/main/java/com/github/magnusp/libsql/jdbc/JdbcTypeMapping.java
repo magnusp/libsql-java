@@ -14,6 +14,8 @@ import java.sql.SQLXML;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,10 +28,11 @@ import java.util.Map;
  * falls back to the storage class of the value and marks the result {@link Support#FALLBACK} so a
  * caller can record the exception.
  *
- * <p>The registry holds the 27 canonical JDBC 4.3 Appendix B type names. A separate alias table
- * maps the SQLite spellings that Appendix B does not name, such as {@code INT8} and {@code
- * DATETIME}, to the registry entry they stand for, preserving the sqlite-jdbc metadata that
- * existing users see. Both tables resolve through the declared type, never through the value.
+ * <p>The registry holds the canonical JDBC 4.3 Appendix B type names that have a declared-type
+ * entry. A separate alias table maps the SQLite spellings that Appendix B does not name, such as
+ * {@code INT8} and {@code DATETIME}, to the registry entry they stand for, preserving the
+ * sqlite-jdbc metadata that existing users see. Both tables resolve through the declared type,
+ * never through the value.
  */
 final class JdbcTypeMapping {
 
@@ -159,6 +162,18 @@ final class JdbcTypeMapping {
                 entry("DATE", Types.DATE, Date.class, Date.class, StorageClass.TEXT),
                 entry("TIME", Types.TIME, Time.class, Time.class, StorageClass.TEXT),
                 entry("TIMESTAMP", Types.TIMESTAMP, Timestamp.class, Timestamp.class, StorageClass.TEXT),
+                entry(
+                        "TIME_WITH_TIMEZONE",
+                        Types.TIME_WITH_TIMEZONE,
+                        OffsetTime.class,
+                        OffsetTime.class,
+                        StorageClass.TEXT),
+                entry(
+                        "TIMESTAMP_WITH_TIMEZONE",
+                        Types.TIMESTAMP_WITH_TIMEZONE,
+                        OffsetDateTime.class,
+                        OffsetDateTime.class,
+                        StorageClass.TEXT),
                 entry("CLOB", Types.CLOB, Clob.class, Clob.class, StorageClass.TEXT),
                 entry("NCLOB", Types.NCLOB, NClob.class, NClob.class, StorageClass.TEXT),
                 entry("SQLXML", Types.SQLXML, SQLXML.class, SQLXML.class, StorageClass.TEXT),

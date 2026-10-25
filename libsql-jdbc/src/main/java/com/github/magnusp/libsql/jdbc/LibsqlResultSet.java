@@ -32,6 +32,9 @@ import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
+import java.time.format.DateTimeParseException;
 import java.util.Calendar;
 import java.util.HashMap;
 import java.util.List;
@@ -117,6 +120,23 @@ public class LibsqlResultSet implements ResultSet {
         return valueAtCursor(columnIndex);
     }
 
+    /**
+     * Rejects a declared offset column through a getter that Table B-6 does not list for it. The
+     * offset types are new in this release and expose only {@code getObject}; the rest of the
+     * strict Table B-6 matrix lands with the unsupported-type policy.
+     */
+    private void rejectUnlistedOffsetGetter(int columnIndex) throws SQLException {
+        checkClosed();
+        if (columnIndex < 1 || columnIndex > declaredTypes.length) {
+            return;
+        }
+        JdbcTypeMapping.JdbcType type = declaredTypes[columnIndex - 1];
+        if (type != null && (type.objectClass() == OffsetTime.class || type.objectClass() == OffsetDateTime.class)) {
+            throw new SQLFeatureNotSupportedException(
+                    "Declared " + JdbcTypeMapping.sqlTypeName(type.sqlType()) + " columns support only getObject");
+        }
+    }
+
     Value valueForMetadata(int columnIndex) {
         int rowIndex = currentRowIndex < 0 ? 0 : currentRowIndex;
         if (rowIndex >= rows.size()) {
@@ -190,6 +210,7 @@ public class LibsqlResultSet implements ResultSet {
      */
     @Override
     public String getString(int columnIndex) throws SQLException {
+        rejectUnlistedOffsetGetter(columnIndex);
         return stringValue(getCurrentValue(columnIndex));
     }
 
@@ -212,6 +233,7 @@ public class LibsqlResultSet implements ResultSet {
      */
     @Override
     public boolean getBoolean(int columnIndex) throws SQLException {
+        rejectUnlistedOffsetGetter(columnIndex);
         return booleanValue(getCurrentValue(columnIndex));
     }
 
@@ -240,21 +262,25 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public int getInt(int columnIndex) throws SQLException {
+        rejectUnlistedOffsetGetter(columnIndex);
         return (int) toLong(getCurrentValue(columnIndex));
     }
 
     @Override
     public long getLong(int columnIndex) throws SQLException {
+        rejectUnlistedOffsetGetter(columnIndex);
         return toLong(getCurrentValue(columnIndex));
     }
 
     @Override
     public float getFloat(int columnIndex) throws SQLException {
+        rejectUnlistedOffsetGetter(columnIndex);
         return (float) toDouble(getCurrentValue(columnIndex));
     }
 
     @Override
     public double getDouble(int columnIndex) throws SQLException {
+        rejectUnlistedOffsetGetter(columnIndex);
         return toDouble(getCurrentValue(columnIndex));
     }
 
@@ -289,6 +315,7 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public byte[] getBytes(int columnIndex) throws SQLException {
+        rejectUnlistedOffsetGetter(columnIndex);
         return bytesValue(getCurrentValue(columnIndex));
     }
 
@@ -304,6 +331,7 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public Date getDate(int columnIndex) throws SQLException {
+        rejectUnlistedOffsetGetter(columnIndex);
         return dateValue(getCurrentValue(columnIndex));
     }
 
@@ -314,6 +342,7 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public Time getTime(int columnIndex) throws SQLException {
+        rejectUnlistedOffsetGetter(columnIndex);
         return timeValue(getCurrentValue(columnIndex));
     }
 
@@ -324,6 +353,7 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public Timestamp getTimestamp(int columnIndex) throws SQLException {
+        rejectUnlistedOffsetGetter(columnIndex);
         return timestampValue(getCurrentValue(columnIndex));
     }
 
@@ -332,8 +362,44 @@ public class LibsqlResultSet implements ResultSet {
         return dateTime == null ? null : Timestamp.valueOf(dateTime);
     }
 
+    private static OffsetTime offsetTimeValue(Value value) throws SQLException {
+        String text = stringValue(value);
+        if (text == null) {
+            return null;
+        }
+        try {
+            return OffsetTime.parse(text);
+        } catch (DateTimeParseException e) {
+            throw new SQLException("Bad value for type OffsetTime: " + text, e);
+        }
+    }
+
+    private static OffsetDateTime offsetDateTimeValue(Value value) throws SQLException {
+        String text = stringValue(value);
+        if (text == null) {
+            return null;
+        }
+        try {
+            return OffsetDateTime.parse(sqlTimestampSeparator(text));
+        } catch (DateTimeParseException e) {
+            throw new SQLException("Bad value for type OffsetDateTime: " + text, e);
+        }
+    }
+
+    /**
+     * Accepts the SQLite text form with a space between the date and the time as well as the
+     * ISO-8601 form with {@code T}. {@link OffsetDateTime#parse(CharSequence)} accepts only the
+     * latter, and SQLite columns are commonly written with the former.
+     */
+    private static String sqlTimestampSeparator(String text) {
+        return text.length() > 10 && text.charAt(10) == ' '
+                ? text.substring(0, 10) + 'T' + text.substring(11)
+                : text;
+    }
+
     @Override
     public BigDecimal getBigDecimal(int columnIndex) throws SQLException {
+        rejectUnlistedOffsetGetter(columnIndex);
         return bigDecimalValue(getCurrentValue(columnIndex));
     }
 
@@ -422,6 +488,12 @@ public class LibsqlResultSet implements ResultSet {
         }
         if (objectClass == Timestamp.class) {
             return timestampValue(value);
+        }
+        if (objectClass == OffsetTime.class) {
+            return offsetTimeValue(value);
+        }
+        if (objectClass == OffsetDateTime.class) {
+            return offsetDateTimeValue(value);
         }
         if (objectClass == Clob.class) {
             return clobValue(value);
@@ -738,6 +810,7 @@ public class LibsqlResultSet implements ResultSet {
     }
     @Override public Ref getRef(int columnIndex) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public Blob getBlob(int columnIndex) throws SQLException {
+        rejectUnlistedOffsetGetter(columnIndex);
         return blobValue(getCurrentValue(columnIndex));
     }
     private static Blob blobValue(Value value) {
@@ -745,6 +818,7 @@ public class LibsqlResultSet implements ResultSet {
         return bytes == null ? null : new LibsqlBlob(bytes);
     }
     @Override public Clob getClob(int columnIndex) throws SQLException {
+        rejectUnlistedOffsetGetter(columnIndex);
         return clobValue(getCurrentValue(columnIndex));
     }
     private static Clob clobValue(Value value) {
@@ -768,6 +842,7 @@ public class LibsqlResultSet implements ResultSet {
     @Override public Timestamp getTimestamp(String columnLabel, Calendar cal) throws SQLException { return getTimestamp(columnLabel); }
     @Override
     public URL getURL(int columnIndex) throws SQLException {
+        rejectUnlistedOffsetGetter(columnIndex);
         return urlValue(getCurrentValue(columnIndex));
     }
 
@@ -794,6 +869,7 @@ public class LibsqlResultSet implements ResultSet {
     @Override public void updateArray(int columnIndex, Array x) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public void updateArray(String columnLabel, Array x) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public RowId getRowId(int columnIndex) throws SQLException {
+        rejectUnlistedOffsetGetter(columnIndex);
         return rowIdValue(getCurrentValue(columnIndex));
     }
     private static RowId rowIdValue(Value value) {
@@ -809,6 +885,7 @@ public class LibsqlResultSet implements ResultSet {
     @Override public void updateNClob(int columnIndex, NClob nClob) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public void updateNClob(String columnLabel, NClob nClob) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public NClob getNClob(int columnIndex) throws SQLException {
+        rejectUnlistedOffsetGetter(columnIndex);
         return nclobValue(getCurrentValue(columnIndex));
     }
     private static NClob nclobValue(Value value) {
@@ -817,6 +894,7 @@ public class LibsqlResultSet implements ResultSet {
     }
     @Override public NClob getNClob(String columnLabel) throws SQLException { return getNClob(findColumn(columnLabel)); }
     @Override public SQLXML getSQLXML(int columnIndex) throws SQLException {
+        rejectUnlistedOffsetGetter(columnIndex);
         return sqlxmlValue(getCurrentValue(columnIndex));
     }
     private static SQLXML sqlxmlValue(Value value) {
@@ -902,7 +980,7 @@ public class LibsqlResultSet implements ResultSet {
      * </tr>
      * <tr>
      *   <td>{@code Date}, {@code Time}, {@code Timestamp}, {@code LocalDate}, {@code LocalTime},
-     *   {@code LocalDateTime}</td>
+     *   {@code LocalDateTime}, {@code OffsetTime}, {@code OffsetDateTime}</td>
      *   <td>epoch millis</td><td>Julian day</td><td>date/time text</td><td>bad value</td>
      *   <td>{@code null}</td>
      * </tr>
@@ -916,8 +994,10 @@ public class LibsqlResultSet implements ResultSet {
      * Julian days, and TEXT values use the SQLite date and time formats, including a bare date and
      * a bare time. A bare time uses SQLite's 2000-01-01 default date. The SQLite TEXT format is
      * {@code yyyy-MM-dd HH:mm:ss.SSS}, with optional fractional digits and an optional time zone
-     * suffix. All six date and time targets are built from the same storage-class value, so
-     * {@code getObject(column, LocalDate.class)} and {@code getDate(column)} agree.
+     * suffix. {@code OffsetTime} and {@code OffsetDateTime} read ISO-8601 offset text, accepting
+     * either a {@code T} or a space between the date and the time. All eight date and time targets
+     * are built from the same storage-class value, so {@code getObject(column, LocalDate.class)}
+     * and {@code getDate(column)} agree.
      *
      * <p>{@code Short} and {@code Byte} are rejected rather than narrowed from the numeric
      * targets, preserving the sqlite-jdbc 3.53.4.0 contract.
@@ -961,6 +1041,12 @@ public class LibsqlResultSet implements ResultSet {
         }
         if (type == LocalDateTime.class) {
             return type.cast(getLocalDateTime(columnIndex));
+        }
+        if (type == OffsetTime.class) {
+            return type.cast(offsetTimeValue(getCurrentValue(columnIndex)));
+        }
+        if (type == OffsetDateTime.class) {
+            return type.cast(offsetDateTimeValue(getCurrentValue(columnIndex)));
         }
 
         Value stored = getCurrentValue(columnIndex);
