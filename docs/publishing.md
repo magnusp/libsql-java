@@ -21,13 +21,14 @@ The build uses [Maven CI-friendly versions](https://maven.apache.org/guides/mini
 | Build | Trigger or command | Resolved version |
 |---|---|---|
 | Local development | `./mvnw clean install` | `0.2.0-dev` |
-| `main` prerelease | push to `main` | `0.2.0-<12-char-sha>` |
+| `main` prerelease | push to `main` | `0.2.0-rc.<12-char-sha>` |
 | Release | tag `v0.2.0` | `0.2.0` |
 | Release candidate | tag `v0.2.0-rc.1` | `0.2.0-rc.1` |
 | Custom | `./mvnw -Drevision=0.3.0 -Dsha1= -Dchangelist= clean install` | `0.3.0` |
 
-`${sha1}` carries the short commit hash for branch builds and is empty for tag builds.
-`${changelist}` defaults to `-dev` locally; CI clears it.
+Branch builds set `revision` to `<base>-rc` and `sha1` to `.<short-sha>`, producing
+`0.2.0-rc.<sha>`. Tag builds leave both suffixes empty. `${changelist}` defaults to `-dev`
+locally; CI clears it.
 
 ### No Maven SNAPSHOT versions
 
@@ -35,7 +36,11 @@ The build uses [Maven CI-friendly versions](https://maven.apache.org/guides/mini
 `-SNAPSHOT` publish would fail or silently confuse consumers. Every published version is a
 concrete prerelease or release.
 
-A side effect of immutability: a given commit maps to one `0.2.0-<sha>` version. Re-running the
+The `-rc.` qualifier is a recognized Maven prerelease for Renovate, so its default
+`ignoreUnstable` setting filters these builds. A bare SHA qualifier such as
+`0.2.0-01fea7f408be` looks stable to Renovate and must not be used.
+
+A side effect of immutability: a given commit maps to one `0.2.0-rc.<sha>` version. Re-running the
 publish workflow for the same commit attempts to republish the same version and will be rejected
 by GitHub Packages. Publish a new commit or a tag instead.
 
@@ -44,14 +49,14 @@ by GitHub Packages. Publish a new commit or a tag instead.
 `.github/workflows/publish.yml` runs on pushes to `main` and on `v*` tags:
 
 1. Tag build: the version is the tag name without the leading `v`.
-2. Branch build: the base `revision` is read from the POM and suffixed with the 12-character commit
-   SHA.
+2. Branch build: the base `revision` is read from the POM, then suffixed with `-rc.` and the
+   12-character commit SHA.
 3. The workflow refuses any resolved version containing `-SNAPSHOT`.
 4. `./mvnw -Prelease clean deploy` publishes the main, sources, and javadoc artifacts.
 
 ## Release process
 
-1. Merge to `main`. The workflow publishes `0.2.0-<sha>`.
+1. Merge to `main`. The workflow publishes `0.2.0-rc.<sha>`.
 2. Tag the commit and push the tag:
    ```bash
    git tag v0.2.0
@@ -100,4 +105,4 @@ Then depend on:
 </dependency>
 ```
 
-Use a `0.2.0-<sha>` version to consume a specific `main` build.
+Use a `0.2.0-rc.<sha>` version to consume a specific `main` build.

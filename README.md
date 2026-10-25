@@ -50,7 +50,7 @@ described in [Publishing](docs/publishing.md).
 </dependency>
 ```
 
-Prerelease builds from `main` use `0.2.0-<shortsha>`. No `-SNAPSHOT` versions are published.
+Prerelease builds from `main` use `0.2.0-rc.<shortsha>`. No `-SNAPSHOT` versions are published.
 
 ### JDBC Usage Example
 

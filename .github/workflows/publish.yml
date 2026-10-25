@@ -35,7 +35,7 @@ jobs:
           server-username-env-var: 'GITHUB_ACTOR'
           server-password-env-var: 'GITHUB_TOKEN'
 
-      # Branch builds are immutable SHA prereleases; tag builds use the tag version.
+      # Branch builds are immutable release-candidate prereleases; tag builds use the tag version.
       # Neither path may produce a Maven SNAPSHOT version.
       - name: Resolve version
         id: version
@@ -44,8 +44,8 @@ jobs:
             REVISION="${GITHUB_REF_NAME#v}"
             SHA1=""
           else
-            REVISION="$(./mvnw --batch-mode --quiet --no-transfer-progress -N help:evaluate -Dexpression=revision -DforceStdout)"
-            SHA1="-${GITHUB_SHA::12}"
+            REVISION="$(./mvnw --batch-mode --quiet --no-transfer-progress -N help:evaluate -Dexpression=revision -DforceStdout)-rc"
+            SHA1=".${GITHUB_SHA::12}"
           fi
           CHANGELIST=""
           VERSION="${REVISION}${SHA1}${CHANGELIST}"

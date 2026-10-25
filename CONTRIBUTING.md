@@ -41,7 +41,7 @@ The project version is `${revision}${sha1}${changelist}`, with the defaults defi
 | Build | Command | Resolved version |
 |---|---|---|
 | Local development | `./mvnw clean install` | `0.2.0-dev` |
-| CI prerelease | push to `main` | `0.2.0-<12-char-sha>` |
+| CI prerelease | push to `main` | `0.2.0-rc.<12-char-sha>` |
 | Release | tag `v0.2.0` | `0.2.0` |
 | Custom | `./mvnw -Drevision=0.3.0 -Dsha1= -Dchangelist= clean install` | `0.3.0` |
 

@@ -4,7 +4,7 @@ Starting with `0.2.0`, the artifacts are published under `io.github.magnusp.libs
 `0.1.x` were published only to GitHub Packages under `com.github.magnusp.libsql`.
 
 Artifacts are published to GitHub Packages. No Maven `-SNAPSHOT` versions are published; `main`
-builds use `0.2.0-<shortsha>` and releases use the tag version. See
+builds use `0.2.0-rc.<shortsha>` and releases use the tag version. See
 [Publishing](publishing.md) for the repository and authentication setup.
 
 The artifact names, public types, and JDBC URLs did not change.
@@ -56,10 +56,9 @@ import io.github.magnusp.libsql.client.LibsqlClient;
 
 ## GitHub Packages consumers
 
-GitHub Packages continues to host the artifacts. Existing `0.1.x` versions remain under the old
-groupId; `0.2.0` and later use `io.github.magnusp.libsql`. GitHub Packages requires
-authentication even for public packages, so configure the `github` server in
-`~/.m2/settings.xml`; see [Publishing](publishing.md).
+GitHub Packages hosts the artifacts. The `0.1.x` versions used the old groupId; `0.2.0` and later
+use `io.github.magnusp.libsql`. GitHub Packages requires authentication even for public packages,
+so configure the `github` server in `~/.m2/settings.xml`; see [Publishing](publishing.md).
 
 ## No compatibility artifact
 
