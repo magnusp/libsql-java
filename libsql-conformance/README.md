@@ -48,8 +48,8 @@ with:
 ```
 
 Last green result: 270 tests, 7 skipped, with `SavepointTest` included. The
-count includes the four Appendix B quarantines below and two harness tests for
-the quarantine.
+count excludes the four Appendix B quarantines below and includes the two
+harness tests for the quarantine.
 
 ### Appendix B quarantines
 
@@ -65,6 +65,14 @@ the libSQL run. The full type profile is in
 | `org.sqlite.RSMetaDataTest#columnTypes` | xerial reports a declared `NCHAR` as `Types.CHAR`. Appendix B defines `NCHAR` as its own JDBC type, so the driver reports `Types.NCHAR`. |
 | `org.sqlite.RSMetaDataTest#testGetColumnClassName` | xerial reports a declared `BLOB` as `java.lang.Object`. Table B-3 maps `BLOB` to `java.sql.Blob`. |
 | `org.sqlite.PrepStmtTest#getObject` | xerial returns an `Integer` for `getObject` on a declared `BIT`. Table B-3 maps `BIT` to `Boolean`. |
+
+The exclusion is method-level, so each method also loses checks that do not
+conflict with Appendix B:
+
+- `StatementTest#bytesTest` also loses its BLOB `setBytes`/`getBytes` round trip.
+- `RSMetaDataTest#columnTypes` also checks other column types that do not conflict, including the INTEGER family, text, numeric, boolean, date and timestamp types, plus DECIMAL precision and scale.
+- `RSMetaDataTest#testGetColumnClassName` also checks the INTEGER, VARCHAR, and DOUBLE class names.
+- `PrepStmtTest#getObject` also checks other `getObject` rows (INTEGER, FLOAT, untyped, VARCHAR and BLOB columns) and the typed getters above them.
 
 ### Three-layer contract
 
