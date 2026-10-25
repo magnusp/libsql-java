@@ -202,37 +202,48 @@ Table B-5 is observed through `setObject(int, Object, int)`. A listed pair must 
 
 ## Table B-6, ResultSet getter conversions
 
-Table B-6 is observed through each getter against its recommended declared type.
+Table B-6 is the matrix of conversions the driver must support, observed through each getter against its recommended declared type. The driver does not reject a conversion because the table omits it. A representable declared column is not rejected because of its declared type, and the stored value decides whether the conversion succeeds, matching sqlite-jdbc. The five N/A types are still rejected before the getter runs.
 
 | Appendix B row | Status | Reason | Test |
 |---|---|---|---|
-| `getByte` | supported | Reads a numeric, boolean or text value as a byte. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getShort` | supported | Reads a numeric, boolean or text value as a short. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getInt` | supported | Reads a numeric, boolean or text value as an int. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getLong` | supported | Reads a numeric, boolean or text value as a long. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getFloat` | supported | Reads a numeric, boolean or text value as a float. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getDouble` | supported | Reads a numeric, boolean or text value as a double. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getBigDecimal` | supported | Reads a numeric, boolean or text value as BigDecimal. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getBoolean` | emulated | Reads integer 0 or 1, and the text true or false, as Boolean. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getString` | supported | Reads text and the listed scalar types as String. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getNString` | supported | Reads text and the listed scalar types as String. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getBytes` | supported | Reads binary values and the listed types as byte[]. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getDate` | emulated | Parses the supported text forms into java.sql.Date. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getTime` | emulated | Parses the supported text forms into java.sql.Time. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getTimestamp` | emulated | Parses the supported text forms into java.sql.Timestamp. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getAsciiStream` | emulated | Returns the text bytes as a US-ASCII stream. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getBinaryStream` | supported | Returns the blob bytes as a stream. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getCharacterStream` | emulated | Returns a reader over the stored text or bytes. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getNCharacterStream` | emulated | Returns a reader over the stored text or bytes. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getClob` | emulated | Wraps stored text in java.sql.Clob. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getNClob` | emulated | Wraps stored text in java.sql.NClob. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getBlob` | supported | Wraps stored bytes in java.sql.Blob. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getByte` | supported | Reads a numeric, boolean or text value as a byte. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getShort` | supported | Reads a numeric, boolean or text value as a short. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getInt` | supported | Reads a numeric, boolean or text value as an int. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getLong` | supported | Reads a numeric, boolean or text value as a long. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getFloat` | supported | Reads a numeric, boolean or text value as a float. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getDouble` | supported | Reads a numeric, boolean or text value as a double. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getBigDecimal` | supported | Reads a numeric, boolean or text value as BigDecimal. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getBoolean` | emulated | Reads integer 0 or 1, and the text true or false, as Boolean. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getString` | supported | Reads any stored value as String; blobs decode as UTF-8. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getNString` | supported | Reads any stored value as String; blobs decode as UTF-8. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getBytes` | supported | Reads any stored value as byte[]; text encodes as UTF-8. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getDate` | emulated | Parses the supported text forms into java.sql.Date. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getTime` | emulated | Parses the supported text forms into java.sql.Time. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getTimestamp` | emulated | Parses the supported text forms into java.sql.Timestamp. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getAsciiStream` | emulated | Returns any stored value as a US-ASCII stream. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getBinaryStream` | supported | Returns any stored value as a byte stream. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getCharacterStream` | emulated | Returns a reader over the stored text or bytes. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getNCharacterStream` | emulated | Returns a reader over the stored text or bytes. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getClob` | emulated | Wraps any stored value in java.sql.Clob. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getNClob` | emulated | Wraps any stored value in java.sql.NClob. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getBlob` | supported | Wraps any stored value in java.sql.Blob. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
 | `getArray` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBProfileTest#everyUnsupportedDeclaredTypeThrowsFeatureNotSupported` |
 | `getRef` | N/A | SQLite has no interoperable representation. The driver throws SQLFeatureNotSupportedException. | `Jdbc4AppendixBProfileTest#everyUnsupportedDeclaredTypeThrowsFeatureNotSupported` |
-| `getURL` | emulated | Parses stored text into java.net.URL. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getObject` | supported | Returns the Table B-3 object type for each supported declared type. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getRowId` | emulated | Wraps stored text or bytes in java.sql.RowId. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
-| `getSQLXML` | emulated | Wraps stored text in java.sql.SQLXML. | `Jdbc4AppendixBReadTest#b6GetterHonoursSupportedJdbcTypes`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getURL` | emulated | Parses stored text into java.net.URL. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getObject` | supported | Returns the Table B-3 object type for each supported declared type. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getRowId` | emulated | Wraps any stored value in java.sql.RowId. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+| `getSQLXML` | emulated | Wraps any stored value in java.sql.SQLXML. | `Jdbc4AppendixBReadTest#b6RequiredConversionsAndPermissiveReads`, `Jdbc4AppendixBTypeMappingIT#b6GetterReadsRecommendedTypeFromRealDdl` |
+
+### Read conversions beyond Table B-6
+
+Table B-6 defines the conversions a driver must support; it does not require the driver to reject
+the rest. The driver therefore does not reject a representable declared column because of its
+declared type, and the stored value decides the conversion. A declared `BLOB` reads through
+`getBytes`, `getString` and `getBinaryStream`, as it does in sqlite-jdbc. A conversion the stored
+value cannot satisfy throws `SQLException`. Only the five N/A declared types are rejected because of
+the declared type; unimplemented getters (`getArray`, `getRef`, `getUnicodeStream`) still throw
+`SQLFeatureNotSupportedException` for any column. Regression coverage is
+`Jdbc4AppendixBReadTest#b6UnlistedConversionsReadTheStoredValue`.
 
 ## Documented exception
 
@@ -242,4 +253,4 @@ The fallback is covered by `Jdbc4AppendixBProfileTest#expressionFallbackStaysPer
 
 ## Conformance quarantines
 
-The xerial conformance suite keeps its selected tests except for four methods whose expectations Appendix B replaces. The list and the reason for each one are in [`../libsql-conformance/README.md`](../libsql-conformance/README.md). They still run in the `xerial-control` profile.
+The xerial conformance suite keeps its selected tests except for three methods whose expectations Appendix B replaces. The list and the reason for each one are in [`../libsql-conformance/README.md`](../libsql-conformance/README.md). They still run in the `xerial-control` profile.

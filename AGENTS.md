@@ -138,8 +138,9 @@ Use the absolute path shown. A relative `DOCKER_CONFIG` is resolved against the 
 
 JDBC 4.3 Appendix B is the oracle for type mapping. The source is [`vendor/JDBC4-TYPE-MAPPING.md`](vendor/JDBC4-TYPE-MAPPING.md).
 
-- When Appendix B and sqlite-jdbc disagree, Appendix B wins. A conformance test that encodes the xerial behavior is quarantined in `libsql-conformance`, not copied.
+- When Appendix B defines a conversion or mapping and sqlite-jdbc disagrees, Appendix B wins. A conformance test that encodes the xerial behavior is quarantined in `libsql-conformance`, not copied.
 - Keep sqlite-jdbc parity only where Appendix B is silent. Parity never overrides a defined Appendix B conversion.
+- Table B-6 is a required-support matrix, not a rejection list. A representable declared column is not rejected because of its declared type; the stored value decides the conversion, matching sqlite-jdbc. Reject a declared type only for the five N/A types. Unimplemented getters still throw for any column.
 - `ARRAY`, `STRUCT`, `REF`, `JAVA_OBJECT`, and `DISTINCT` are N/A. The driver throws `SQLFeatureNotSupportedException` and does not emulate them.
 - An expression column has no declared type. Its storage-class fallback is a documented exception in [`docs/jdbc-appendix-b-compliance.md`](docs/jdbc-appendix-b-compliance.md), not a supported Appendix B row.
 

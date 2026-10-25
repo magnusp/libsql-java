@@ -121,27 +121,21 @@ public class LibsqlResultSet implements ResultSet {
     }
 
     /**
-     * Enforces the Table B-6 matrix for a declared column. A column with no {@code decltype} keeps
-     * the permissive storage fallback. An N/A declared type is rejected through every getter, and a
-     * getter that Table B-6 does not list for the declared type is rejected as well.
+     * Rejects a declared type that SQLite cannot represent in JDBC. Every other declared type
+     * passes this check, and the getter's value conversion decides whether the read succeeds. A
+     * column with no {@code decltype} always reads through the permissive fallback. Getters that
+     * are not implemented, such as {@code getArray} and {@code getRef}, still throw
+     * {@link SQLFeatureNotSupportedException} for any column.
      */
-    private void checkGetter(int columnIndex, JdbcTypeMapping.Getter getter) throws SQLException {
+    private void checkReadable(int columnIndex) throws SQLException {
         checkClosed();
         if (columnIndex < 1 || columnIndex > declaredTypes.length) {
             return;
         }
         JdbcTypeMapping.JdbcType type = declaredTypes[columnIndex - 1];
-        if (type == null) {
-            return;
-        }
-        if (JdbcTypeMapping.isUnsupported(type)) {
+        if (type != null && JdbcTypeMapping.isUnsupported(type)) {
             throw new SQLFeatureNotSupportedException(
                     "Declared " + JdbcTypeMapping.sqlTypeName(type.sqlType()) + " is not supported");
-        }
-        if (!JdbcTypeMapping.supports(type, getter)) {
-            throw new SQLFeatureNotSupportedException(
-                    getter.methodName() + " does not support declared "
-                            + JdbcTypeMapping.sqlTypeName(type.sqlType()));
         }
     }
 
@@ -218,7 +212,7 @@ public class LibsqlResultSet implements ResultSet {
      */
     @Override
     public String getString(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_STRING);
+        checkReadable(columnIndex);
         return stringValue(getCurrentValue(columnIndex));
     }
 
@@ -241,7 +235,7 @@ public class LibsqlResultSet implements ResultSet {
      */
     @Override
     public boolean getBoolean(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_BOOLEAN);
+        checkReadable(columnIndex);
         return booleanValue(getCurrentValue(columnIndex));
     }
 
@@ -260,37 +254,37 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public byte getByte(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_BYTE);
+        checkReadable(columnIndex);
         return (byte) longValue(columnIndex);
     }
 
     @Override
     public short getShort(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_SHORT);
+        checkReadable(columnIndex);
         return (short) longValue(columnIndex);
     }
 
     @Override
     public int getInt(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_INT);
+        checkReadable(columnIndex);
         return (int) longValue(columnIndex);
     }
 
     @Override
     public long getLong(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_LONG);
+        checkReadable(columnIndex);
         return longValue(columnIndex);
     }
 
     @Override
     public float getFloat(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_FLOAT);
+        checkReadable(columnIndex);
         return (float) doubleValue(columnIndex);
     }
 
     @Override
     public double getDouble(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_DOUBLE);
+        checkReadable(columnIndex);
         return doubleValue(columnIndex);
     }
 
@@ -370,7 +364,7 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public byte[] getBytes(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_BYTES);
+        checkReadable(columnIndex);
         return bytesValue(getCurrentValue(columnIndex));
     }
 
@@ -386,7 +380,7 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public Date getDate(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_DATE);
+        checkReadable(columnIndex);
         return dateValue(getCurrentValue(columnIndex));
     }
 
@@ -397,7 +391,7 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public Time getTime(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_TIME);
+        checkReadable(columnIndex);
         return timeValue(getCurrentValue(columnIndex));
     }
 
@@ -408,7 +402,7 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public Timestamp getTimestamp(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_TIMESTAMP);
+        checkReadable(columnIndex);
         return timestampValue(getCurrentValue(columnIndex));
     }
 
@@ -454,7 +448,7 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public BigDecimal getBigDecimal(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_BIG_DECIMAL);
+        checkReadable(columnIndex);
         return bigDecimalValue(getCurrentValue(columnIndex));
     }
 
@@ -472,7 +466,7 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public Object getObject(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_OBJECT);
+        checkReadable(columnIndex);
         Value value = getCurrentValue(columnIndex);
         if (value instanceof Value.Null) {
             return null;
@@ -766,7 +760,7 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public InputStream getAsciiStream(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_ASCII_STREAM);
+        checkReadable(columnIndex);
         String text = stringValue(getCurrentValue(columnIndex));
         return text == null
                 ? null
@@ -774,7 +768,7 @@ public class LibsqlResultSet implements ResultSet {
     }
     @Override @Deprecated @SuppressWarnings("deprecation") public InputStream getUnicodeStream(int columnIndex) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public InputStream getBinaryStream(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_BINARY_STREAM);
+        checkReadable(columnIndex);
         byte[] bytes = bytesValue(getCurrentValue(columnIndex));
         return bytes == null ? null : new ByteArrayInputStream(bytes);
     }
@@ -785,7 +779,7 @@ public class LibsqlResultSet implements ResultSet {
     @Override public void clearWarnings() throws SQLException {}
     @Override public String getCursorName() throws SQLException { return null; }
     @Override public Reader getCharacterStream(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_CHARACTER_STREAM);
+        checkReadable(columnIndex);
         String string = stringValue(getCurrentValue(columnIndex));
         return string == null ? null : new StringReader(string);
     }
@@ -868,11 +862,11 @@ public class LibsqlResultSet implements ResultSet {
         return getObject(columnIndex);
     }
     @Override public Ref getRef(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_REF);
+        checkReadable(columnIndex);
         throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver");
     }
     @Override public Blob getBlob(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_BLOB);
+        checkReadable(columnIndex);
         return blobValue(getCurrentValue(columnIndex));
     }
     private static Blob blobValue(Value value) {
@@ -880,7 +874,7 @@ public class LibsqlResultSet implements ResultSet {
         return bytes == null ? null : new LibsqlBlob(bytes);
     }
     @Override public Clob getClob(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_CLOB);
+        checkReadable(columnIndex);
         return clobValue(getCurrentValue(columnIndex));
     }
     private static Clob clobValue(Value value) {
@@ -888,7 +882,7 @@ public class LibsqlResultSet implements ResultSet {
         return string == null ? null : new LibsqlClob(string);
     }
     @Override public Array getArray(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_ARRAY);
+        checkReadable(columnIndex);
         throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver");
     }
     @Override public Object getObject(String columnLabel, Map<String, Class<?>> map) throws SQLException {
@@ -907,7 +901,7 @@ public class LibsqlResultSet implements ResultSet {
     @Override public Timestamp getTimestamp(String columnLabel, Calendar cal) throws SQLException { return getTimestamp(columnLabel); }
     @Override
     public URL getURL(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_URL);
+        checkReadable(columnIndex);
         return urlValue(getCurrentValue(columnIndex));
     }
 
@@ -934,7 +928,7 @@ public class LibsqlResultSet implements ResultSet {
     @Override public void updateArray(int columnIndex, Array x) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public void updateArray(String columnLabel, Array x) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public RowId getRowId(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_ROW_ID);
+        checkReadable(columnIndex);
         return rowIdValue(getCurrentValue(columnIndex));
     }
     private static RowId rowIdValue(Value value) {
@@ -950,7 +944,7 @@ public class LibsqlResultSet implements ResultSet {
     @Override public void updateNClob(int columnIndex, NClob nClob) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public void updateNClob(String columnLabel, NClob nClob) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public NClob getNClob(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_N_CLOB);
+        checkReadable(columnIndex);
         return nclobValue(getCurrentValue(columnIndex));
     }
     private static NClob nclobValue(Value value) {
@@ -959,7 +953,7 @@ public class LibsqlResultSet implements ResultSet {
     }
     @Override public NClob getNClob(String columnLabel) throws SQLException { return getNClob(findColumn(columnLabel)); }
     @Override public SQLXML getSQLXML(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_SQLXML);
+        checkReadable(columnIndex);
         return sqlxmlValue(getCurrentValue(columnIndex));
     }
     private static SQLXML sqlxmlValue(Value value) {
@@ -970,12 +964,12 @@ public class LibsqlResultSet implements ResultSet {
     @Override public void updateSQLXML(int columnIndex, SQLXML xmlObject) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public void updateSQLXML(String columnLabel, SQLXML xmlObject) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public String getNString(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_N_STRING);
+        checkReadable(columnIndex);
         return stringValue(getCurrentValue(columnIndex));
     }
     @Override public String getNString(String columnLabel) throws SQLException { return getNString(findColumn(columnLabel)); }
     @Override public Reader getNCharacterStream(int columnIndex) throws SQLException {
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_N_CHARACTER_STREAM);
+        checkReadable(columnIndex);
         String text = stringValue(getCurrentValue(columnIndex));
         return text == null ? null : new StringReader(text);
     }
@@ -1081,7 +1075,7 @@ public class LibsqlResultSet implements ResultSet {
         if (type == null) {
             throw new SQLException("requested type cannot be null");
         }
-        checkGetter(columnIndex, JdbcTypeMapping.Getter.GET_OBJECT);
+        checkReadable(columnIndex);
         if (type == String.class) {
             return type.cast(getString(columnIndex));
         }

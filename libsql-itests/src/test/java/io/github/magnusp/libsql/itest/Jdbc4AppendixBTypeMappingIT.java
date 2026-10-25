@@ -1,5 +1,6 @@
 package io.github.magnusp.libsql.itest;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -297,6 +298,27 @@ public class Jdbc4AppendixBTypeMappingIT extends SqldContainerBase {
                     (rs, i) -> rs.getObject(i), OffsetDateTime.class),
             new GetterCell("getRowId", "ROWID", TEXT_ROWID, ResultSet::getRowId, RowId.class),
             new GetterCell("getSQLXML", "SQLXML", TEXT_XML, ResultSet::getSQLXML, SQLXML.class));
+
+    @Test
+    void b6DeclaredBlobReadsThroughByteAndTextGetters() throws Exception {
+        String table = table("b6blob");
+        try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+            statement.execute("CREATE TABLE " + table + " (v BLOB)");
+            try (PreparedStatement insert =
+                    connection.prepareStatement("INSERT INTO " + table + " (v) VALUES (?)")) {
+                insert.setBytes(1, BYTES_ABC);
+                insert.executeUpdate();
+            }
+            try (Statement query = connection.createStatement();
+                    ResultSet resultSet = query.executeQuery("SELECT v FROM " + table)) {
+                assertThat(resultSet.next()).isTrue();
+                assertThat(resultSet.getBytes(1)).isEqualTo(BYTES_ABC);
+                assertThat(resultSet.getString(1)).isEqualTo("abc");
+                assertThat(resultSet.getBinaryStream(1).readAllBytes()).isEqualTo(BYTES_ABC);
+                assertThat(resultSet.getBlob(1).getBytes(1, BYTES_ABC.length)).isEqualTo(BYTES_ABC);
+            }
+        }
+    }
 
     @ParameterizedTest(name = "B-6 {0} reads its recommended {1}")
     @MethodSource("b6Cells")
