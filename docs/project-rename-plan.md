@@ -61,6 +61,9 @@ The flatten plugin resolves the placeholders in installed and deployed POMs.
 - Any resolved `-SNAPSHOT` version is rejected before deployment.
 - The workflow uses `GITHUB_TOKEN` with `packages: write`; no GPG key, Central Portal account, or
   external credentials are involved.
+- The publish job runs the full build and test suite with `-DdeployAtEnd=true`, so a build or test
+  failure deploys nothing. Uploads are deferred to the end of the reactor, but are not
+  transactional.
 
 The root POM points `distributionManagement` at
 `https://maven.pkg.github.com/magnusp/libsql-java` with repository id `github`. The `central`

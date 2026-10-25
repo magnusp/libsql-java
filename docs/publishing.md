@@ -52,7 +52,15 @@ by GitHub Packages. Publish a new commit or a tag instead.
 2. Branch build: the base `revision` is read from the POM, then suffixed with `-rc.` and the
    12-character commit SHA.
 3. The workflow refuses any resolved version containing `-SNAPSHOT`.
-4. `./mvnw -Prelease clean deploy` publishes the main, sources, and javadoc artifacts.
+4. `./mvnw clean deploy -Prelease -DdeployAtEnd=true` runs the full unit and integration test
+   suite, then deploys the main, sources, and javadoc artifacts once at the end of the reactor.
+
+### Deployment order
+
+`deployAtEnd=true` defers all uploads until every module has built and tested. A build or test
+failure therefore deploys nothing. It is not transactional: if an upload fails mid-batch, earlier
+artifacts remain published. GitHub Packages has no staging or promotion step. A partial publish
+must be cleaned up by deleting the affected version and publishing a new one.
 
 ## Release process
 

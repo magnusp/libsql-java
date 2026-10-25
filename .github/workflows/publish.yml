@@ -60,6 +60,7 @@ jobs:
           echo "changelist=${CHANGELIST}" >> "$GITHUB_OUTPUT"
           echo "Publishing ${VERSION} to GitHub Packages"
 
+      # Build and test the full reactor before deployAtEnd publishes anything.
       - name: Publish to GitHub Packages
         env:
           GITHUB_ACTOR: ${{ github.actor }}
@@ -67,8 +68,7 @@ jobs:
         run: |
           ./mvnw --batch-mode clean deploy \
             -Prelease \
+            -DdeployAtEnd=true \
             -Drevision="${{ steps.version.outputs.revision }}" \
             -Dsha1="${{ steps.version.outputs.sha1 }}" \
-            -Dchangelist="${{ steps.version.outputs.changelist }}" \
-            -DskipTests \
-            -DskipITs
+            -Dchangelist="${{ steps.version.outputs.changelist }}"
