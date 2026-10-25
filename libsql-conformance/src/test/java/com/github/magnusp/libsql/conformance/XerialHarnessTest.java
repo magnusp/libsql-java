@@ -16,6 +16,8 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.platform.engine.TestDescriptor;
+import org.junit.platform.engine.support.descriptor.MethodSource;
 
 /**
  * Exercises the conformance harness itself, without a running sqld container where possible.
@@ -61,6 +63,54 @@ class XerialHarnessTest {
 
         assertThat(memory.retained()).isFalse();
         assertThat(memoryMode.retained()).isFalse();
+    }
+
+    @Test
+    void quarantineExcludesOnlyTheAppendixBConflicts() {
+        XerialQuarantine quarantine = new XerialQuarantine();
+
+        for (XerialQuarantine.Quarantined quarantined : XerialQuarantine.QUARANTINED) {
+            assertThat(
+                            quarantine
+                                    .apply(
+                                            descriptor(
+                                                    quarantined.className(),
+                                                    quarantined.methodName()))
+                                    .excluded())
+                    .as("%s#%s", quarantined.className(), quarantined.methodName())
+                    .isTrue();
+        }
+
+        assertThat(quarantine.apply(descriptor("org.sqlite.ResultSetTest", "next")).included())
+                .as("an unconflicted xerial test")
+                .isTrue();
+    }
+
+    @Test
+    void quarantineIsInactiveDuringTheXerialControlRun() {
+        String previous = System.getProperty(XerialControl.ENABLED_PROPERTY);
+        System.setProperty(XerialControl.ENABLED_PROPERTY, "xerial");
+        try {
+            XerialQuarantine quarantine = new XerialQuarantine();
+            for (XerialQuarantine.Quarantined quarantined : XerialQuarantine.QUARANTINED) {
+                assertThat(
+                                quarantine
+                                        .apply(
+                                                descriptor(
+                                                        quarantined.className(),
+                                                        quarantined.methodName()))
+                                        .included())
+                        .as("control run keeps %s#%s", quarantined.className(),
+                                quarantined.methodName())
+                        .isTrue();
+            }
+        } finally {
+            if (previous == null) {
+                System.clearProperty(XerialControl.ENABLED_PROPERTY);
+            } else {
+                System.setProperty(XerialControl.ENABLED_PROPERTY, previous);
+            }
+        }
     }
 
     @Test
@@ -161,6 +211,19 @@ class XerialHarnessTest {
         } finally {
             XerialTestServer.resetNamespaceForTest(namespace);
         }
+    }
+
+    private static TestDescriptor descriptor(String className, String methodName) {
+        MethodSource source = MethodSource.from(className, methodName);
+        return (TestDescriptor)
+                Proxy.newProxyInstance(
+                        TestDescriptor.class.getClassLoader(),
+                        new Class<?>[] {TestDescriptor.class},
+                        (proxy, method, args) ->
+                                switch (method.getName()) {
+                                    case "getSource" -> java.util.Optional.of(source);
+                                    default -> null;
+                                });
     }
 
     private static Connection wrap(Connection connection, String namespace) {
