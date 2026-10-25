@@ -9,14 +9,26 @@ import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
 import java.io.StringReader;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.sql.Date;
+import java.sql.NClob;
 import java.sql.ParameterMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.sql.Time;
+import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.List;
+import java.util.TimeZone;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -446,6 +458,147 @@ class LibsqlPreparedStatementTest {
         assertThat(connection.executed.get(0).args())
                 .containsExactly(Value.of("clob"), Value.of(bytes), Value.of(bytes),
                         Value.of("ascii"));
+    }
+
+    @Test
+    void integralTargetsBindHranaIntegers() throws SQLException {
+        assertThat(bind("42", Types.TINYINT)).isEqualTo(Value.of(42L));
+        assertThat(bind((short) 42, Types.SMALLINT)).isEqualTo(Value.of(42L));
+        assertThat(bind(42L, Types.INTEGER)).isEqualTo(Value.of(42L));
+        assertThat(bind(BigInteger.valueOf(42), Types.BIGINT)).isEqualTo(Value.of(42L));
+        // Java narrowing applies to an integral target.
+        assertThat(bind(258, Types.TINYINT)).isEqualTo(Value.of(2L));
+    }
+
+    @Test
+    void realTargetsBindHranaFloats() throws SQLException {
+        assertThat(bind("42", Types.REAL)).isEqualTo(Value.of(42.0));
+        assertThat(bind(42L, Types.FLOAT)).isEqualTo(Value.of(42.0));
+        assertThat(bind(42L, Types.DOUBLE)).isEqualTo(Value.of(42.0));
+    }
+
+    @Test
+    void decimalTargetsBindDecimalText() throws SQLException {
+        assertThat(bind(new BigDecimal("7"), Types.DECIMAL)).isEqualTo(Value.of("7"));
+        assertThat(bind(7, Types.NUMERIC)).isEqualTo(Value.of("7"));
+    }
+
+    @Test
+    void booleanTargetsBindZeroOrOneIntegers() throws SQLException {
+        assertThat(bind(true, Types.BIT)).isEqualTo(Value.of(1L));
+        assertThat(bind("false", Types.BOOLEAN)).isEqualTo(Value.of(0L));
+        assertThat(bind(new BigDecimal("0.5"), Types.BOOLEAN)).isEqualTo(Value.of(1L));
+    }
+
+    @Test
+    void textTargetsBindTheJavaTextForm() throws SQLException {
+        assertThat(bind(7, Types.VARCHAR)).isEqualTo(Value.of("7"));
+        assertThat(bind("x", Types.NCHAR)).isEqualTo(Value.of("x"));
+        assertThat(bind("x", Types.LONGNVARCHAR)).isEqualTo(Value.of("x"));
+        // The documented Boolean text format is "true" / "false", not "TRUE" / "FALSE".
+        assertThat(bind(true, Types.CHAR)).isEqualTo(Value.of("true"));
+        assertThat(bind(false, Types.VARCHAR)).isEqualTo(Value.of("false"));
+    }
+
+    @Test
+    void binaryTargetsBindHranaBlobs() throws SQLException {
+        byte[] bytes = {1, 2, 3};
+        assertThat(bind(bytes, Types.VARBINARY)).isEqualTo(Value.of(bytes));
+        assertThat(bind("abc", Types.BINARY))
+                .isEqualTo(Value.of("abc".getBytes(StandardCharsets.UTF_8)));
+        assertThat(bind(new LibsqlBlob(bytes), Types.BLOB)).isEqualTo(Value.of(bytes));
+    }
+
+    @Test
+    void temporalTargetsBindSqliteText() throws SQLException {
+        Calendar calendar = calendar2024();
+        java.util.Date utilDate = new java.util.Date(calendar.getTimeInMillis());
+        String expectedTimestamp = timestampText(LocalDateTime.ofInstant(
+                calendar.toInstant(), ZoneId.systemDefault()));
+
+        assertThat(bind(Date.valueOf("2024-01-02"), Types.DATE))
+                .isEqualTo(Value.of("2024-01-02"));
+        assertThat(bind(Time.valueOf("03:04:05"), Types.TIME))
+                .isEqualTo(Value.of("03:04:05"));
+        assertThat(bind(Timestamp.valueOf("2024-01-02 03:04:05"), Types.TIMESTAMP))
+                .isEqualTo(Value.of("2024-01-02 03:04:05"));
+        assertThat(bind(Timestamp.valueOf("2024-01-02 03:04:05"), Types.DATE))
+                .isEqualTo(Value.of("2024-01-02"));
+        assertThat(bind(LocalDateTime.of(2024, 1, 2, 3, 4, 5), Types.TIME))
+                .isEqualTo(Value.of("03:04:05"));
+        assertThat(bind(calendar, Types.TIMESTAMP)).isEqualTo(Value.of(expectedTimestamp));
+        assertThat(bind(utilDate, Types.TIMESTAMP)).isEqualTo(Value.of(expectedTimestamp));
+    }
+
+    @Test
+    void lobTargetsReadTheirStreams() throws SQLException {
+        byte[] bytes = {1, 2, 3};
+        assertThat(bind(new LibsqlClob("abc"), Types.CLOB)).isEqualTo(Value.of("abc"));
+        assertThat(bind(new LibsqlBlob(bytes), Types.BLOB)).isEqualTo(Value.of(bytes));
+        assertThat(bind(nclob("nclob"), Types.NCLOB)).isEqualTo(Value.of("nclob"));
+    }
+
+    @Test
+    void unlistedTargetPairThrowsFeatureNotSupported() {
+        assertThatThrownBy(() -> bind("42", Types.ARRAY))
+                .isInstanceOf(SQLFeatureNotSupportedException.class)
+                .hasMessageContaining("ARRAY");
+        assertThatThrownBy(() -> bind(7, Types.BLOB))
+                .isInstanceOf(SQLFeatureNotSupportedException.class)
+                .hasMessageContaining("BLOB");
+    }
+
+    @Test
+    void setObjectWithoutATargetFollowsTableB4() throws SQLException {
+        assertThat(bind(BigInteger.valueOf(7))).isEqualTo(Value.of(7L));
+        assertThat(bind((byte) 7)).isEqualTo(Value.of(7L));
+        assertThat(bind((short) 7)).isEqualTo(Value.of(7L));
+        assertThat(bind(true)).isEqualTo(Value.of(1L));
+        assertThat(bind(LocalDate.of(2024, 1, 2))).isEqualTo(Value.of("2024-01-02"));
+        assertThat(bind(LocalDateTime.of(2024, 1, 2, 3, 4, 5)))
+                .isEqualTo(Value.of("2024-01-02 03:04:05"));
+    }
+
+    private static Value bind(Object value) throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "insert into t values (?)")) {
+            statement.setObject(1, value);
+            statement.executeUpdate();
+        }
+        return connection.executed.get(0).args().get(0);
+    }
+
+    private static Value bind(Object value, int targetSqlType) throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "insert into t values (?)")) {
+            statement.setObject(1, value, targetSqlType);
+            statement.executeUpdate();
+        }
+        return connection.executed.get(0).args().get(0);
+    }
+
+    private static Calendar calendar2024() {
+        Calendar calendar = Calendar.getInstance(TimeZone.getTimeZone("UTC"));
+        calendar.clear();
+        calendar.set(2024, Calendar.JANUARY, 2, 3, 4, 5);
+        return calendar;
+    }
+
+    private static String timestampText(LocalDateTime value) {
+        return value.toLocalDate() + " " + String.format(
+                "%02d:%02d:%02d",
+                value.getHour(), value.getMinute(), value.getSecond());
+    }
+
+    private static NClob nclob(String text) {
+        return (NClob) java.lang.reflect.Proxy.newProxyInstance(
+                NClob.class.getClassLoader(),
+                new Class<?>[] {NClob.class},
+                (proxy, method, args) -> method.getName().equals("getCharacterStream")
+                        ? new StringReader(text)
+                        : null);
     }
 
     private static final class RecordingConnection extends LibsqlConnection {
