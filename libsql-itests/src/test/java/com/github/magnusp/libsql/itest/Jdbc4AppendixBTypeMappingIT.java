@@ -24,6 +24,7 @@ import java.sql.Ref;
 import java.sql.ResultSet;
 import java.sql.RowId;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLXML;
 import java.sql.Statement;
 import java.sql.Struct;
@@ -51,6 +52,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -140,6 +142,17 @@ public class Jdbc4AppendixBTypeMappingIT extends SqldContainerBase {
         return new JdbcType(name, sqlType, b1, b3, sample);
     }
 
+    /** The N/A policy: these declared and target types throw SQLFeatureNotSupportedException. */
+    private static final Set<String> NA_TYPES =
+            Set.of("ARRAY", "STRUCT", "REF", "JAVA_OBJECT", "DISTINCT");
+
+    private static final Set<Integer> NA_TARGETS =
+            Set.of(Types.ARRAY, Types.STRUCT, Types.REF, Types.JAVA_OBJECT, Types.DISTINCT);
+
+    /** The Table B-2/B-4 Java object types that map to an N/A JDBC type. */
+    private static final Set<String> NA_VALUES =
+            Set.of("java.sql.Array", "java.sql.Struct", "java.sql.Ref", "Java class");
+
     interface SqlRead {
         Object read(ResultSet resultSet, int column) throws SQLException;
     }
@@ -190,7 +203,11 @@ public class Jdbc4AppendixBTypeMappingIT extends SqldContainerBase {
                     "CREATE TABLE " + table + " (v \"" + type.name() + "\")");
             try (PreparedStatement insert =
                     connection.prepareStatement("INSERT INTO " + table + " (v) VALUES (?)")) {
-                insert.setObject(1, type.sample());
+                if (NA_TYPES.contains(type.name())) {
+                    insert.setString(1, String.valueOf(type.sample()));
+                } else {
+                    insert.setObject(1, type.sample());
+                }
                 insert.executeUpdate();
             }
             try (Statement query = connection.createStatement();
@@ -199,6 +216,16 @@ public class Jdbc4AppendixBTypeMappingIT extends SqldContainerBase {
                 assertThat(resultSet.getMetaData().getColumnTypeName(1))
                         .as("server reported declared type for %s", type.name())
                         .isEqualTo(type.name());
+
+                if (NA_TYPES.contains(type.name())) {
+                    assertThatThrownBy(() -> NATURAL_GETTER.get(type.name()).read(resultSet, 1))
+                            .as("B-1: %s is N/A", type.name())
+                            .isInstanceOf(SQLFeatureNotSupportedException.class);
+                    assertThatThrownBy(() -> resultSet.getObject(1))
+                            .as("B-3: %s is N/A", type.name())
+                            .isInstanceOf(SQLFeatureNotSupportedException.class);
+                    return;
+                }
 
                 List<Executable> checks = new ArrayList<>();
                 checks.add(() -> {
@@ -285,6 +312,12 @@ public class Jdbc4AppendixBTypeMappingIT extends SqldContainerBase {
             try (Statement query = connection.createStatement();
                     ResultSet resultSet = query.executeQuery("SELECT v FROM " + table)) {
                 assertThat(resultSet.next()).isTrue();
+                if (NA_TYPES.contains(cell.declaredType())) {
+                    assertThatThrownBy(() -> cell.reader().read(resultSet, 1))
+                            .as("B-6: %s on %s is N/A", cell.getter(), cell.declaredType())
+                            .isInstanceOf(SQLFeatureNotSupportedException.class);
+                    return;
+                }
                 Object value;
                 try {
                     value = cell.reader().read(resultSet, 1);
@@ -397,6 +430,12 @@ public class Jdbc4AppendixBTypeMappingIT extends SqldContainerBase {
             statement.execute("CREATE TABLE " + table + " (v \"" + row.targetName() + "\")");
             try (PreparedStatement insert =
                     connection.prepareStatement("INSERT INTO " + table + " (v) VALUES (?)")) {
+                if (NA_VALUES.contains(row.name())) {
+                    assertThatThrownBy(() -> bindB2(insert, row))
+                            .as("B-2: %s -> %s is N/A", row.name(), row.targetName())
+                            .isInstanceOf(SQLFeatureNotSupportedException.class);
+                    return;
+                }
                 try {
                     bindB2(insert, row);
                 } catch (SQLException e) {
@@ -537,6 +576,12 @@ public class Jdbc4AppendixBTypeMappingIT extends SqldContainerBase {
             statement.execute("CREATE TABLE " + table + " (v \"" + row.targetName() + "\")");
             try (PreparedStatement insert =
                     connection.prepareStatement("INSERT INTO " + table + " (v) VALUES (?)")) {
+                if (NA_VALUES.contains(row.name())) {
+                    assertThatThrownBy(() -> insert.setObject(1, row.value()))
+                            .as("B-4: %s -> %s is N/A", row.name(), row.targetName())
+                            .isInstanceOf(SQLFeatureNotSupportedException.class);
+                    return;
+                }
                 insert.setObject(1, row.value());
                 insert.executeUpdate();
             }
@@ -686,7 +731,16 @@ public class Jdbc4AppendixBTypeMappingIT extends SqldContainerBase {
                             + placeholders + ")")) {
                 int parameter = 1;
                 for (Target target : TARGETS) {
-                    if (row.targets().contains(target.sqlType())) {
+                    if (row.targets().contains(target.sqlType())
+                            && NA_TARGETS.contains(target.sqlType())) {
+                        int index = parameter;
+                        assertThatThrownBy(
+                                        () -> insert.setObject(
+                                                index, sourceFor(row, target), target.sqlType()))
+                                .as("B-5: %s -> %s is N/A", row.name(), target.name())
+                                .isInstanceOf(SQLFeatureNotSupportedException.class);
+                        insert.setNull(parameter++, target.sqlType());
+                    } else if (row.targets().contains(target.sqlType())) {
                         insert.setObject(parameter++, sourceFor(row, target), target.sqlType());
                     } else {
                         insert.setNull(parameter++, target.sqlType());
@@ -706,6 +760,13 @@ public class Jdbc4AppendixBTypeMappingIT extends SqldContainerBase {
                     int valueColumn = typeofColumn + 1;
                     targetIndex++;
                     if (!row.targets().contains(target.sqlType())) {
+                        continue;
+                    }
+                    if (NA_TARGETS.contains(target.sqlType())) {
+                        checks.add(() -> assertThatThrownBy(
+                                        () -> readFor(target).read(resultSet, valueColumn))
+                                .as("B-5: reading %s for %s is N/A", target.name(), row.name())
+                                .isInstanceOf(SQLFeatureNotSupportedException.class));
                         continue;
                     }
                     checks.add(() -> {
