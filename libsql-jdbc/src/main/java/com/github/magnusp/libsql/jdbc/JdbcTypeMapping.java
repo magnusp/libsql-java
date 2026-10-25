@@ -200,4 +200,47 @@ final class JdbcTypeMapping {
         }
         aliases.put(spelling, type);
     }
+
+    /** Names a JDBC type for an error message or the compliance profile. */
+    static String sqlTypeName(int sqlType) {
+        return switch (sqlType) {
+            case Types.TINYINT -> "TINYINT";
+            case Types.SMALLINT -> "SMALLINT";
+            case Types.INTEGER -> "INTEGER";
+            case Types.BIGINT -> "BIGINT";
+            case Types.REAL -> "REAL";
+            case Types.FLOAT -> "FLOAT";
+            case Types.DOUBLE -> "DOUBLE";
+            case Types.NUMERIC -> "NUMERIC";
+            case Types.DECIMAL -> "DECIMAL";
+            case Types.BIT -> "BIT";
+            case Types.BOOLEAN -> "BOOLEAN";
+            case Types.CHAR -> "CHAR";
+            case Types.VARCHAR -> "VARCHAR";
+            case Types.LONGVARCHAR -> "LONGVARCHAR";
+            case Types.NCHAR -> "NCHAR";
+            case Types.NVARCHAR -> "NVARCHAR";
+            case Types.LONGNVARCHAR -> "LONGNVARCHAR";
+            case Types.BINARY -> "BINARY";
+            case Types.VARBINARY -> "VARBINARY";
+            case Types.LONGVARBINARY -> "LONGVARBINARY";
+            case Types.DATE -> "DATE";
+            case Types.TIME -> "TIME";
+            case Types.TIMESTAMP -> "TIMESTAMP";
+            case Types.CLOB -> "CLOB";
+            case Types.NCLOB -> "NCLOB";
+            case Types.BLOB -> "BLOB";
+            case Types.DATALINK -> "DATALINK";
+            case Types.ARRAY -> "ARRAY";
+            case Types.STRUCT -> "STRUCT";
+            case Types.REF -> "REF";
+            case Types.JAVA_OBJECT -> "JAVA_OBJECT";
+            case Types.ROWID -> "ROWID";
+            case Types.SQLXML -> "SQLXML";
+            case Types.DISTINCT -> "DISTINCT";
+            case Types.TIME_WITH_TIMEZONE -> "TIME_WITH_TIMEZONE";
+            case Types.TIMESTAMP_WITH_TIMEZONE -> "TIMESTAMP_WITH_TIMEZONE";
+            default -> "SQL type " + sqlType;
+        };
+    }
 }
