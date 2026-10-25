@@ -66,6 +66,11 @@ public class LibsqlResultSet implements ResultSet {
     private int fetchSize = 0;
     private LibsqlResultSetMetaData metadata;
 
+    // Values of the row the getters read. Before the first next() call this is the first row,
+    // matching sqlite-jdbc; after the last row it is null. next() swaps it with the row it lands
+    // on so a getter never has to resolve the row again.
+    private List<Value> currentValues;
+
     // O(1) column label lookup; the map is built lazily on first use.
     private Map<String, Integer> columnNameToIndex;
 
@@ -83,6 +88,7 @@ public class LibsqlResultSet implements ResultSet {
                 : null;
         this.closeStatementOnClose = closeStatementOnClose;
         this.declaredTypes = JdbcTypeMapping.declaredTypes(this.cols);
+        this.currentValues = this.rows.isEmpty() ? null : this.rows.get(0).values();
     }
 
     JdbcTypeMapping.JdbcType[] declaredTypes() {
@@ -96,11 +102,8 @@ public class LibsqlResultSet implements ResultSet {
     }
 
     private Value valueAtCursor(int columnIndex) {
-        int rowIndex = currentRowIndex < 0 ? 0 : currentRowIndex;
-        if (rowIndex >= rows.size()) {
-            return Value.ofNull();
-        }
-        return rows.get(rowIndex).values().get(columnIndex - 1);
+        List<Value> values = currentValues;
+        return values == null ? Value.ofNull() : values.get(columnIndex - 1);
     }
 
     private Value getCurrentValue(int columnIndex) throws SQLException {
@@ -133,7 +136,12 @@ public class LibsqlResultSet implements ResultSet {
         }
         lastColumnIndex = -1;
         currentRowIndex++;
-        return currentRowIndex < rows.size();
+        if (currentRowIndex < rows.size()) {
+            currentValues = rows.get(currentRowIndex).values();
+            return true;
+        }
+        currentValues = null;
+        return false;
     }
 
     @Override
