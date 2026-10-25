@@ -415,11 +415,11 @@ public class Jdbc4AppendixBTypeMappingIT extends SqldContainerBase {
                     TEXT, ResultSet::getURL, Expected.any(URL.class)),
             new WriteRow("Java class", new Marker("abc"), "JAVA_OBJECT", Types.JAVA_OBJECT,
                     UNSPECIFIED, (rs, i) -> rs.getObject(i), Expected.of(new Marker("abc"))),
-            new WriteRow("java.sql.RowId", stub(RowId.class), "ROWID", Types.ROWID, UNSPECIFIED,
+            new WriteRow("java.sql.RowId", rowId(TEXT_ROWID), "ROWID", Types.ROWID, UNSPECIFIED,
                     ResultSet::getRowId, Expected.any(RowId.class)),
             new WriteRow("java.sql.NClob", nclob("abc"), "NCLOB", Types.NCLOB, TEXT,
                     ResultSet::getNClob, Expected.any(NClob.class)),
-            new WriteRow("java.sql.SQLXML", stub(SQLXML.class), "SQLXML", Types.SQLXML, UNSPECIFIED,
+            new WriteRow("java.sql.SQLXML", sqlxml(TEXT_XML), "SQLXML", Types.SQLXML, UNSPECIFIED,
                     ResultSet::getSQLXML, Expected.any(SQLXML.class)));
 
     @ParameterizedTest(name = "B-2 {0} -> {2}")
@@ -881,10 +881,7 @@ public class Jdbc4AppendixBTypeMappingIT extends SqldContainerBase {
             case "TIMESTAMP" -> ResultSet::getTimestamp;
             case "CLOB" -> Jdbc4AppendixBTypeMappingIT::clobText;
             case "BLOB" -> Jdbc4AppendixBTypeMappingIT::blobBytes;
-            case "NCLOB" -> (rs, i) -> {
-                NClob nclob = rs.getNClob(i);
-                return nclob == null ? null : nclob.getSubString(1, (int) nclob.length());
-            };
+            case "NCLOB" -> ResultSet::getNClob;
             case "ARRAY" -> ResultSet::getArray;
             case "STRUCT" -> (rs, i) -> rs.getObject(i);
             case "REF" -> ResultSet::getRef;
@@ -1215,6 +1212,36 @@ public class Jdbc4AppendixBTypeMappingIT extends SqldContainerBase {
                     case "length" -> (long) text.length();
                     case "getSubString" -> text;
                     case "getCharacterStream" -> new StringReader(text);
+                    default -> defaultValue(method.getReturnType());
+                });
+    }
+
+    private static RowId rowId(String text) {
+        byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+        return (RowId) Proxy.newProxyInstance(
+                RowId.class.getClassLoader(),
+                new Class<?>[] {RowId.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "toString" -> text;
+                    case "hashCode" -> System.identityHashCode(proxy);
+                    case "equals" -> proxy == args[0];
+                    case "getBytes" -> bytes;
+                    default -> defaultValue(method.getReturnType());
+                });
+    }
+
+    private static SQLXML sqlxml(String text) {
+        return (SQLXML) Proxy.newProxyInstance(
+                SQLXML.class.getClassLoader(),
+                new Class<?>[] {SQLXML.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "toString" -> text;
+                    case "hashCode" -> System.identityHashCode(proxy);
+                    case "equals" -> proxy == args[0];
+                    case "getString" -> text;
+                    case "getCharacterStream" -> new StringReader(text);
+                    case "getBinaryStream" ->
+                            new ByteArrayInputStream(text.getBytes(StandardCharsets.UTF_8));
                     default -> defaultValue(method.getReturnType());
                 });
     }
