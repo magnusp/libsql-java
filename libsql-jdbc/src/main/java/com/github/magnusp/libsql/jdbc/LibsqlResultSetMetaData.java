@@ -17,6 +17,7 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
     private final LibsqlConnection connection;
     private final LibsqlResultSet resultSet;
     private final TableMetadataResolver tableMetadata;
+    private final JdbcTypeMapping.JdbcType[] declaredTypes;
 
     public LibsqlResultSetMetaData(List<Col> cols) {
         this(cols, List.of(), null, null, null);
@@ -34,6 +35,8 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         this.connection = connection;
         this.resultSet = resultSet;
         this.tableMetadata = new TableMetadataResolver(connection, sql, this.cols.size());
+        this.declaredTypes =
+                resultSet != null ? resultSet.declaredTypes() : JdbcTypeMapping.declaredTypes(this.cols);
     }
 
     @Override
@@ -100,7 +103,7 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         }
         // An expression column has no declared type, so signedness follows the
         // storage class of the current value, as xerial does.
-        return switch (XerialColumnType.storageClass(runtimeValue(column))) {
+        return switch (JdbcTypeMapping.storageClass(runtimeValue(column))) {
             case INTEGER, FLOAT, NULL -> true;
             case TEXT, BLOB -> false;
         };
@@ -153,10 +156,7 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public int getColumnType(int column) throws SQLException {
-        getCol(column);
-        String typeName = getColumnTypeName(column);
-        Value value = runtimeValue(column);
-        return XerialColumnType.jdbcType(value, typeName);
+        return resolvedType(column).sqlType();
     }
 
     @Override
@@ -184,8 +184,13 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public String getColumnClassName(int column) throws SQLException {
+        return resolvedType(column).objectClass().getName();
+    }
+
+    private JdbcTypeMapping.JdbcType resolvedType(int column) throws SQLException {
         getCol(column);
-        return XerialColumnType.className(runtimeValue(column));
+        JdbcTypeMapping.JdbcType declared = declaredTypes[column - 1];
+        return declared != null ? declared : JdbcTypeMapping.fallback(runtimeValue(column));
     }
 
     private String columnName(int column) throws SQLException {

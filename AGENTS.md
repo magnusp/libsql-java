@@ -134,6 +134,17 @@ DOCKER_CONFIG="$PWD/libsql-conformance/src/test/docker-config" \
 
 Use the absolute path shown. A relative `DOCKER_CONFIG` is resolved against the fork's working directory, not the shell's.
 
+### JDBC 4.3 Appendix B policy
+
+JDBC 4.3 Appendix B is the oracle for type mapping. The source is [`vendor/JDBC4-TYPE-MAPPING.md`](vendor/JDBC4-TYPE-MAPPING.md).
+
+- When Appendix B and sqlite-jdbc disagree, Appendix B wins. A conformance test that encodes the xerial behavior is quarantined in `libsql-conformance`, not copied.
+- Keep sqlite-jdbc parity only where Appendix B is silent. Parity never overrides a defined Appendix B conversion.
+- `ARRAY`, `STRUCT`, `REF`, `JAVA_OBJECT`, and `DISTINCT` are N/A. The driver throws `SQLFeatureNotSupportedException` and does not emulate them.
+- An expression column has no declared type. Its storage-class fallback is a documented exception in [`docs/jdbc-appendix-b-compliance.md`](docs/jdbc-appendix-b-compliance.md), not a supported Appendix B row.
+
+The compliance profile is [`docs/jdbc-appendix-b-compliance.md`](docs/jdbc-appendix-b-compliance.md). Run the commands in [`README.md`](README.md) before changing a type mapping.
+
 ---
 
 ## 5. Coding Standards & Conventions

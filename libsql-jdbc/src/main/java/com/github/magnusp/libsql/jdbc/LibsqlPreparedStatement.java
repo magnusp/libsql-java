@@ -258,37 +258,18 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
 
     @Override
     public void setObject(int parameterIndex, Object x) throws SQLException {
-        if (x == null) {
-            setNull(parameterIndex, 0);
-        } else if (x instanceof String s) {
-            setString(parameterIndex, s);
-        } else if (x instanceof Long l) {
-            setLong(parameterIndex, l);
-        } else if (x instanceof Integer i) {
-            setInt(parameterIndex, i);
-        } else if (x instanceof Double d) {
-            setDouble(parameterIndex, d);
-        } else if (x instanceof Float f) {
-            setFloat(parameterIndex, f);
-        } else if (x instanceof Boolean b) {
-            setBoolean(parameterIndex, b);
-        } else if (x instanceof byte[] bytes) {
-            setBytes(parameterIndex, bytes);
-        } else if (x instanceof BigDecimal bd) {
-            setBigDecimal(parameterIndex, bd);
-        } else {
-            setString(parameterIndex, x.toString());
-        }
+        setParam(parameterIndex, JdbcValueConverter.toValue(x));
     }
 
     @Override
     public void setObject(int parameterIndex, Object x, int targetSqlType) throws SQLException {
-        setObject(parameterIndex, x);
+        setParam(parameterIndex, JdbcValueConverter.toValue(x, targetSqlType));
     }
 
     @Override
     public void setObject(int parameterIndex, Object x, int targetSqlType, int scaleOrLength) throws SQLException {
-        setObject(parameterIndex, x);
+        // Hrana has no scale or length for a parameter; the target type still decides the value.
+        setParam(parameterIndex, JdbcValueConverter.toValue(x, targetSqlType));
     }
 
     @Override
@@ -378,7 +359,9 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
 
     @Override
     public void setRowId(int parameterIndex, RowId x) throws SQLException {
-        throw new SQLFeatureNotSupportedException("RowId parameters are not supported");
+        // SQLite has no ROWID parameter type; BLOB binds the bytes unchanged, so getRowId reads
+        // back exactly the bytes the caller supplied.
+        setParam(parameterIndex, Value.of(x == null ? null : x.getBytes()));
     }
 
     @Override
@@ -413,7 +396,7 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
 
     @Override
     public void setSQLXML(int parameterIndex, SQLXML xmlObject) throws SQLException {
-        throw new SQLFeatureNotSupportedException("SQLXML parameters are not supported");
+        setParam(parameterIndex, Value.of(xmlObject == null ? null : xmlObject.getString()));
     }
 
     @Override

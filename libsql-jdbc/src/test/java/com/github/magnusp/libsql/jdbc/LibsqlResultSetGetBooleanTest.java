@@ -20,7 +20,8 @@ class LibsqlResultSetGetBooleanTest {
 
     static Stream<Arguments> storageClasses() {
         return Stream.of(
-                Arguments.of("text 'true'", new Value.Text("true"), false),
+                Arguments.of("text 'true'", new Value.Text("true"), true),
+                Arguments.of("text 'false'", new Value.Text("false"), false),
                 Arguments.of("text '0'", new Value.Text("0"), false),
                 Arguments.of("text '2'", new Value.Text("2"), true),
                 Arguments.of("real 0.5", new Value.Float(0.5), false),
@@ -34,17 +35,26 @@ class LibsqlResultSetGetBooleanTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("storageClasses")
-    void getBooleanConvertsThroughIntegerLikeXerial(String name, Value value, boolean expected)
+    void getBooleanConvertsStorageClasses(String name, Value value, boolean expected)
             throws SQLException {
         LibsqlResultSet rs = resultSet(value);
         assertThat(rs.next()).isTrue();
 
         assertThat(rs.getBoolean(1)).isEqualTo(expected);
-        assertThat(rs.getBoolean(1)).isEqualTo(rs.getInt(1) != 0);
     }
 
     @Test
-    void reproductionValuesMatchSqliteJdbc() throws SQLException {
+    void getBooleanParsesTextTrueAndFalse() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Text("true"), new Value.Text("false"));
+
+        assertThat(rs.next()).isTrue();
+
+        assertThat(rs.getBoolean(1)).isTrue();
+        assertThat(rs.getBoolean(2)).isFalse();
+    }
+
+    @Test
+    void textTrueIsTrueAndNumericTextKeepsIntegerCoercion() throws SQLException {
         LibsqlResultSet rs = resultSet(
                 new Value.Text("true"),
                 new Value.Text("2"),
@@ -52,7 +62,7 @@ class LibsqlResultSetGetBooleanTest {
 
         assertThat(rs.next()).isTrue();
 
-        assertThat(rs.getBoolean(1)).isFalse();
+        assertThat(rs.getBoolean(1)).isTrue();
         assertThat(rs.getBoolean(2)).isTrue();
         assertThat(rs.getBoolean(3)).isFalse();
     }

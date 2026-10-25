@@ -12,7 +12,7 @@ import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 
     /** Read-only {@link Clob} over the materialized text of one result column. */
-final class LibsqlClob implements Clob {
+class LibsqlClob implements Clob {
 
         private String text;
         private boolean freed;

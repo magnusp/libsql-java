@@ -47,8 +47,32 @@ with:
 ./mvnw -pl libsql-conformance -am verify
 ```
 
-Last green result: 272 tests, 7 skipped, with `SavepointTest` included. The
-parity queue (#54) closed at 268 tests, 7 skipped.
+Last green result: 270 tests, 7 skipped, with `SavepointTest` included. The
+count excludes the four Appendix B quarantines below and includes the two
+harness tests for the quarantine.
+
+### Appendix B quarantines
+
+JDBC 4.3 Appendix B is the oracle. Four selected xerial test methods assert
+behavior that Appendix B replaces. They stay in the vendored tree and still
+run in the `xerial-control` profile, but `XerialQuarantine` excludes them from
+the libSQL run. The full type profile is in
+[`../docs/jdbc-appendix-b-compliance.md`](../docs/jdbc-appendix-b-compliance.md).
+
+| Test | Why the xerial expectation is quarantined |
+|---|---|
+| `org.sqlite.StatementTest#bytesTest` | xerial allows `getBytes` on a declared `BLOB`. Table B-6 lists `getBytes` only for `BINARY`, `VARBINARY`, and `LONGVARBINARY`. |
+| `org.sqlite.RSMetaDataTest#columnTypes` | xerial reports a declared `NCHAR` as `Types.CHAR`. Appendix B defines `NCHAR` as its own JDBC type, so the driver reports `Types.NCHAR`. |
+| `org.sqlite.RSMetaDataTest#testGetColumnClassName` | xerial reports a declared `BLOB` as `java.lang.Object`. Table B-3 maps `BLOB` to `java.sql.Blob`. |
+| `org.sqlite.PrepStmtTest#getObject` | xerial returns an `Integer` for `getObject` on a declared `BIT`. Table B-3 maps `BIT` to `Boolean`. |
+
+The exclusion is method-level, so each method also loses checks that do not
+conflict with Appendix B:
+
+- `StatementTest#bytesTest` also loses its BLOB `setBytes`/`getBytes` round trip.
+- `RSMetaDataTest#columnTypes` also checks other column types that do not conflict, including the INTEGER family, text, numeric, boolean, date and timestamp types, plus DECIMAL precision and scale.
+- `RSMetaDataTest#testGetColumnClassName` also checks the INTEGER, VARCHAR, and DOUBLE class names.
+- `PrepStmtTest#getObject` also checks other `getObject` rows (INTEGER, FLOAT, untyped, VARCHAR and BLOB columns) and the typed getters above them.
 
 ### Three-layer contract
 

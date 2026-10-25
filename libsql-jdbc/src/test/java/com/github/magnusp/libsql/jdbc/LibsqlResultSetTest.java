@@ -44,13 +44,15 @@ class LibsqlResultSetTest {
             null);
 
     @Test
-    void getObjectReturnsIntegerInRangeAndLongOutside() throws SQLException {
+    void getObjectReturnsDeclaredIntegerAndRejectsAValueThatDoesNotFit() throws SQLException {
         LibsqlResultSet resultSet = new LibsqlResultSet(new LibsqlStatement(null), INTEGER_ROWS);
 
         assertThat(resultSet.next()).isTrue();
         assertThat(resultSet.getObject(1)).isInstanceOf(Integer.class).isEqualTo(42);
         assertThat(resultSet.next()).isTrue();
-        assertThat(resultSet.getObject(1)).isInstanceOf(Long.class).isEqualTo(5_000_000_000L);
+        assertThatThrownBy(() -> resultSet.getObject(1))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("INTEGER");
     }
 
     @Test
@@ -470,24 +472,12 @@ class LibsqlResultSetTest {
         Reader reader = null;
 
         List<UnsupportedCall> calls = List.of(
-                new UnsupportedCall("getAsciiStream(int)", () -> rs.getAsciiStream(1)),
-                new UnsupportedCall("getAsciiStream(String)", () -> rs.getAsciiStream("c1")),
                 new UnsupportedCall("getUnicodeStream(int)", () -> rs.getUnicodeStream(1)),
                 new UnsupportedCall("getUnicodeStream(String)", () -> rs.getUnicodeStream("c1")),
                 new UnsupportedCall("getRef(int)", () -> rs.getRef(1)),
                 new UnsupportedCall("getRef(String)", () -> rs.getRef("c1")),
                 new UnsupportedCall("getArray(int)", () -> rs.getArray(1)),
                 new UnsupportedCall("getArray(String)", () -> rs.getArray("c1")),
-                new UnsupportedCall("getURL(int)", () -> rs.getURL(1)),
-                new UnsupportedCall("getURL(String)", () -> rs.getURL("c1")),
-                new UnsupportedCall("getRowId(int)", () -> rs.getRowId(1)),
-                new UnsupportedCall("getRowId(String)", () -> rs.getRowId("c1")),
-                new UnsupportedCall("getNClob(int)", () -> rs.getNClob(1)),
-                new UnsupportedCall("getNClob(String)", () -> rs.getNClob("c1")),
-                new UnsupportedCall("getSQLXML(int)", () -> rs.getSQLXML(1)),
-                new UnsupportedCall("getSQLXML(String)", () -> rs.getSQLXML("c1")),
-                new UnsupportedCall("getNCharacterStream(int)", () -> rs.getNCharacterStream(1)),
-                new UnsupportedCall("getNCharacterStream(String)", () -> rs.getNCharacterStream("c1")),
                 new UnsupportedCall("updateNull(int)", () -> rs.updateNull(1)),
                 new UnsupportedCall("updateBoolean(int)", () -> rs.updateBoolean(1, true)),
                 new UnsupportedCall("updateByte(int)", () -> rs.updateByte(1, (byte) 1)),
