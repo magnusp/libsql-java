@@ -10,6 +10,8 @@ import java.io.InputStream;
 import java.io.Reader;
 import java.io.StringReader;
 import java.math.BigDecimal;
+import java.net.MalformedURLException;
+import java.net.URI;
 import java.net.URL;
 import java.sql.Array;
 import java.sql.Blob;
@@ -424,11 +426,21 @@ public class LibsqlResultSet implements ResultSet {
         if (objectClass == Clob.class) {
             return clobValue(value);
         }
+        if (objectClass == NClob.class) {
+            return nclobValue(value);
+        }
         if (objectClass == Blob.class) {
             return blobValue(value);
         }
-        // NCLOB and DATALINK resolve to their declared wrapper types, but the wrapper getters
-        // arrive in PR-3, so the value keeps its storage-class representation until then.
+        if (objectClass == RowId.class) {
+            return rowIdValue(value);
+        }
+        if (objectClass == SQLXML.class) {
+            return sqlxmlValue(value);
+        }
+        if (objectClass == URL.class) {
+            return urlValue(value);
+        }
         return storedObject(value);
     }
 
@@ -624,13 +636,19 @@ public class LibsqlResultSet implements ResultSet {
         throw new SQLFeatureNotSupportedException("not supported by sqlite");
     }
 
-    @Override public InputStream getAsciiStream(int columnIndex) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override
+    public InputStream getAsciiStream(int columnIndex) throws SQLException {
+        String text = getString(columnIndex);
+        return text == null
+                ? null
+                : new ByteArrayInputStream(text.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+    }
     @Override @Deprecated @SuppressWarnings("deprecation") public InputStream getUnicodeStream(int columnIndex) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public InputStream getBinaryStream(int columnIndex) throws SQLException {
         byte[] bytes = getBytes(columnIndex);
         return bytes == null ? null : new ByteArrayInputStream(bytes);
     }
-    @Override public InputStream getAsciiStream(String columnLabel) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override public InputStream getAsciiStream(String columnLabel) throws SQLException { return getAsciiStream(findColumn(columnLabel)); }
     @Override @Deprecated @SuppressWarnings("deprecation") public InputStream getUnicodeStream(String columnLabel) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public InputStream getBinaryStream(String columnLabel) throws SQLException { return getBinaryStream(findColumn(columnLabel)); }
     @Override public SQLWarning getWarnings() throws SQLException { return null; }
@@ -748,8 +766,25 @@ public class LibsqlResultSet implements ResultSet {
     @Override public Time getTime(String columnLabel, Calendar cal) throws SQLException { return getTime(columnLabel); }
     @Override public Timestamp getTimestamp(int columnIndex, Calendar cal) throws SQLException { return getTimestamp(columnIndex); }
     @Override public Timestamp getTimestamp(String columnLabel, Calendar cal) throws SQLException { return getTimestamp(columnLabel); }
-    @Override public URL getURL(int columnIndex) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
-    @Override public URL getURL(String columnLabel) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override
+    public URL getURL(int columnIndex) throws SQLException {
+        return urlValue(getCurrentValue(columnIndex));
+    }
+
+    private static URL urlValue(Value value) throws SQLException {
+        String text = stringValue(value);
+        if (text == null) {
+            return null;
+        }
+        try {
+            // URI.toURL replaces the deprecated URL(String) constructor and rejects the same text.
+            return URI.create(text).toURL();
+        } catch (IllegalArgumentException | MalformedURLException e) {
+            throw new SQLException("Bad value for type URL: " + text, e);
+        }
+    }
+
+    @Override public URL getURL(String columnLabel) throws SQLException { return getURL(findColumn(columnLabel)); }
     @Override public void updateRef(int columnIndex, Ref x) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public void updateRef(String columnLabel, Ref x) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public void updateBlob(int columnIndex, Blob x) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
@@ -758,8 +793,14 @@ public class LibsqlResultSet implements ResultSet {
     @Override public void updateClob(String columnLabel, Clob x) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public void updateArray(int columnIndex, Array x) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public void updateArray(String columnLabel, Array x) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
-    @Override public RowId getRowId(int columnIndex) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
-    @Override public RowId getRowId(String columnLabel) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override public RowId getRowId(int columnIndex) throws SQLException {
+        return rowIdValue(getCurrentValue(columnIndex));
+    }
+    private static RowId rowIdValue(Value value) {
+        byte[] bytes = bytesValue(value);
+        return bytes == null ? null : new LibsqlRowId(bytes);
+    }
+    @Override public RowId getRowId(String columnLabel) throws SQLException { return getRowId(findColumn(columnLabel)); }
     @Override public void updateRowId(int columnIndex, RowId x) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public void updateRowId(String columnLabel, RowId x) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public int getHoldability() throws SQLException { return CLOSE_CURSORS_AT_COMMIT; }
@@ -767,16 +808,31 @@ public class LibsqlResultSet implements ResultSet {
     @Override public void updateNString(String columnLabel, String nString) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public void updateNClob(int columnIndex, NClob nClob) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public void updateNClob(String columnLabel, NClob nClob) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
-    @Override public NClob getNClob(int columnIndex) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
-    @Override public NClob getNClob(String columnLabel) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
-    @Override public SQLXML getSQLXML(int columnIndex) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
-    @Override public SQLXML getSQLXML(String columnLabel) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override public NClob getNClob(int columnIndex) throws SQLException {
+        return nclobValue(getCurrentValue(columnIndex));
+    }
+    private static NClob nclobValue(Value value) {
+        String text = stringValue(value);
+        return text == null ? null : new LibsqlNClob(text);
+    }
+    @Override public NClob getNClob(String columnLabel) throws SQLException { return getNClob(findColumn(columnLabel)); }
+    @Override public SQLXML getSQLXML(int columnIndex) throws SQLException {
+        return sqlxmlValue(getCurrentValue(columnIndex));
+    }
+    private static SQLXML sqlxmlValue(Value value) {
+        String text = stringValue(value);
+        return text == null ? null : new LibsqlSQLXML(text);
+    }
+    @Override public SQLXML getSQLXML(String columnLabel) throws SQLException { return getSQLXML(findColumn(columnLabel)); }
     @Override public void updateSQLXML(int columnIndex, SQLXML xmlObject) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public void updateSQLXML(String columnLabel, SQLXML xmlObject) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public String getNString(int columnIndex) throws SQLException { return getString(columnIndex); }
     @Override public String getNString(String columnLabel) throws SQLException { return getString(columnLabel); }
-    @Override public Reader getNCharacterStream(int columnIndex) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
-    @Override public Reader getNCharacterStream(String columnLabel) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override public Reader getNCharacterStream(int columnIndex) throws SQLException {
+        String text = getNString(columnIndex);
+        return text == null ? null : new StringReader(text);
+    }
+    @Override public Reader getNCharacterStream(String columnLabel) throws SQLException { return getNCharacterStream(findColumn(columnLabel)); }
     @Override public void updateNCharacterStream(int columnIndex, Reader x, long length) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public void updateNCharacterStream(String columnLabel, Reader reader, long length) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public void updateAsciiStream(int columnIndex, InputStream x, long length) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }

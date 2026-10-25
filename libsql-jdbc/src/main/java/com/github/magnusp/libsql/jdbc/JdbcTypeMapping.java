@@ -9,6 +9,8 @@ import java.sql.Blob;
 import java.sql.Clob;
 import java.sql.Date;
 import java.sql.NClob;
+import java.sql.RowId;
+import java.sql.SQLXML;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
@@ -159,6 +161,8 @@ final class JdbcTypeMapping {
                 entry("TIMESTAMP", Types.TIMESTAMP, Timestamp.class, Timestamp.class, StorageClass.TEXT),
                 entry("CLOB", Types.CLOB, Clob.class, Clob.class, StorageClass.TEXT),
                 entry("NCLOB", Types.NCLOB, NClob.class, NClob.class, StorageClass.TEXT),
+                entry("SQLXML", Types.SQLXML, SQLXML.class, SQLXML.class, StorageClass.TEXT),
+                entry("ROWID", Types.ROWID, RowId.class, RowId.class, StorageClass.TEXT),
                 entry("BLOB", Types.BLOB, Blob.class, Blob.class, StorageClass.BLOB),
                 entry("DATALINK", Types.DATALINK, URL.class, URL.class, StorageClass.TEXT));
     }
