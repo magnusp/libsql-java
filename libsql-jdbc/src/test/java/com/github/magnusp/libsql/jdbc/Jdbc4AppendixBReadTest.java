@@ -29,6 +29,9 @@ import java.sql.Struct;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.OffsetDateTime;
+import java.time.OffsetTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -566,6 +569,51 @@ class Jdbc4AppendixBReadTest {
                 .isEqualTo(new LibsqlRowId(new byte[] {1, 2}))
                 .hasSameHashCodeAs(new LibsqlRowId(new byte[] {1, 2}))
                 .isNotEqualTo(new LibsqlRowId(new byte[] {1, 3}));
+    }
+
+    // ---------------------------------------------------------------------
+    // PR-4 offset types: TIME_WITH_TIMEZONE and TIMESTAMP_WITH_TIMEZONE.
+    // ---------------------------------------------------------------------
+
+    @Test
+    void b6DeclaredOffsetTypesReturnOffsetJavaTypes() throws SQLException {
+        LibsqlResultSet timeRow = oneRow(jdbcType("TIME_WITH_TIMEZONE"), Value.of("03:04:05+01:00"));
+        assertThat(timeRow.next()).isTrue();
+        assertThat(timeRow.getObject(1))
+                .isEqualTo(OffsetTime.of(3, 4, 5, 0, ZoneOffset.ofHours(1)));
+        assertThat(timeRow.getMetaData().getColumnType(1)).isEqualTo(Types.TIME_WITH_TIMEZONE);
+        assertThat(timeRow.getMetaData().getColumnClassName(1))
+                .isEqualTo(OffsetTime.class.getName());
+
+        LibsqlResultSet timestampRow = oneRow(
+                jdbcType("TIMESTAMP_WITH_TIMEZONE"), Value.of("2024-01-02 03:04:05+01:00"));
+        assertThat(timestampRow.next()).isTrue();
+        assertThat(timestampRow.getObject(1))
+                .isEqualTo(OffsetDateTime.of(2024, 1, 2, 3, 4, 5, 0, ZoneOffset.ofHours(1)));
+        assertThat(timestampRow.getMetaData().getColumnType(1))
+                .isEqualTo(Types.TIMESTAMP_WITH_TIMEZONE);
+        assertThat(timestampRow.getMetaData().getColumnClassName(1))
+                .isEqualTo(OffsetDateTime.class.getName());
+    }
+
+    @Test
+    void offsetTextParsesZuluAndPlusOneAndRejectsMalformedText() throws SQLException {
+        LibsqlResultSet timeRow = oneRow(jdbcType("TIME_WITH_TIMEZONE"), Value.of("03:04:05Z"));
+        assertThat(timeRow.next()).isTrue();
+        assertThat(timeRow.getObject(1, OffsetTime.class))
+                .isEqualTo(OffsetTime.of(3, 4, 5, 0, ZoneOffset.UTC));
+
+        LibsqlResultSet timestampRow = oneRow(
+                jdbcType("TIMESTAMP_WITH_TIMEZONE"), Value.of("2024-01-02T03:04:05+01:00"));
+        assertThat(timestampRow.next()).isTrue();
+        assertThat(timestampRow.getObject(1, OffsetDateTime.class))
+                .isEqualTo(OffsetDateTime.of(2024, 1, 2, 3, 4, 5, 0, ZoneOffset.ofHours(1)));
+
+        LibsqlResultSet malformed = oneRow(jdbcType("TIME_WITH_TIMEZONE"), Value.of("not-a-time"));
+        assertThat(malformed.next()).isTrue();
+        assertThatThrownBy(() -> malformed.getObject(1, OffsetTime.class))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("OffsetTime");
     }
 
     // ---------------------------------------------------------------------
