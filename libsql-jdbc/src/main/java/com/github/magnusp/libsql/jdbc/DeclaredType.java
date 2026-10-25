@@ -35,13 +35,18 @@ final class DeclaredType {
         return declType != null;
     }
 
-    String typeName() {
-        if (declType != null) {
-            Matcher matcher = COLUMN_TYPENAME.matcher(declType);
-            matcher.find();
-            return matcher.group(1).toUpperCase(Locale.ENGLISH);
+    String declaredTypeName() {
+        if (declType == null) {
+            return null;
         }
-        return "NUMERIC";
+        Matcher matcher = COLUMN_TYPENAME.matcher(declType);
+        matcher.find();
+        return matcher.group(1).toUpperCase(Locale.ENGLISH);
+    }
+
+    String typeName() {
+        String name = declaredTypeName();
+        return name != null ? name : "NUMERIC";
     }
 
     int precision() {
