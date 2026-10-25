@@ -12,6 +12,7 @@ import java.sql.NClob;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -22,6 +23,11 @@ import java.util.Map;
  * the stored value. A column with no declared type, or with a declared type outside the registry,
  * falls back to the storage class of the value and marks the result {@link Support#FALLBACK} so a
  * caller can record the exception.
+ *
+ * <p>The registry holds the 27 canonical JDBC 4.3 Appendix B type names. A separate alias table
+ * maps the SQLite spellings that Appendix B does not name, such as {@code INT8} and {@code
+ * DATETIME}, to the registry entry they stand for, preserving the sqlite-jdbc metadata that
+ * existing users see. Both tables resolve through the declared type, never through the value.
  */
 final class JdbcTypeMapping {
 
@@ -55,6 +61,7 @@ final class JdbcTypeMapping {
             fallback(Types.NUMERIC, Object.class, Object.class, StorageClass.NULL);
 
     private static final Map<String, JdbcType> DECLARED = declaredTypeRegistry();
+    private static final Map<String, JdbcType> ALIASES = aliasTypes();
 
     private JdbcTypeMapping() {}
 
@@ -82,7 +89,8 @@ final class JdbcTypeMapping {
         if (name == null) {
             return null;
         }
-        return DECLARED.get(name);
+        JdbcType type = DECLARED.get(name);
+        return type != null ? type : ALIASES.get(name);
     }
 
     static JdbcType fallback(Value value) {
@@ -158,5 +166,38 @@ final class JdbcTypeMapping {
     private static Map.Entry<String, JdbcType> entry(
             String name, int sqlType, Class<?> javaClass, Class<?> objectClass, StorageClass storage) {
         return Map.entry(name, new JdbcType(sqlType, javaClass, objectClass, storage, Support.SUPPORTED));
+    }
+
+    /**
+     * Maps the SQLite spellings that sqlite-jdbc 3.53.4.0 reported with a canonical JDBC type to
+     * the registry entry for that type.
+     *
+     * <p>Appendix B does not name these spellings, so sqlite-jdbc parity decides their metadata.
+     * The alias resolves to the same {@link JdbcType} instance as its canonical name, which keeps
+     * the {@code getObject} conversion and the metadata in agreement with the canonical type. An
+     * alias never inspects the value: {@code INT8} is {@code BIGINT} even when the value is small.
+     */
+    private static Map<String, JdbcType> aliasTypes() {
+        Map<String, JdbcType> aliases = new HashMap<>();
+        alias(aliases, "INT", "INTEGER");
+        alias(aliases, "INT2", "SMALLINT");
+        alias(aliases, "INT8", "BIGINT");
+        alias(aliases, "MEDIUMINT", "INTEGER");
+        alias(aliases, "UNSIGNED BIG INT", "BIGINT");
+        alias(aliases, "DATETIME", "TIMESTAMP");
+        alias(aliases, "DOUBLE PRECISION", "DOUBLE");
+        alias(aliases, "TEXT", "VARCHAR");
+        alias(aliases, "CHARACTER", "CHAR");
+        alias(aliases, "NATIVE CHARACTER", "CHAR");
+        alias(aliases, "VARYING CHARACTER", "VARCHAR");
+        return Map.copyOf(aliases);
+    }
+
+    private static void alias(Map<String, JdbcType> aliases, String spelling, String canonical) {
+        JdbcType type = DECLARED.get(canonical);
+        if (type == null) {
+            throw new IllegalStateException("Unknown canonical type " + canonical + " for alias " + spelling);
+        }
+        aliases.put(spelling, type);
     }
 }

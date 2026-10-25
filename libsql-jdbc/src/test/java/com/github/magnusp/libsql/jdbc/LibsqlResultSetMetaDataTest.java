@@ -265,6 +265,64 @@ class LibsqlResultSetMetaDataTest {
     }
 
     @Test
+    void resolvesSqliteAliasSpellingsThroughTheDeclaredType() throws SQLException {
+        StmtResult result = new StmtResult(
+                List.of(
+                        new Col("dt", "DATETIME"),
+                        new Col("i", "INT"),
+                        new Col("i2", "INT2"),
+                        new Col("i8", "INT8"),
+                        new Col("mi", "MEDIUMINT"),
+                        new Col("ubi", "UNSIGNED BIG INT"),
+                        new Col("dp", "DOUBLE PRECISION"),
+                        new Col("txt", "TEXT"),
+                        new Col("ch", "CHARACTER"),
+                        new Col("nch", "NATIVE CHARACTER"),
+                        new Col("vch", "VARYING CHARACTER"),
+                        new Col("v20", "VARCHAR(20)")),
+                List.of(new Row(List.of(
+                        Value.of("2024-01-02 03:04:05"),
+                        Value.of(42L),
+                        Value.of(42L),
+                        Value.of(42L),
+                        Value.of(42L),
+                        Value.of(42L),
+                        Value.of(42.5),
+                        Value.of("abc"),
+                        Value.of("abc"),
+                        Value.of("abc"),
+                        Value.of("abc"),
+                        Value.of("abc")))),
+                0,
+                null);
+        LibsqlResultSet resultSet = new LibsqlResultSet(null, result);
+        ResultSetMetaData metadata = resultSet.getMetaData();
+
+        assertThat(metadata.getColumnTypeName(1)).isEqualTo("DATETIME");
+        assertThat(metadata.getColumnType(1)).isEqualTo(Types.TIMESTAMP);
+        assertThat(metadata.getColumnType(2)).as("INT").isEqualTo(Types.INTEGER);
+        assertThat(metadata.getColumnType(3)).as("INT2").isEqualTo(Types.SMALLINT);
+        assertThat(metadata.getColumnType(4)).as("INT8").isEqualTo(Types.BIGINT);
+        assertThat(metadata.getColumnType(5)).as("MEDIUMINT").isEqualTo(Types.INTEGER);
+        assertThat(metadata.getColumnType(6)).as("UNSIGNED BIG INT").isEqualTo(Types.BIGINT);
+        assertThat(metadata.getColumnType(7)).as("DOUBLE PRECISION").isEqualTo(Types.DOUBLE);
+        assertThat(metadata.getColumnType(8)).as("TEXT").isEqualTo(Types.VARCHAR);
+        assertThat(metadata.getColumnType(9)).as("CHARACTER").isEqualTo(Types.CHAR);
+        assertThat(metadata.getColumnType(10)).as("NATIVE CHARACTER").isEqualTo(Types.CHAR);
+        assertThat(metadata.getColumnType(11)).as("VARYING CHARACTER").isEqualTo(Types.VARCHAR);
+        assertThat(metadata.getColumnType(12)).as("VARCHAR(20)").isEqualTo(Types.VARCHAR);
+
+        assertThat(resultSet.next()).isTrue();
+        assertThat(resultSet.getObject(1)).isInstanceOf(java.sql.Timestamp.class);
+        assertThat(resultSet.getObject(2)).isInstanceOf(Integer.class);
+        assertThat(resultSet.getObject(3)).isInstanceOf(Integer.class);
+        assertThat(resultSet.getObject(4)).as("INT8 keeps BIGINT for a small value").isInstanceOf(Long.class);
+        assertThat(resultSet.getObject(6)).isInstanceOf(Long.class);
+        assertThat(resultSet.getObject(7)).isInstanceOf(Double.class);
+        assertThat(resultSet.getObject(8)).isInstanceOf(String.class);
+    }
+
+    @Test
     void isSignedMatchesXerialNarrowTypeNameSet() throws SQLException {
         LibsqlResultSetMetaData metadata = new LibsqlResultSetMetaData(
                 List.of(
@@ -364,7 +422,7 @@ class LibsqlResultSetMetaDataTest {
         List<String> expected = List.of(
                 Integer.class.getName(),
                 Long.class.getName(),
-                Object.class.getName(),
+                String.class.getName(),
                 Blob.class.getName(),
                 Boolean.class.getName(),
                 Float.class.getName(),
