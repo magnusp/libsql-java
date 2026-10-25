@@ -457,6 +457,8 @@ class LibsqlResultSetTest {
                 .hasMessageContaining("null");
     }
 
+    // The deprecated Unicode stream getters are part of the unsupported-method contract.
+    @SuppressWarnings("deprecation")
     @Test
     void everyUnsupportedMethodThrowsSqlFeatureNotSupportedException() throws SQLException {
         LibsqlResultSet rs = resultSet(new Value.Integer(1));

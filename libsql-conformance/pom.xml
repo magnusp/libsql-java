@@ -164,6 +164,23 @@
                 </executions>
             </plugin>
             <plugin>
+                <!-- The vendored xerial tests use deprecated JDBC API on purpose.
+                     Suppress the deprecation detail and javac's summary note for the test compile. -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>default-testCompile</id>
+                        <configuration>
+                            <compilerArgs combine.children="append">
+                                <arg>-Xlint:-deprecation</arg>
+                                <arg>-XDsuppressNotes</arg>
+                            </compilerArgs>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>

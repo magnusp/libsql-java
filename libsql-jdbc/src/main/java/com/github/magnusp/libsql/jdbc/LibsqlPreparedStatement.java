@@ -52,6 +52,9 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
     // Sequential list indexed by JDBC parameter position; no map or boxing overhead.
     private final List<Value> parameters = new ArrayList<>();
 
+    // ParameterMetaDataView only stores this reference and calls checkClosed() after construction,
+    // so no subclass method can run against a half-built statement.
+    @SuppressWarnings("this-escape")
     public LibsqlPreparedStatement(LibsqlConnection connection, String sql) {
         super(connection);
         this.sql = sql;

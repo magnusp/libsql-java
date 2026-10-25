@@ -409,6 +409,8 @@ class LibsqlPreparedStatementTest {
                 .containsExactly(Value.of(7L), Value.ofNull());
     }
 
+    // The deprecated Unicode stream setter is part of the local-conversion contract.
+    @SuppressWarnings("deprecation")
     @Test
     void streamSettersBindLocalConversions() throws SQLException {
         RecordingConnection connection = new RecordingConnection(NO_ROWS);
