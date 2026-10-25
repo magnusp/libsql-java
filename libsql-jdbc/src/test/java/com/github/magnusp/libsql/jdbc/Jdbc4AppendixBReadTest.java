@@ -9,6 +9,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.Reader;
 import java.math.BigDecimal;
@@ -36,6 +37,7 @@ import java.util.Set;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.fail;
 
 /**
@@ -466,6 +468,107 @@ class Jdbc4AppendixBReadTest {
     }
 
     // ---------------------------------------------------------------------
+    // PR-3 wrappers: URL, NClob, SQLXML, RowId, and the ASCII/Unicode streams.
+    // ---------------------------------------------------------------------
+
+    @Test
+    void b1UrlGetterParsesAbsoluteTextAndRejectsTheRest() throws SQLException {
+        LibsqlResultSet absolute = oneRow(jdbcType("DATALINK"), TEXT_URL);
+        assertThat(absolute.next()).isTrue();
+        assertThat(absolute.getURL(1).toExternalForm()).isEqualTo("https://example.com");
+        assertThat(absolute.getURL("c").toExternalForm()).isEqualTo("https://example.com");
+
+        LibsqlResultSet malformed = oneRow(jdbcType("DATALINK"), Value.of("not a url"));
+        assertThat(malformed.next()).isTrue();
+        assertThatThrownBy(() -> malformed.getURL(1))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("URL");
+    }
+
+    @Test
+    void b3NewWrappersReadBackTheirContent() throws Exception {
+        LibsqlResultSet nclobRow = oneRow(jdbcType("NCLOB"), TEXT_ABC);
+        assertThat(nclobRow.next()).isTrue();
+        NClob nclob = nclobRow.getNClob(1);
+        assertThat(nclob.length()).isEqualTo(3);
+        assertThat(nclob.getSubString(1, 2)).isEqualTo("ab");
+        assertThat(readAll(nclob.getCharacterStream())).isEqualTo("abc");
+        assertThat(nclobRow.getNClob("c").getSubString(2, 1)).isEqualTo("b");
+
+        LibsqlResultSet xmlRow = oneRow(jdbcType("SQLXML"), TEXT_XML);
+        assertThat(xmlRow.next()).isTrue();
+        SQLXML xml = xmlRow.getSQLXML(1);
+        assertThat(xml.getString()).isEqualTo("<a/>");
+        assertThat(readAll(xml.getCharacterStream())).isEqualTo("<a/>");
+        assertThat(readAll(xml.getBinaryStream())).isEqualTo("<a/>".getBytes(StandardCharsets.UTF_8));
+        assertThat(xmlRow.getSQLXML("c").getString()).isEqualTo("<a/>");
+
+        LibsqlResultSet rowIdRow = oneRow(jdbcType("ROWID"), TEXT_ROWID);
+        assertThat(rowIdRow.next()).isTrue();
+        assertThat(rowIdRow.getRowId(1).getBytes())
+                .isEqualTo("rowid-1".getBytes(StandardCharsets.UTF_8));
+        assertThat(rowIdRow.getRowId("c").getBytes())
+                .isEqualTo("rowid-1".getBytes(StandardCharsets.UTF_8));
+
+        LibsqlResultSet textRow = oneRow(jdbcType("VARCHAR"), TEXT_ABC);
+        assertThat(textRow.next()).isTrue();
+        assertThat(readAll(textRow.getAsciiStream(1)))
+                .isEqualTo("abc".getBytes(StandardCharsets.US_ASCII));
+        assertThat(readAll(textRow.getAsciiStream("c")))
+                .isEqualTo("abc".getBytes(StandardCharsets.US_ASCII));
+        assertThat(readAll(textRow.getNCharacterStream(1))).isEqualTo("abc");
+        assertThat(readAll(textRow.getNCharacterStream("c"))).isEqualTo("abc");
+    }
+
+    @Test
+    void b3FreedWrappersRejectFurtherReads() throws SQLException {
+        LibsqlResultSet nclobRow = oneRow(jdbcType("NCLOB"), TEXT_ABC);
+        assertThat(nclobRow.next()).isTrue();
+        NClob nclob = nclobRow.getNClob(1);
+        nclob.free();
+        assertThatThrownBy(nclob::length).isInstanceOf(SQLException.class);
+        assertThatThrownBy(() -> nclob.getSubString(1, 1)).isInstanceOf(SQLException.class);
+        assertThatThrownBy(nclob::getCharacterStream).isInstanceOf(SQLException.class);
+
+        LibsqlResultSet xmlRow = oneRow(jdbcType("SQLXML"), TEXT_XML);
+        assertThat(xmlRow.next()).isTrue();
+        SQLXML xml = xmlRow.getSQLXML(1);
+        xml.free();
+        assertThatThrownBy(xml::getString).isInstanceOf(SQLException.class);
+        assertThatThrownBy(xml::getCharacterStream).isInstanceOf(SQLException.class);
+        assertThatThrownBy(xml::getBinaryStream).isInstanceOf(SQLException.class);
+
+        LibsqlResultSet clobRow = oneRow(jdbcType("CLOB"), TEXT_ABC);
+        assertThat(clobRow.next()).isTrue();
+        Clob clob = clobRow.getClob(1);
+        clob.free();
+        assertThatThrownBy(clob::length).isInstanceOf(SQLException.class);
+        assertThatThrownBy(clob::getCharacterStream).isInstanceOf(SQLException.class);
+        assertThatThrownBy(clob::getAsciiStream).isInstanceOf(SQLException.class);
+
+        LibsqlResultSet blobRow = oneRow(jdbcType("BLOB"), BYTES_ABC);
+        assertThat(blobRow.next()).isTrue();
+        Blob blob = blobRow.getBlob(1);
+        blob.free();
+        assertThatThrownBy(blob::length).isInstanceOf(SQLException.class);
+        assertThatThrownBy(blob::getBinaryStream).isInstanceOf(SQLException.class);
+        assertThatThrownBy(() -> blob.getBytes(1, 1)).isInstanceOf(SQLException.class);
+    }
+
+    @Test
+    void b3RowIdComparesAndCopiesItsBytes() {
+        LibsqlRowId rowId = new LibsqlRowId(new byte[] {1, 2});
+        byte[] returned = rowId.getBytes();
+        returned[0] = 9;
+
+        assertThat(rowId.getBytes()).containsExactly(1, 2);
+        assertThat(rowId)
+                .isEqualTo(new LibsqlRowId(new byte[] {1, 2}))
+                .hasSameHashCodeAs(new LibsqlRowId(new byte[] {1, 2}))
+                .isNotEqualTo(new LibsqlRowId(new byte[] {1, 3}));
+    }
+
+    // ---------------------------------------------------------------------
     // Fixtures and helpers.
     // ---------------------------------------------------------------------
 
@@ -500,6 +603,20 @@ class Jdbc4AppendixBReadTest {
 
     private static LibsqlResultSet oneRow(JdbcType type, Value value) {
         return oneRow(type.name(), value);
+    }
+
+    private static String readAll(Reader reader) throws IOException {
+        StringBuilder text = new StringBuilder();
+        char[] buffer = new char[256];
+        int count;
+        while ((count = reader.read(buffer)) != -1) {
+            text.append(buffer, 0, count);
+        }
+        return text.toString();
+    }
+
+    private static byte[] readAll(InputStream stream) throws IOException {
+        return stream.readAllBytes();
     }
 
     private static LibsqlResultSet oneRow(String declaredType, Value value) {
