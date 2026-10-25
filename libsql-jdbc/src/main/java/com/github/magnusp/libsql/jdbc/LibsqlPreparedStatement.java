@@ -359,7 +359,9 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
 
     @Override
     public void setRowId(int parameterIndex, RowId x) throws SQLException {
-        throw new SQLFeatureNotSupportedException("RowId parameters are not supported");
+        // SQLite has no ROWID parameter type; BLOB binds the bytes unchanged, so getRowId reads
+        // back exactly the bytes the caller supplied.
+        setParam(parameterIndex, Value.of(x == null ? null : x.getBytes()));
     }
 
     @Override
@@ -394,7 +396,7 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
 
     @Override
     public void setSQLXML(int parameterIndex, SQLXML xmlObject) throws SQLException {
-        throw new SQLFeatureNotSupportedException("SQLXML parameters are not supported");
+        setParam(parameterIndex, Value.of(xmlObject == null ? null : xmlObject.getString()));
     }
 
     @Override

@@ -559,21 +559,51 @@ class LibsqlPreparedStatementTest {
                 .isEqualTo(Value.of("2024-01-02 03:04:05"));
     }
 
+    @Test
+    void rowIdAndSqlXmlParametersBindTheirContent() throws SQLException {
+        byte[] bytes = {1, 2, 3};
+        assertThat(bindParameter(statement -> statement.setRowId(1, new LibsqlRowId(bytes))))
+                .isEqualTo(Value.of(bytes));
+        assertThat(bindParameter(statement -> statement.setRowId(1, null)))
+                .isEqualTo(Value.ofNull());
+        assertThat(bindParameter(statement -> statement.setSQLXML(1, new LibsqlSQLXML("<a/>"))))
+                .isEqualTo(Value.of("<a/>"));
+        assertThat(bindParameter(statement -> statement.setSQLXML(1, null)))
+                .isEqualTo(Value.ofNull());
+    }
+
+    @Test
+    void rowIdBoundAsBlobReadsBackTheSameBytes() throws SQLException {
+        byte[] bytes = "rowid-1".getBytes(StandardCharsets.UTF_8);
+        Value bound = bindParameter(statement -> statement.setRowId(1, new LibsqlRowId(bytes)));
+
+        LibsqlResultSet rows = new LibsqlResultSet(
+                new LibsqlStatement(null),
+                new StmtResult(
+                        List.of(new Col("c", "ROWID")), List.of(new Row(List.of(bound))), 0, null));
+
+        assertThat(rows.next()).isTrue();
+        assertThat(rows.getRowId(1).getBytes()).isEqualTo(bytes);
+    }
+
     private static Value bind(Object value) throws SQLException {
-        RecordingConnection connection = new RecordingConnection(NO_ROWS);
-        try (LibsqlPreparedStatement statement =
-                new LibsqlPreparedStatement(connection, "insert into t values (?)")) {
-            statement.setObject(1, value);
-            statement.executeUpdate();
-        }
-        return connection.executed.get(0).args().get(0);
+        return bindParameter(statement -> statement.setObject(1, value));
     }
 
     private static Value bind(Object value, int targetSqlType) throws SQLException {
+        return bindParameter(statement -> statement.setObject(1, value, targetSqlType));
+    }
+
+    @FunctionalInterface
+    private interface ParameterBinder {
+        void bind(LibsqlPreparedStatement statement) throws SQLException;
+    }
+
+    private static Value bindParameter(ParameterBinder binder) throws SQLException {
         RecordingConnection connection = new RecordingConnection(NO_ROWS);
         try (LibsqlPreparedStatement statement =
                 new LibsqlPreparedStatement(connection, "insert into t values (?)")) {
-            statement.setObject(1, value, targetSqlType);
+            binder.bind(statement);
             statement.executeUpdate();
         }
         return connection.executed.get(0).args().get(0);
