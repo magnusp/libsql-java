@@ -157,8 +157,8 @@ class TableMetadataResolver {
                 columns.put(
                         columnName.toLowerCase(Locale.ROOT),
                         new ColumnInfo(
-                                XerialColumnType.integer(values.get(3)) != 0,
-                                XerialColumnType.integer(values.get(4)) != 0));
+                                JdbcTypeMapping.integer(values.get(3)) != 0,
+                                JdbcTypeMapping.integer(values.get(4)) != 0));
             }
         }
         return new TableInfo(tableName != null ? tableName : fallbackName, createSql, columns);

@@ -185,13 +185,24 @@ public class LibsqlResultSet implements ResultSet {
     }
 
     /**
-     * Converts every storage class through {@link #getInt(int)}, matching sqlite-jdbc. NULL and values
-     * whose integer coercion is zero are false: non-numeric text such as {@code "true"}, REAL values
-     * between -1 and 1, and empty or non-numeric blobs. Integers, REAL values truncated to a nonzero
-     * integer, and text or blob numeric prefixes such as {@code "2"} or {@code x'313233'} are true.
+     * Converts every storage class through {@link #getInt(int)}, matching sqlite-jdbc, except that
+     * the text values {@code true} and {@code false} are parsed as booleans. NULL and values whose
+     * integer coercion is zero are false: numeric text such as {@code "0"}, REAL values between -1
+     * and 1, and empty or non-numeric blobs. Integers, REAL values truncated to a nonzero integer,
+     * and text or blob numeric prefixes such as {@code "2"} or {@code x'313233'} are true.
      */
     @Override
     public boolean getBoolean(int columnIndex) throws SQLException {
+        Value value = getCurrentValue(columnIndex);
+        if (value instanceof Value.Text text) {
+            String string = text.value().trim();
+            if ("true".equalsIgnoreCase(string)) {
+                return true;
+            }
+            if ("false".equalsIgnoreCase(string)) {
+                return false;
+            }
+        }
         return getInt(columnIndex) != 0;
     }
 
@@ -299,8 +310,61 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public Object getObject(int columnIndex) throws SQLException {
-        Value val = getCurrentValue(columnIndex);
-        return switch (val) {
+        Value value = getCurrentValue(columnIndex);
+        if (value instanceof Value.Null) {
+            return null;
+        }
+        return objectValue(JdbcTypeMapping.resolve(cols.get(columnIndex - 1), value), columnIndex);
+    }
+
+    private Object objectValue(JdbcTypeMapping.JdbcType type, int columnIndex) throws SQLException {
+        Class<?> objectClass = type.objectClass();
+        if (objectClass == Integer.class) {
+            return checkedInt(columnIndex, type.sqlType());
+        }
+        if (objectClass == Long.class) {
+            return getLong(columnIndex);
+        }
+        if (objectClass == BigDecimal.class) {
+            return getBigDecimal(columnIndex);
+        }
+        if (objectClass == Boolean.class) {
+            return getBoolean(columnIndex);
+        }
+        if (objectClass == Float.class) {
+            return getFloat(columnIndex);
+        }
+        if (objectClass == Double.class) {
+            return getDouble(columnIndex);
+        }
+        if (objectClass == String.class) {
+            return getString(columnIndex);
+        }
+        if (objectClass == byte[].class) {
+            return getBytes(columnIndex);
+        }
+        if (objectClass == Date.class) {
+            return getDate(columnIndex);
+        }
+        if (objectClass == Time.class) {
+            return getTime(columnIndex);
+        }
+        if (objectClass == Timestamp.class) {
+            return getTimestamp(columnIndex);
+        }
+        if (objectClass == Clob.class) {
+            return getClob(columnIndex);
+        }
+        if (objectClass == Blob.class) {
+            return getBlob(columnIndex);
+        }
+        // NCLOB and DATALINK resolve to their declared wrapper types, but the wrapper getters
+        // arrive in PR-3, so the value keeps its storage-class representation until then.
+        return storedObject(getCurrentValue(columnIndex));
+    }
+
+    private static Object storedObject(Value value) {
+        return switch (value) {
             case Value.Null n -> null;
             case Value.Integer i -> i.value() >= Integer.MIN_VALUE && i.value() <= Integer.MAX_VALUE
                     ? (Object) (int) i.value()
@@ -308,6 +372,24 @@ public class LibsqlResultSet implements ResultSet {
             case Value.Float f -> f.value();
             case Value.Text t -> t.value();
             case Value.Blob b -> b.bytes();
+        };
+    }
+
+    private Integer checkedInt(int columnIndex, int sqlType) throws SQLException {
+        long value = getLong(columnIndex);
+        if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
+            throw new SQLException(
+                    "Value " + value + " does not fit the declared " + sqlTypeName(sqlType) + " type");
+        }
+        return (int) value;
+    }
+
+    private static String sqlTypeName(int sqlType) {
+        return switch (sqlType) {
+            case java.sql.Types.TINYINT -> "TINYINT";
+            case java.sql.Types.SMALLINT -> "SMALLINT";
+            case java.sql.Types.INTEGER -> "INTEGER";
+            default -> "numeric";
         };
     }
 

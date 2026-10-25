@@ -100,7 +100,7 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         }
         // An expression column has no declared type, so signedness follows the
         // storage class of the current value, as xerial does.
-        return switch (XerialColumnType.storageClass(runtimeValue(column))) {
+        return switch (JdbcTypeMapping.storageClass(runtimeValue(column))) {
             case INTEGER, FLOAT, NULL -> true;
             case TEXT, BLOB -> false;
         };
@@ -153,10 +153,7 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public int getColumnType(int column) throws SQLException {
-        getCol(column);
-        String typeName = getColumnTypeName(column);
-        Value value = runtimeValue(column);
-        return XerialColumnType.jdbcType(value, typeName);
+        return resolvedType(column).sqlType();
     }
 
     @Override
@@ -184,8 +181,11 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
 
     @Override
     public String getColumnClassName(int column) throws SQLException {
-        getCol(column);
-        return XerialColumnType.className(runtimeValue(column));
+        return resolvedType(column).objectClass().getName();
+    }
+
+    private JdbcTypeMapping.JdbcType resolvedType(int column) throws SQLException {
+        return JdbcTypeMapping.resolve(getCol(column), runtimeValue(column));
     }
 
     private String columnName(int column) throws SQLException {
