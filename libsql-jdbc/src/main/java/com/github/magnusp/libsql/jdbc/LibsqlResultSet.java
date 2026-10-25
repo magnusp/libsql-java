@@ -59,6 +59,7 @@ public class LibsqlResultSet implements ResultSet {
     private final String sql;
     private final LibsqlConnection connection;
     private final boolean closeStatementOnClose;
+    private final JdbcTypeMapping.JdbcType[] declaredTypes;
     private int currentRowIndex = -1;
     private int lastColumnIndex = 0;
     private boolean closed = false;
@@ -81,6 +82,11 @@ public class LibsqlResultSet implements ResultSet {
                 ? libsqlStatement.connection
                 : null;
         this.closeStatementOnClose = closeStatementOnClose;
+        this.declaredTypes = JdbcTypeMapping.declaredTypes(this.cols);
+    }
+
+    JdbcTypeMapping.JdbcType[] declaredTypes() {
+        return declaredTypes;
     }
 
     private void checkClosed() throws SQLException {
@@ -174,7 +180,10 @@ public class LibsqlResultSet implements ResultSet {
      */
     @Override
     public String getString(int columnIndex) throws SQLException {
-        Value val = getCurrentValue(columnIndex);
+        return stringValue(getCurrentValue(columnIndex));
+    }
+
+    private static String stringValue(Value val) {
         return switch (val) {
             case Value.Null n -> null;
             case Value.Integer i -> Long.toString(i.value());
@@ -193,7 +202,10 @@ public class LibsqlResultSet implements ResultSet {
      */
     @Override
     public boolean getBoolean(int columnIndex) throws SQLException {
-        Value value = getCurrentValue(columnIndex);
+        return booleanValue(getCurrentValue(columnIndex));
+    }
+
+    private static boolean booleanValue(Value value) {
         if (value instanceof Value.Text text) {
             String string = text.value().trim();
             if ("true".equalsIgnoreCase(string)) {
@@ -203,7 +215,7 @@ public class LibsqlResultSet implements ResultSet {
                 return false;
             }
         }
-        return getInt(columnIndex) != 0;
+        return (int) toLong(value) != 0;
     }
 
     @Override
@@ -267,7 +279,10 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public byte[] getBytes(int columnIndex) throws SQLException {
-        Value val = getCurrentValue(columnIndex);
+        return bytesValue(getCurrentValue(columnIndex));
+    }
+
+    private static byte[] bytesValue(Value val) {
         return switch (val) {
             case Value.Null n -> null;
             case Value.Blob b -> b.bytes();
@@ -279,25 +294,41 @@ public class LibsqlResultSet implements ResultSet {
 
     @Override
     public Date getDate(int columnIndex) throws SQLException {
-        LocalDateTime value = dateTimeValue(columnIndex, "Date");
-        return value == null ? null : Date.valueOf(value.toLocalDate());
+        return dateValue(getCurrentValue(columnIndex));
+    }
+
+    private static Date dateValue(Value value) throws SQLException {
+        LocalDateTime dateTime = dateTimeValue(value, "Date");
+        return dateTime == null ? null : Date.valueOf(dateTime.toLocalDate());
     }
 
     @Override
     public Time getTime(int columnIndex) throws SQLException {
-        LocalDateTime value = dateTimeValue(columnIndex, "Time");
-        return value == null ? null : Time.valueOf(value.toLocalTime());
+        return timeValue(getCurrentValue(columnIndex));
+    }
+
+    private static Time timeValue(Value value) throws SQLException {
+        LocalDateTime dateTime = dateTimeValue(value, "Time");
+        return dateTime == null ? null : Time.valueOf(dateTime.toLocalTime());
     }
 
     @Override
     public Timestamp getTimestamp(int columnIndex) throws SQLException {
-        LocalDateTime value = dateTimeValue(columnIndex, "Timestamp");
-        return value == null ? null : Timestamp.valueOf(value);
+        return timestampValue(getCurrentValue(columnIndex));
+    }
+
+    private static Timestamp timestampValue(Value value) throws SQLException {
+        LocalDateTime dateTime = dateTimeValue(value, "Timestamp");
+        return dateTime == null ? null : Timestamp.valueOf(dateTime);
     }
 
     @Override
     public BigDecimal getBigDecimal(int columnIndex) throws SQLException {
-        String s = getString(columnIndex);
+        return bigDecimalValue(getCurrentValue(columnIndex));
+    }
+
+    private static BigDecimal bigDecimalValue(Value value) throws SQLException {
+        String s = stringValue(value);
         if (s == null) {
             return null;
         }
@@ -314,53 +345,83 @@ public class LibsqlResultSet implements ResultSet {
         if (value instanceof Value.Null) {
             return null;
         }
-        return objectValue(JdbcTypeMapping.resolve(cols.get(columnIndex - 1), value), columnIndex);
+        JdbcTypeMapping.JdbcType type = declaredTypes[columnIndex - 1];
+        if (type == null) {
+            type = JdbcTypeMapping.fallback(value);
+        }
+        // Shortcuts for a value already stored as the declared Java box. They mirror the storage
+        // switch trunk used, so a matching column costs one class test and one type test.
+        if (value instanceof Value.Integer integer && type.objectClass() == Integer.class) {
+            return checkedInt(integer.value(), type.sqlType());
+        }
+        if (value instanceof Value.Float floating) {
+            if (type.objectClass() == Float.class) {
+                return (float) floating.value();
+            }
+            if (type.objectClass() == Double.class) {
+                return floating.value();
+            }
+        }
+        if (value instanceof Value.Text text && type.objectClass() == String.class) {
+            return text.value();
+        }
+        return objectValue(value, type);
     }
 
-    private Object objectValue(JdbcTypeMapping.JdbcType type, int columnIndex) throws SQLException {
+    private static Object objectValue(Value value, JdbcTypeMapping.JdbcType type) throws SQLException {
         Class<?> objectClass = type.objectClass();
         if (objectClass == Integer.class) {
-            return checkedInt(columnIndex, type.sqlType());
+            return checkedInt(value, type.sqlType());
         }
         if (objectClass == Long.class) {
-            return getLong(columnIndex);
-        }
-        if (objectClass == BigDecimal.class) {
-            return getBigDecimal(columnIndex);
-        }
-        if (objectClass == Boolean.class) {
-            return getBoolean(columnIndex);
-        }
-        if (objectClass == Float.class) {
-            return getFloat(columnIndex);
+            return toLong(value);
         }
         if (objectClass == Double.class) {
-            return getDouble(columnIndex);
+            return toDouble(value);
+        }
+        if (objectClass == Float.class) {
+            return (float) toDouble(value);
         }
         if (objectClass == String.class) {
-            return getString(columnIndex);
+            return stringValue(value);
+        }
+        return convertedObject(value, type);
+    }
+
+    /**
+     * Converts every declared type outside the numeric and text fast path. It stays out of {@link
+     * #getObject} so the common reads stay small enough for the JIT to inline and scalar-replace
+     * their boxes.
+     */
+    private static Object convertedObject(Value value, JdbcTypeMapping.JdbcType type) throws SQLException {
+        Class<?> objectClass = type.objectClass();
+        if (objectClass == BigDecimal.class) {
+            return bigDecimalValue(value);
+        }
+        if (objectClass == Boolean.class) {
+            return booleanValue(value);
         }
         if (objectClass == byte[].class) {
-            return getBytes(columnIndex);
+            return bytesValue(value);
         }
         if (objectClass == Date.class) {
-            return getDate(columnIndex);
+            return dateValue(value);
         }
         if (objectClass == Time.class) {
-            return getTime(columnIndex);
+            return timeValue(value);
         }
         if (objectClass == Timestamp.class) {
-            return getTimestamp(columnIndex);
+            return timestampValue(value);
         }
         if (objectClass == Clob.class) {
-            return getClob(columnIndex);
+            return clobValue(value);
         }
         if (objectClass == Blob.class) {
-            return getBlob(columnIndex);
+            return blobValue(value);
         }
         // NCLOB and DATALINK resolve to their declared wrapper types, but the wrapper getters
         // arrive in PR-3, so the value keeps its storage-class representation until then.
-        return storedObject(getCurrentValue(columnIndex));
+        return storedObject(value);
     }
 
     private static Object storedObject(Value value) {
@@ -375,13 +436,16 @@ public class LibsqlResultSet implements ResultSet {
         };
     }
 
-    private Integer checkedInt(int columnIndex, int sqlType) throws SQLException {
-        long value = getLong(columnIndex);
-        if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
+    private static Integer checkedInt(Value value, int sqlType) throws SQLException {
+        return checkedInt(toLong(value), sqlType);
+    }
+
+    private static Integer checkedInt(long number, int sqlType) throws SQLException {
+        if (number < Integer.MIN_VALUE || number > Integer.MAX_VALUE) {
             throw new SQLException(
-                    "Value " + value + " does not fit the declared " + sqlTypeName(sqlType) + " type");
+                    "Value " + number + " does not fit the declared " + sqlTypeName(sqlType) + " type");
         }
-        return (int) value;
+        return (int) number;
     }
 
     private static String sqlTypeName(int sqlType) {
@@ -648,11 +712,17 @@ public class LibsqlResultSet implements ResultSet {
     }
     @Override public Ref getRef(int columnIndex) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public Blob getBlob(int columnIndex) throws SQLException {
-        byte[] bytes = getBytes(columnIndex);
+        return blobValue(getCurrentValue(columnIndex));
+    }
+    private static Blob blobValue(Value value) {
+        byte[] bytes = bytesValue(value);
         return bytes == null ? null : new LibsqlBlob(bytes);
     }
     @Override public Clob getClob(int columnIndex) throws SQLException {
-        String string = getString(columnIndex);
+        return clobValue(getCurrentValue(columnIndex));
+    }
+    private static Clob clobValue(Value value) {
+        String string = stringValue(value);
         return string == null ? null : new LibsqlClob(string);
     }
     @Override public Array getArray(int columnIndex) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
@@ -860,25 +930,24 @@ public class LibsqlResultSet implements ResultSet {
     }
 
     private LocalDate getLocalDate(int columnIndex) throws SQLException {
-        LocalDateTime value = dateTimeValue(columnIndex, "LocalDate");
+        LocalDateTime value = dateTimeValue(getCurrentValue(columnIndex), "LocalDate");
         return value == null ? null : value.toLocalDate();
     }
 
     private LocalTime getLocalTime(int columnIndex) throws SQLException {
-        LocalDateTime value = dateTimeValue(columnIndex, "LocalTime");
+        LocalDateTime value = dateTimeValue(getCurrentValue(columnIndex), "LocalTime");
         return value == null ? null : value.toLocalTime();
     }
 
     private LocalDateTime getLocalDateTime(int columnIndex) throws SQLException {
-        return dateTimeValue(columnIndex, "LocalDateTime");
+        return dateTimeValue(getCurrentValue(columnIndex), "LocalDateTime");
     }
 
     /**
-     * Reads a column as a local date and time using SQLite storage-class conventions: INTEGER is
+     * Reads a value as a local date and time using SQLite storage-class conventions: INTEGER is
      * epoch milliseconds, FLOAT is a Julian day, and TEXT is a SQLite date/time string.
      */
-    private LocalDateTime dateTimeValue(int columnIndex, String targetType) throws SQLException {
-        Value value = getCurrentValue(columnIndex);
+    private static LocalDateTime dateTimeValue(Value value, String targetType) throws SQLException {
         return SqliteDateTimeValues.from(value, targetType);
     }
 

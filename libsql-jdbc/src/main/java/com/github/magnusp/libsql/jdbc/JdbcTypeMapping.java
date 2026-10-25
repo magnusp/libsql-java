@@ -12,6 +12,7 @@ import java.sql.NClob;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -53,24 +54,38 @@ final class JdbcTypeMapping {
     private static final JdbcType NULL_FALLBACK =
             fallback(Types.NUMERIC, Object.class, Object.class, StorageClass.NULL);
 
-    private static final Map<String, JdbcType> DECLARED = declaredTypes();
+    private static final Map<String, JdbcType> DECLARED = declaredTypeRegistry();
 
     private JdbcTypeMapping() {}
 
-    static JdbcType resolve(Col col, Value value) {
-        if (col != null) {
-            String name = DeclaredType.of(col).declaredTypeName();
-            if (name != null) {
-                JdbcType declared = DECLARED.get(name);
-                if (declared != null) {
-                    return declared;
-                }
-            }
+    /**
+     * Resolves one column's JDBC type once for the life of a result set.
+     *
+     * <p>The declared type of a column never changes within a result set, so the registry is
+     * consulted when the result set is built. {@code getObject} and the metadata then read the
+     * entry. An expression column has no declared type and keeps a null entry; resolving such a
+     * column is a class test and a switch over the current {@link Value}.
+     */
+    static JdbcType[] declaredTypes(List<Col> cols) {
+        JdbcType[] declared = new JdbcType[cols.size()];
+        for (int i = 0; i < declared.length; i++) {
+            declared[i] = declared(cols.get(i));
         }
-        return fallback(value);
+        return declared;
     }
 
-    private static JdbcType fallback(Value value) {
+    private static JdbcType declared(Col col) {
+        if (col == null) {
+            return null;
+        }
+        String name = DeclaredType.of(col).declaredTypeName();
+        if (name == null) {
+            return null;
+        }
+        return DECLARED.get(name);
+    }
+
+    static JdbcType fallback(Value value) {
         return switch (storageClass(value)) {
             case INTEGER -> integerFallback(value);
             case FLOAT -> FLOAT_FALLBACK;
@@ -109,7 +124,7 @@ final class JdbcTypeMapping {
         return new JdbcType(sqlType, javaClass, objectClass, storage, Support.FALLBACK);
     }
 
-    private static Map<String, JdbcType> declaredTypes() {
+    private static Map<String, JdbcType> declaredTypeRegistry() {
         return Map.ofEntries(
                 entry("TINYINT", Types.TINYINT, byte.class, Integer.class, StorageClass.INTEGER),
                 entry("SMALLINT", Types.SMALLINT, short.class, Integer.class, StorageClass.INTEGER),

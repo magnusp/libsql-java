@@ -17,6 +17,7 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
     private final LibsqlConnection connection;
     private final LibsqlResultSet resultSet;
     private final TableMetadataResolver tableMetadata;
+    private final JdbcTypeMapping.JdbcType[] declaredTypes;
 
     public LibsqlResultSetMetaData(List<Col> cols) {
         this(cols, List.of(), null, null, null);
@@ -34,6 +35,8 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
         this.connection = connection;
         this.resultSet = resultSet;
         this.tableMetadata = new TableMetadataResolver(connection, sql, this.cols.size());
+        this.declaredTypes =
+                resultSet != null ? resultSet.declaredTypes() : JdbcTypeMapping.declaredTypes(this.cols);
     }
 
     @Override
@@ -185,7 +188,9 @@ public class LibsqlResultSetMetaData implements ResultSetMetaData {
     }
 
     private JdbcTypeMapping.JdbcType resolvedType(int column) throws SQLException {
-        return JdbcTypeMapping.resolve(getCol(column), runtimeValue(column));
+        getCol(column);
+        JdbcTypeMapping.JdbcType declared = declaredTypes[column - 1];
+        return declared != null ? declared : JdbcTypeMapping.fallback(runtimeValue(column));
     }
 
     private String columnName(int column) throws SQLException {
