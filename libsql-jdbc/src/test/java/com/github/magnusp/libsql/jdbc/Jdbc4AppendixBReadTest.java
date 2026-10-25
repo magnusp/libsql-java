@@ -24,6 +24,7 @@ import java.sql.Ref;
 import java.sql.ResultSet;
 import java.sql.RowId;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLXML;
 import java.sql.Struct;
 import java.sql.Time;
@@ -136,6 +137,14 @@ class Jdbc4AppendixBReadTest {
     private static JdbcType jdbc(
             String name, int sqlType, Class<?> b1JavaType, Class<?> b3ObjectType, Value sample) {
         return new JdbcType(name, sqlType, b1JavaType, b3ObjectType, sample, true);
+    }
+
+    /** The N/A policy: these declared types throw SQLFeatureNotSupportedException. */
+    private static final Set<String> NA_TYPES =
+            set("ARRAY", "STRUCT", "REF", "JAVA_OBJECT", "DISTINCT");
+
+    private static boolean isNa(JdbcType type) {
+        return NA_TYPES.contains(type.name());
     }
 
     // ---------------------------------------------------------------------
@@ -321,6 +330,13 @@ class Jdbc4AppendixBReadTest {
         LibsqlResultSet resultSet = oneRow(type, type.sample());
         assertThat(resultSet.next()).isTrue();
 
+        if (isNa(type)) {
+            assertThatThrownBy(() -> accessor.reader().read(resultSet, 1))
+                    .as("B-1: %s is N/A and must throw SQLFeatureNotSupportedException", type.name())
+                    .isInstanceOf(SQLFeatureNotSupportedException.class);
+            return;
+        }
+
         Object value;
         try {
             value = accessor.reader().read(resultSet, 1);
@@ -348,6 +364,13 @@ class Jdbc4AppendixBReadTest {
         LibsqlResultSet resultSet = oneRow(type, type.sample());
         assertThat(resultSet.next()).isTrue();
 
+        if (isNa(type)) {
+            assertThatThrownBy(() -> resultSet.getObject(1))
+                    .as("B-3: %s is N/A and must throw SQLFeatureNotSupportedException", type.name())
+                    .isInstanceOf(SQLFeatureNotSupportedException.class);
+            return;
+        }
+
         assertThat(resultSet.getObject(1))
                 .as("B-3: %s must read back as %s", type.name(), type.b3ObjectType())
                 .isInstanceOf(type.b3ObjectType());
@@ -361,6 +384,13 @@ class Jdbc4AppendixBReadTest {
             }
             LibsqlResultSet resultSet = oneRow(type, new Value.Null());
             assertThat(resultSet.next()).isTrue();
+            if (isNa(type)) {
+                assertThatThrownBy(() -> resultSet.getObject(1))
+                        .as("B-3: NULL %s is N/A and must throw SQLFeatureNotSupportedException",
+                                type.name())
+                        .isInstanceOf(SQLFeatureNotSupportedException.class);
+                continue;
+            }
             assertThat(resultSet.getObject(1)).as("B-3: NULL %s", type.name()).isNull();
             assertThat(resultSet.wasNull()).as("B-3: wasNull for NULL %s", type.name()).isTrue();
         }
@@ -386,6 +416,15 @@ class Jdbc4AppendixBReadTest {
             throws SQLException {
         LibsqlResultSet resultSet = oneRow(type, fixtureFor(getter, type));
         assertThat(resultSet.next()).isTrue();
+
+        if (isNa(type)) {
+            // The policy answer for an unrepresentable type is an N/A exception, not a wrong Java
+            // type. This holds whether Table B-6 lists the cell or not.
+            assertThatThrownBy(() -> getter.reader().read(resultSet, 1))
+                    .as("B-6: %s is N/A and must throw SQLFeatureNotSupportedException", type.name())
+                    .isInstanceOf(SQLFeatureNotSupportedException.class);
+            return;
+        }
 
         if (supported) {
             Object value;
