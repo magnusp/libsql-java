@@ -264,6 +264,10 @@ public class Jdbc4AppendixBTypeMappingIT extends SqldContainerBase {
             new GetterCell("getURL", "DATALINK", TEXT_URL, ResultSet::getURL, URL.class),
             new GetterCell("getObject", "JAVA_OBJECT", TEXT_ABC, (rs, i) -> rs.getObject(i),
                     Object.class),
+            new GetterCell("getObject", "TIME_WITH_TIMEZONE", "03:04:05Z",
+                    (rs, i) -> rs.getObject(i), OffsetTime.class),
+            new GetterCell("getObject", "TIMESTAMP_WITH_TIMEZONE", "2024-01-02T03:04:05Z",
+                    (rs, i) -> rs.getObject(i), OffsetDateTime.class),
             new GetterCell("getRowId", "ROWID", TEXT_ROWID, ResultSet::getRowId, RowId.class),
             new GetterCell("getSQLXML", "SQLXML", TEXT_XML, ResultSet::getSQLXML, SQLXML.class));
 
