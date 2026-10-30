@@ -21,6 +21,7 @@ import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -28,6 +29,7 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.List;
+import java.util.Locale;
 import java.util.TimeZone;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -533,6 +535,65 @@ class LibsqlPreparedStatementTest {
     }
 
     @Test
+    void calendarSettersRenderTheInstantInTheCalendarZone() throws SQLException {
+        Instant instant = Instant.parse("2024-01-02T23:30:00Z");
+        Timestamp timestamp = Timestamp.from(instant);
+        Date date = new Date(instant.toEpochMilli());
+        Time time = new Time(instant.toEpochMilli());
+
+        assertThat(bindParameter(s -> s.setTimestamp(1, timestamp, calendar("Asia/Tokyo"))))
+                .isEqualTo(Value.of("2024-01-03 08:30:00.0"));
+        assertThat(bindParameter(s -> s.setTimestamp(1, timestamp, calendar("UTC"))))
+                .isEqualTo(Value.of("2024-01-02 23:30:00.0"));
+        assertThat(bindParameter(s -> s.setDate(1, date, calendar("Asia/Tokyo"))))
+                .isEqualTo(Value.of("2024-01-03"));
+        assertThat(bindParameter(s -> s.setDate(1, date, calendar("UTC"))))
+                .isEqualTo(Value.of("2024-01-02"));
+        assertThat(bindParameter(s -> s.setTime(1, time, calendar("Asia/Tokyo"))))
+                .isEqualTo(Value.of("08:30:00"));
+        assertThat(bindParameter(s -> s.setTime(1, time, calendar("UTC"))))
+                .isEqualTo(Value.of("23:30:00"));
+
+        Calendar buddhistTokyo = Calendar.getInstance(
+                TimeZone.getTimeZone("Asia/Tokyo"), Locale.forLanguageTag("th-TH-u-ca-buddhist"));
+        assertThat(bindParameter(s -> s.setTimestamp(1, timestamp, buddhistTokyo)))
+                .as("only the calendar zone matters, not its field system")
+                .isEqualTo(Value.of("2024-01-03 08:30:00.0"));
+    }
+
+    @Test
+    void calendarTimestampSetterKeepsTheTimestampTextForm() throws SQLException {
+        Timestamp withNanos = Timestamp.from(Instant.parse("2024-01-02T23:30:00.123456789Z"));
+        Timestamp withMillis = Timestamp.from(Instant.parse("2024-01-02T23:30:00.123Z"));
+
+        assertThat(bindParameter(s -> s.setTimestamp(1, withNanos, calendar("Asia/Tokyo"))))
+                .isEqualTo(Value.of("2024-01-03 08:30:00.123456789"));
+        assertThat(bindParameter(s -> s.setTimestamp(1, withMillis, calendar("Asia/Tokyo"))))
+                .isEqualTo(Value.of("2024-01-03 08:30:00.123"));
+    }
+
+    @Test
+    void nullCalendarSetterEqualsTheDefaultOverload() throws SQLException {
+        Instant instant = Instant.parse("2024-01-02T23:30:00Z");
+
+        assertThat(bindParameter(s -> s.setTimestamp(1, Timestamp.from(instant), null)))
+                .isEqualTo(bindParameter(s -> s.setTimestamp(1, Timestamp.from(instant))));
+        assertThat(bindParameter(s -> s.setDate(1, new Date(instant.toEpochMilli()), null)))
+                .isEqualTo(bindParameter(s -> s.setDate(1, new Date(instant.toEpochMilli()))));
+        assertThat(bindParameter(s -> s.setTime(1, new Time(instant.toEpochMilli()), null)))
+                .isEqualTo(bindParameter(s -> s.setTime(1, new Time(instant.toEpochMilli()))));
+    }
+
+    @Test
+    void calendarSettersBindNullForNullValues() throws SQLException {
+        Calendar tokyo = calendar("Asia/Tokyo");
+
+        assertThat(bindParameter(s -> s.setTimestamp(1, null, tokyo))).isEqualTo(Value.ofNull());
+        assertThat(bindParameter(s -> s.setDate(1, null, tokyo))).isEqualTo(Value.ofNull());
+        assertThat(bindParameter(s -> s.setTime(1, null, tokyo))).isEqualTo(Value.ofNull());
+    }
+
+    @Test
     void lobTargetsReadTheirStreams() throws SQLException {
         byte[] bytes = {1, 2, 3};
         assertThat(bind(new LibsqlClob("abc"), Types.CLOB)).isEqualTo(Value.of("abc"));
@@ -609,6 +670,10 @@ class LibsqlPreparedStatementTest {
             statement.executeUpdate();
         }
         return connection.executed.get(0).args().get(0);
+    }
+
+    private static Calendar calendar(String zoneId) {
+        return Calendar.getInstance(TimeZone.getTimeZone(zoneId));
     }
 
     private static Calendar calendar2024() {
