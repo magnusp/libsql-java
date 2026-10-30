@@ -61,6 +61,7 @@
         <assertj.version>3.27.7</assertj.version>
         <testcontainers.version>2.0.5</testcontainers.version>
         <hikaricp.version>7.1.0</hikaricp.version>
+        <liquibase.version>5.0.3</liquibase.version>
         <protobuf.version>4.36.2</protobuf.version>
         <!-- Pinned exactly: 5.7 is still a beta, so a silent upgrade must be a deliberate one. -->
         <httpclient5.websocket.version>5.7-beta1</httpclient5.websocket.version>

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="types-1" author="liquibase-it">
+        <createTable tableName="lb_types">
+            <column name="id" type="INTEGER">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="flag" type="BOOLEAN"/>
+            <column name="amount" type="DECIMAL(10,2)"/>
+            <column name="ratio" type="DOUBLE"/>
+            <column name="counter" type="BIGINT"/>
+            <column name="happened_at" type="TIMESTAMP"/>
+            <column name="happened_on" type="DATE"/>
+            <column name="happened_time" type="TIME"/>
+            <column name="notes" type="CLOB"/>
+        </createTable>
+        <insert tableName="lb_types">
+            <column name="id" valueNumeric="1"/>
+            <column name="flag" valueBoolean="true"/>
+            <column name="amount" valueNumeric="1234.50"/>
+            <column name="ratio" valueNumeric="0.25"/>
+            <column name="counter" valueNumeric="9007199254740993"/>
+            <column name="happened_at" valueDate="2024-01-02T03:04:05"/>
+            <column name="happened_on" valueDate="2024-01-02"/>
+            <column name="happened_time" valueDate="03:04:05"/>
+            <column name="notes" value="hello clob"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>
