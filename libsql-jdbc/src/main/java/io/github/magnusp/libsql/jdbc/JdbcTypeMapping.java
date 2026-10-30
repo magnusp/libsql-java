@@ -64,25 +64,20 @@ final class JdbcTypeMapping {
         NULL
     }
 
-    record JdbcType(
-            int sqlType,
-            Class<?> javaClass,
-            Class<?> objectClass,
-            StorageClass storage,
-            Support support) {}
+    record JdbcType(int sqlType, Class<?> javaClass, Class<?> objectClass, Support support) {}
 
     private static final JdbcType INTEGER_FALLBACK =
-            fallback(Types.INTEGER, int.class, Integer.class, StorageClass.INTEGER);
+            fallback(Types.INTEGER, int.class, Integer.class);
     private static final JdbcType BIGINT_FALLBACK =
-            fallback(Types.BIGINT, long.class, Long.class, StorageClass.INTEGER);
+            fallback(Types.BIGINT, long.class, Long.class);
     private static final JdbcType FLOAT_FALLBACK =
-            fallback(Types.FLOAT, double.class, Double.class, StorageClass.FLOAT);
+            fallback(Types.FLOAT, double.class, Double.class);
     private static final JdbcType TEXT_FALLBACK =
-            fallback(Types.VARCHAR, String.class, String.class, StorageClass.TEXT);
+            fallback(Types.VARCHAR, String.class, String.class);
     private static final JdbcType BLOB_FALLBACK =
-            fallback(Types.VARBINARY, byte[].class, byte[].class, StorageClass.BLOB);
+            fallback(Types.VARBINARY, byte[].class, byte[].class);
     private static final JdbcType NULL_FALLBACK =
-            fallback(Types.NUMERIC, Object.class, Object.class, StorageClass.NULL);
+            fallback(Types.NUMERIC, Object.class, Object.class);
 
     private static final Map<String, JdbcType> DECLARED = declaredTypeRegistry();
     private static final Map<String, JdbcType> ALIASES = aliasTypes();
@@ -176,72 +171,66 @@ final class JdbcTypeMapping {
         return value instanceof Value.Integer i ? i.value() : 0L;
     }
 
-    private static JdbcType fallback(int sqlType, Class<?> javaClass, Class<?> objectClass, StorageClass storage) {
-        return new JdbcType(sqlType, javaClass, objectClass, storage, Support.FALLBACK);
+    private static JdbcType fallback(int sqlType, Class<?> javaClass, Class<?> objectClass) {
+        return new JdbcType(sqlType, javaClass, objectClass, Support.FALLBACK);
     }
 
     private static Map<String, JdbcType> declaredTypeRegistry() {
         return Map.ofEntries(
-                entry("TINYINT", Types.TINYINT, byte.class, Integer.class, StorageClass.INTEGER),
-                entry("SMALLINT", Types.SMALLINT, short.class, Integer.class, StorageClass.INTEGER),
-                entry("INTEGER", Types.INTEGER, int.class, Integer.class, StorageClass.INTEGER),
-                entry("BIGINT", Types.BIGINT, long.class, Long.class, StorageClass.INTEGER),
-                entry("REAL", Types.REAL, float.class, Float.class, StorageClass.FLOAT),
-                entry("FLOAT", Types.FLOAT, double.class, Double.class, StorageClass.FLOAT),
-                entry("DOUBLE", Types.DOUBLE, double.class, Double.class, StorageClass.FLOAT),
-                entry("NUMERIC", Types.NUMERIC, BigDecimal.class, BigDecimal.class, StorageClass.FLOAT),
-                entry("DECIMAL", Types.DECIMAL, BigDecimal.class, BigDecimal.class, StorageClass.FLOAT),
-                entry("BIT", Types.BIT, boolean.class, Boolean.class, StorageClass.INTEGER),
-                entry("BOOLEAN", Types.BOOLEAN, boolean.class, Boolean.class, StorageClass.INTEGER),
-                entry("CHAR", Types.CHAR, String.class, String.class, StorageClass.TEXT),
-                entry("VARCHAR", Types.VARCHAR, String.class, String.class, StorageClass.TEXT),
-                entry("LONGVARCHAR", Types.LONGVARCHAR, String.class, String.class, StorageClass.TEXT),
-                entry("NCHAR", Types.NCHAR, String.class, String.class, StorageClass.TEXT),
-                entry("NVARCHAR", Types.NVARCHAR, String.class, String.class, StorageClass.TEXT),
-                entry("LONGNVARCHAR", Types.LONGNVARCHAR, String.class, String.class, StorageClass.TEXT),
-                entry("BINARY", Types.BINARY, byte[].class, byte[].class, StorageClass.BLOB),
-                entry("VARBINARY", Types.VARBINARY, byte[].class, byte[].class, StorageClass.BLOB),
-                entry("LONGVARBINARY", Types.LONGVARBINARY, byte[].class, byte[].class, StorageClass.BLOB),
-                entry("DATE", Types.DATE, Date.class, Date.class, StorageClass.TEXT),
-                entry("TIME", Types.TIME, Time.class, Time.class, StorageClass.TEXT),
-                entry("TIMESTAMP", Types.TIMESTAMP, Timestamp.class, Timestamp.class, StorageClass.TEXT),
+                entry("TINYINT", Types.TINYINT, byte.class, Integer.class),
+                entry("SMALLINT", Types.SMALLINT, short.class, Integer.class),
+                entry("INTEGER", Types.INTEGER, int.class, Integer.class),
+                entry("BIGINT", Types.BIGINT, long.class, Long.class),
+                entry("REAL", Types.REAL, float.class, Float.class),
+                entry("FLOAT", Types.FLOAT, double.class, Double.class),
+                entry("DOUBLE", Types.DOUBLE, double.class, Double.class),
+                entry("NUMERIC", Types.NUMERIC, BigDecimal.class, BigDecimal.class),
+                entry("DECIMAL", Types.DECIMAL, BigDecimal.class, BigDecimal.class),
+                entry("BIT", Types.BIT, boolean.class, Boolean.class),
+                entry("BOOLEAN", Types.BOOLEAN, boolean.class, Boolean.class),
+                entry("CHAR", Types.CHAR, String.class, String.class),
+                entry("VARCHAR", Types.VARCHAR, String.class, String.class),
+                entry("LONGVARCHAR", Types.LONGVARCHAR, String.class, String.class),
+                entry("NCHAR", Types.NCHAR, String.class, String.class),
+                entry("NVARCHAR", Types.NVARCHAR, String.class, String.class),
+                entry("LONGNVARCHAR", Types.LONGNVARCHAR, String.class, String.class),
+                entry("BINARY", Types.BINARY, byte[].class, byte[].class),
+                entry("VARBINARY", Types.VARBINARY, byte[].class, byte[].class),
+                entry("LONGVARBINARY", Types.LONGVARBINARY, byte[].class, byte[].class),
+                entry("DATE", Types.DATE, Date.class, Date.class),
+                entry("TIME", Types.TIME, Time.class, Time.class),
+                entry("TIMESTAMP", Types.TIMESTAMP, Timestamp.class, Timestamp.class),
                 entry(
                         "TIME_WITH_TIMEZONE",
                         Types.TIME_WITH_TIMEZONE,
                         OffsetTime.class,
-                        OffsetTime.class,
-                        StorageClass.TEXT),
+                        OffsetTime.class),
                 entry(
                         "TIMESTAMP_WITH_TIMEZONE",
                         Types.TIMESTAMP_WITH_TIMEZONE,
                         OffsetDateTime.class,
-                        OffsetDateTime.class,
-                        StorageClass.TEXT),
-                entry("CLOB", Types.CLOB, Clob.class, Clob.class, StorageClass.TEXT),
-                entry("NCLOB", Types.NCLOB, NClob.class, NClob.class, StorageClass.TEXT),
-                entry("SQLXML", Types.SQLXML, SQLXML.class, SQLXML.class, StorageClass.TEXT),
-                entry("ROWID", Types.ROWID, RowId.class, RowId.class, StorageClass.TEXT),
-                entry("BLOB", Types.BLOB, Blob.class, Blob.class, StorageClass.BLOB),
-                entry("DATALINK", Types.DATALINK, URL.class, URL.class, StorageClass.TEXT),
-                unsupported("ARRAY", Types.ARRAY, Array.class, Array.class, StorageClass.TEXT),
-                unsupported("STRUCT", Types.STRUCT, Struct.class, Struct.class, StorageClass.TEXT),
-                unsupported("REF", Types.REF, Ref.class, Ref.class, StorageClass.TEXT),
-                unsupported("JAVA_OBJECT", Types.JAVA_OBJECT, Object.class, Object.class, StorageClass.TEXT),
-                unsupported("DISTINCT", Types.DISTINCT, Object.class, Object.class, StorageClass.TEXT));
+                        OffsetDateTime.class),
+                entry("CLOB", Types.CLOB, Clob.class, Clob.class),
+                entry("NCLOB", Types.NCLOB, NClob.class, NClob.class),
+                entry("SQLXML", Types.SQLXML, SQLXML.class, SQLXML.class),
+                entry("ROWID", Types.ROWID, RowId.class, RowId.class),
+                entry("BLOB", Types.BLOB, Blob.class, Blob.class),
+                entry("DATALINK", Types.DATALINK, URL.class, URL.class),
+                unsupported("ARRAY", Types.ARRAY, Array.class, Array.class),
+                unsupported("STRUCT", Types.STRUCT, Struct.class, Struct.class),
+                unsupported("REF", Types.REF, Ref.class, Ref.class),
+                unsupported("JAVA_OBJECT", Types.JAVA_OBJECT, Object.class, Object.class),
+                unsupported("DISTINCT", Types.DISTINCT, Object.class, Object.class));
     }
 
     private static Map.Entry<String, JdbcType> entry(
-            String name, int sqlType, Class<?> javaClass, Class<?> objectClass, StorageClass storage) {
-        return Map.entry(
-                name,
-                new JdbcType(sqlType, javaClass, objectClass, storage, Support.SUPPORTED));
+            String name, int sqlType, Class<?> javaClass, Class<?> objectClass) {
+        return Map.entry(name, new JdbcType(sqlType, javaClass, objectClass, Support.SUPPORTED));
     }
 
     private static Map.Entry<String, JdbcType> unsupported(
-            String name, int sqlType, Class<?> javaClass, Class<?> objectClass, StorageClass storage) {
-        return Map.entry(
-                name,
-                new JdbcType(sqlType, javaClass, objectClass, storage, Support.UNSUPPORTED));
+            String name, int sqlType, Class<?> javaClass, Class<?> objectClass) {
+        return Map.entry(name, new JdbcType(sqlType, javaClass, objectClass, Support.UNSUPPORTED));
     }
 
     /**
