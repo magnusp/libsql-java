@@ -447,6 +447,85 @@ class LibsqlResultSetTest {
                 .hasMessageContaining("Type maps");
     }
 
+    @ParameterizedTest(name = "{0} closed on {1}")
+    @ValueSource(strings = {"getRef", "getArray"})
+    void labelAndIntGettersShareTheClosedResultSetCheck(String getter) throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Integer(1));
+        assertThat(rs.next()).isTrue();
+        rs.close();
+
+        assertThatThrownBy(() -> readArrayOrRef(rs, getter, 1))
+                .as("%s(int) on a closed result set", getter)
+                .isInstanceOf(SQLException.class)
+                .hasMessage("ResultSet is closed");
+        assertThatThrownBy(() -> readArrayOrRef(rs, getter, "c1"))
+                .as("%s(String) on a closed result set", getter)
+                .isInstanceOf(SQLException.class)
+                .hasMessage("ResultSet is closed");
+    }
+
+    @ParameterizedTest(name = "{0} declared {1}")
+    @ValueSource(strings = {"ARRAY", "STRUCT", "REF", "DISTINCT", "JAVA_OBJECT"})
+    void labelAndIntGettersShareTheDeclaredTypeCheck(String declaredType) throws SQLException {
+        LibsqlResultSet rs = declaredResultSet(declaredType, Value.of("42"));
+        assertThat(rs.next()).isTrue();
+
+        assertThatThrownBy(() -> rs.getArray(1))
+                .as("getArray(int) on declared %s", declaredType)
+                .isInstanceOf(SQLFeatureNotSupportedException.class)
+                .hasMessage("Declared " + declaredType + " is not supported");
+        assertThatThrownBy(() -> rs.getArray("c1"))
+                .as("getArray(String) on declared %s", declaredType)
+                .isInstanceOf(SQLFeatureNotSupportedException.class)
+                .hasMessage("Declared " + declaredType + " is not supported");
+        assertThatThrownBy(() -> rs.getRef(1))
+                .as("getRef(int) on declared %s", declaredType)
+                .isInstanceOf(SQLFeatureNotSupportedException.class)
+                .hasMessage("Declared " + declaredType + " is not supported");
+        assertThatThrownBy(() -> rs.getRef("c1"))
+                .as("getRef(String) on declared %s", declaredType)
+                .isInstanceOf(SQLFeatureNotSupportedException.class)
+                .hasMessage("Declared " + declaredType + " is not supported");
+    }
+
+    @Test
+    void labelGettersRejectAnUnknownLabelBeforeTheUnsupportedThrow() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Integer(1));
+        assertThat(rs.next()).isTrue();
+
+        assertThatThrownBy(() -> rs.getArray("missing"))
+                .isInstanceOf(SQLException.class)
+                .isNotInstanceOf(SQLFeatureNotSupportedException.class)
+                .hasMessage("no such column: 'missing'");
+        assertThatThrownBy(() -> rs.getRef("missing"))
+                .isInstanceOf(SQLException.class)
+                .isNotInstanceOf(SQLFeatureNotSupportedException.class)
+                .hasMessage("no such column: 'missing'");
+    }
+
+    @Test
+    void labelAndIntGettersStillRejectAnOrdinaryOpenColumn() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Integer(1));
+        assertThat(rs.next()).isTrue();
+
+        assertThatThrownBy(() -> rs.getArray(1))
+                .isInstanceOf(SQLFeatureNotSupportedException.class);
+        assertThatThrownBy(() -> rs.getArray("c1"))
+                .isInstanceOf(SQLFeatureNotSupportedException.class);
+        assertThatThrownBy(() -> rs.getRef(1))
+                .isInstanceOf(SQLFeatureNotSupportedException.class);
+        assertThatThrownBy(() -> rs.getRef("c1"))
+                .isInstanceOf(SQLFeatureNotSupportedException.class);
+    }
+
+    private static Object readArrayOrRef(LibsqlResultSet rs, String getter, Object column)
+            throws SQLException {
+        if ("getArray".equals(getter)) {
+            return column instanceof Integer ? rs.getArray((Integer) column) : rs.getArray((String) column);
+        }
+        return column instanceof Integer ? rs.getRef((Integer) column) : rs.getRef((String) column);
+    }
+
     @Test
     void findColumnRejectsNullLabel() {
         LibsqlResultSet rs = resultSet(new Value.Integer(1));
@@ -612,8 +691,17 @@ class LibsqlResultSetTest {
     }
 
     private static LibsqlResultSet resultSet(Value... values) {
+        String[] declaredTypes = new String[values.length];
+        return declaredResultSet(declaredTypes, values);
+    }
+
+    private static LibsqlResultSet declaredResultSet(String declaredType, Value value) {
+        return declaredResultSet(new String[] {declaredType}, value);
+    }
+
+    private static LibsqlResultSet declaredResultSet(String[] declaredTypes, Value... values) {
         List<Col> cols = IntStream.range(0, values.length)
-                .mapToObj(i -> new Col("c" + (i + 1), null))
+                .mapToObj(i -> new Col("c" + (i + 1), declaredTypes[i]))
                 .toList();
         StmtResult result = new StmtResult(cols, List.of(new Row(List.of(values))), 1, null);
         return new LibsqlResultSet(null, result);

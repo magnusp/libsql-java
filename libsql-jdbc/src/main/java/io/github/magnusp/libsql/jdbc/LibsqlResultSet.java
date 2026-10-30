@@ -889,10 +889,10 @@ public class LibsqlResultSet implements ResultSet {
         rejectTypeMap(map);
         return getObject(columnLabel);
     }
-    @Override public Ref getRef(String columnLabel) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override public Ref getRef(String columnLabel) throws SQLException { return getRef(findColumn(columnLabel)); }
     @Override public Blob getBlob(String columnLabel) throws SQLException { return getBlob(findColumn(columnLabel)); }
     @Override public Clob getClob(String columnLabel) throws SQLException { return getClob(findColumn(columnLabel)); }
-    @Override public Array getArray(String columnLabel) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override public Array getArray(String columnLabel) throws SQLException { return getArray(findColumn(columnLabel)); }
     @Override public Date getDate(int columnIndex, Calendar cal) throws SQLException { return getDate(columnIndex); }
     @Override public Date getDate(String columnLabel, Calendar cal) throws SQLException { return getDate(columnLabel); }
     @Override public Time getTime(int columnIndex, Calendar cal) throws SQLException { return getTime(columnIndex); }
