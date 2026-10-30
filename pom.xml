@@ -62,6 +62,7 @@
         <testcontainers.version>2.0.5</testcontainers.version>
         <hikaricp.version>7.1.0</hikaricp.version>
         <flyway.version>13.12.0</flyway.version>
+        <jooq.version>3.21.9</jooq.version>
         <protobuf.version>4.36.2</protobuf.version>
         <!-- Pinned exactly: 5.7 is still a beta, so a silent upgrade must be a deliberate one. -->
         <httpclient5.websocket.version>5.7-beta1</httpclient5.websocket.version>
