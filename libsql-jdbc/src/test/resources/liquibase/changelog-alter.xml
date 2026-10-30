@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="alter-1" author="liquibase-it">
+        <createTable tableName="lb_alter_person">
+            <column name="id" type="INTEGER">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="first_name" type="VARCHAR(50)"/>
+            <column name="nickname" type="VARCHAR(50)"/>
+        </createTable>
+    </changeSet>
+
+    <changeSet id="alter-2" author="liquibase-it">
+        <addColumn tableName="lb_alter_person">
+            <column name="email" type="VARCHAR(255)"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="alter-3" author="liquibase-it">
+        <renameColumn tableName="lb_alter_person"
+                      oldColumnName="first_name"
+                      newColumnName="given_name"
+                      columnDataType="VARCHAR(50)"/>
+    </changeSet>
+
+    <changeSet id="alter-4" author="liquibase-it">
+        <createIndex tableName="lb_alter_person" indexName="uq_lb_alter_email" unique="true">
+            <column name="email"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="alter-5" author="liquibase-it">
+        <createIndex tableName="lb_alter_person" indexName="idx_lb_alter_given">
+            <column name="given_name"/>
+        </createIndex>
+    </changeSet>
+</databaseChangeLog>
