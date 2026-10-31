@@ -62,8 +62,8 @@
         <testcontainers.version>2.0.5</testcontainers.version>
         <hikaricp.version>7.1.0</hikaricp.version>
         <flyway.version>13.12.0</flyway.version>
-        <hibernate.version>7.4.13.Final</hibernate.version>
-        <liquibase.version>5.0.3</liquibase.version>
+        <hibernate.version>7.4.14.Final</hibernate.version>
+        <liquibase.version>5.0.4</liquibase.version>
         <jooq.version>3.21.9</jooq.version>
         <protobuf.version>4.36.2</protobuf.version>
         <!-- Pinned exactly: 5.7 is still a beta, so a silent upgrade must be a deliberate one. -->
@@ -167,7 +167,7 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
-                    <version>3.6.0</version>
+                    <version>3.6.1</version>
                     <configuration>
                         <systemPropertyVariables>
                             <libsql.image>${libsql.image}</libsql.image>
@@ -177,7 +177,7 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-failsafe-plugin</artifactId>
-                    <version>3.6.0</version>
+                    <version>3.6.1</version>
                     <configuration>
                         <systemPropertyVariables>
                             <libsql.image>${libsql.image}</libsql.image>
