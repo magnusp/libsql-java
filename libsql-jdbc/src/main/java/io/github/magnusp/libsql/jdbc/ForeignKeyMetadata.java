@@ -128,7 +128,7 @@ final class ForeignKeyMetadata {
         if (rule == null) {
             return DatabaseMetaData.importedKeyNoAction;
         }
-        return switch (rule.toUpperCase(Locale.ENGLISH)) {
+        return switch (rule.toUpperCase(Locale.ROOT)) {
             case "CASCADE" -> DatabaseMetaData.importedKeyCascade;
             case "RESTRICT" -> DatabaseMetaData.importedKeyRestrict;
             case "SET NULL" -> DatabaseMetaData.importedKeySetNull;

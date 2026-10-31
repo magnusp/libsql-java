@@ -120,7 +120,7 @@ final class ColumnMetadata {
     private record ColumnShape(int jdbcType, String typeName, int columnSize, int decimalDigits) {}
 
     private static ColumnShape columnShape(String declaredType) {
-        String typeName = declaredType == null ? "TEXT" : declaredType.toUpperCase(Locale.ENGLISH);
+        String typeName = declaredType == null ? "TEXT" : declaredType.toUpperCase(Locale.ROOT);
         int jdbcType;
         int decimalDigits = DEFAULT_DECIMAL_DIGITS;
         if (INTEGER_TYPE.matcher(typeName).find()) {
