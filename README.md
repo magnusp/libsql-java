@@ -247,11 +247,27 @@ explicit driver, because the plugin lookup fails first.
 
 Auto-commit statements on one JDBC connection share a Hrana stream, so `initSql` and
 `afterConnect` statements that set session state such as `PRAGMA foreign_keys` apply
-to the migrations that follow on that connection. sqld expires an idle stream after
-about ten seconds and the state resets with it; for deterministic state, set it in
-the pool's connection initialization instead. Flyway's `clean()` is supported
-through multi-statement script splitting (see
-[#258](https://github.com/magnusp/libsql-java/issues/258)).
+to the migrations that follow on that connection.
+
+Flyway wraps `clean()` in a transaction, and SQLite ignores `PRAGMA foreign_keys`
+inside a transaction. Set the pragma when the connection is initialized, before
+Flyway begins that transaction:
+
+```properties
+# flyway.properties
+initSql=PRAGMA foreign_keys = OFF
+```
+
+```properties
+# Spring Boot
+spring.flyway.init-sql=PRAGMA foreign_keys = OFF
+```
+
+The driver splits Flyway's `PRAGMA foreign_keys = OFF; DROP TABLE ...; PRAGMA
+foreign_keys = ON` scripts and runs every statement on the connection's stream (see
+[#258](https://github.com/magnusp/libsql-java/issues/258)). sqld expires an idle
+stream after about ten seconds and session state resets with it, so configure state
+that must outlive an idle period in the pool's connection initialization.
 
 ## Contributing
 
