@@ -41,7 +41,7 @@ final class DeclaredType {
         }
         Matcher matcher = COLUMN_TYPENAME.matcher(declType);
         matcher.find();
-        return matcher.group(1).toUpperCase(Locale.ENGLISH);
+        return matcher.group(1).toUpperCase(Locale.ROOT);
     }
 
     String typeName() {
