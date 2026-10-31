@@ -48,6 +48,7 @@
         <module>libsql-jdbc</module>
         <module>libsql-itests</module>
         <module>libsql-conformance</module>
+        <module>libsql-perf</module>
     </modules>
 
     <properties>

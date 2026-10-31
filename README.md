@@ -25,6 +25,7 @@ A pure-Java JDBC driver, client library, and protocol codec for **libSQL** and *
 | [`libsql-jdbc`](libsql-jdbc) | Standard JDBC 4.3 driver (`jdbc:libsql:...`) |
 | [`libsql-itests`](libsql-itests) | Integration tests against `sqld` running in Testcontainers |
 | [`libsql-conformance`](libsql-conformance/README.md) | Selected xerial/sqlite-jdbc tests running against libSQL |
+| [`libsql-perf`](libsql-perf) | Driver-side codec and JDBC benchmark used for the PR performance comment |
 
 ## Getting Started
 

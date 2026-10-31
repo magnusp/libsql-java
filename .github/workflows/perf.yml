@@ -1,0 +1,113 @@
+name: Performance
+
+# Posts a sticky comment with driver-side benchmark numbers. The base commit and the PR merge
+# commit are measured on the same runner, three interleaved rounds each, so the comparison survives
+# shared-runner noise. The job is informational: regressions are flagged, not failed.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Codec & JDBC benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Check out base
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+          persist-credentials: false
+
+      # The default pull_request ref is the merge commit, which isolates the PR changes when the
+      # base is the base branch tip. It also works for pull requests from forks.
+      - name: Check out PR merge commit
+        uses: actions/checkout@v7
+        with:
+          path: head
+          persist-credentials: false
+
+      - name: Set up Amazon Corretto 25
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'corretto'
+          java-version: '25'
+          cache: 'maven'
+
+      - name: Build benchmarkable modules
+        run: |
+          set -euo pipefail
+          if [ -d base/libsql-perf ]; then
+            (cd base && ./mvnw --batch-mode --quiet -Dmaven.test.skip=true -pl libsql-perf -am package)
+            echo "BASE_BENCHMARK=1" >> "$GITHUB_ENV"
+          else
+            echo "Base commit has no libsql-perf module yet; this run reports head numbers only."
+          fi
+          (cd head && ./mvnw --batch-mode --quiet -Dmaven.test.skip=true -pl libsql-perf -am package)
+
+      - name: Run benchmark (three interleaved rounds)
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          run() {
+            local dir=$1 out=$2 sha=$3
+            java -Xms1g -Xmx1g \
+              -cp "$dir/libsql-perf/target/classes:$dir/libsql-perf/target/lib/*" \
+              io.github.magnusp.libsql.perf.PerfBenchmark \
+              --quiet --json "$out" --commit "$sha"
+          }
+          for i in 1 2 3; do
+            if [ "${BASE_BENCHMARK:-0}" = "1" ]; then
+              run base "results/base-$i.json" "${{ github.event.pull_request.base.sha }}"
+            fi
+            run head "results/head-$i.json" "${{ github.sha }}"
+          done
+
+      - name: Render comment
+        run: |
+          set -euo pipefail
+          if [ "${BASE_BENCHMARK:-0}" = "1" ]; then
+            python3 head/tools/perf/render-comment.py \
+              --base results/base-1.json results/base-2.json results/base-3.json \
+              --head results/head-1.json results/head-2.json results/head-3.json \
+              --base-sha "${{ github.event.pull_request.base.sha }}" \
+              --head-sha "${{ github.sha }}" \
+              --out comment.md
+          else
+            python3 head/tools/perf/render-comment.py \
+              --head results/head-1.json results/head-2.json results/head-3.json \
+              --base-sha "${{ github.event.pull_request.base.sha }}" \
+              --head-sha "${{ github.sha }}" \
+              --out comment.md
+          fi
+          cat comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post or update PR comment
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          head/tools/perf/comment.sh \
+            "${{ github.repository }}" \
+            "${{ github.event.pull_request.number }}" \
+            comment.md
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-results
+          path: results/
+          if-no-files-found: warn
