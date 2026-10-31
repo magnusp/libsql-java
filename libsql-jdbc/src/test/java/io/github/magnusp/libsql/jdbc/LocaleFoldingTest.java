@@ -5,6 +5,7 @@ import io.github.magnusp.libsql.hrana.codec.Row;
 import io.github.magnusp.libsql.hrana.codec.StmtResult;
 import io.github.magnusp.libsql.hrana.codec.Value;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -68,9 +69,16 @@ class LocaleFoldingTest {
             new Col("PK_NAME", "TEXT"),
             new Col("DEFERRABILITY", "INTEGER"));
 
+    private Locale previousDefaultLocale;
+
+    @BeforeEach
+    void captureDefaultLocale() {
+        previousDefaultLocale = Locale.getDefault();
+    }
+
     @AfterEach
     void restoreDefaultLocale() {
-        Locale.setDefault(Locale.ROOT);
+        Locale.setDefault(previousDefaultLocale);
     }
 
     static Stream<Arguments> corpus() {
