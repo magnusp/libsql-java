@@ -4,7 +4,6 @@ import io.github.magnusp.libsql.hrana.codec.Col;
 import io.github.magnusp.libsql.hrana.codec.Row;
 import io.github.magnusp.libsql.hrana.codec.StmtResult;
 import io.github.magnusp.libsql.hrana.codec.Value;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -41,30 +40,6 @@ class LibsqlResultSetGetBooleanTest {
         assertThat(rs.next()).isTrue();
 
         assertThat(rs.getBoolean(1)).isEqualTo(expected);
-    }
-
-    @Test
-    void getBooleanParsesTextTrueAndFalse() throws SQLException {
-        LibsqlResultSet rs = resultSet(new Value.Text("true"), new Value.Text("false"));
-
-        assertThat(rs.next()).isTrue();
-
-        assertThat(rs.getBoolean(1)).isTrue();
-        assertThat(rs.getBoolean(2)).isFalse();
-    }
-
-    @Test
-    void textTrueIsTrueAndNumericTextKeepsIntegerCoercion() throws SQLException {
-        LibsqlResultSet rs = resultSet(
-                new Value.Text("true"),
-                new Value.Text("2"),
-                new Value.Float(0.5));
-
-        assertThat(rs.next()).isTrue();
-
-        assertThat(rs.getBoolean(1)).isTrue();
-        assertThat(rs.getBoolean(2)).isTrue();
-        assertThat(rs.getBoolean(3)).isFalse();
     }
 
     private static LibsqlResultSet resultSet(Value... values) {

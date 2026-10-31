@@ -32,18 +32,21 @@ shaded artifact.
 | `LibsqlUrlParserPropertyTest` | `libsql-jdbc` | only `SQLException` escapes parsing, metadata redaction idempotence | 500 |
 | `SqlMetadataParsingPropertyTest` | `libsql-jdbc` | declared-type parsing and AUTOINCREMENT detection | 500 |
 | `ConnectionLifecyclePropertyTest` | `libsql-jdbc` | model-based transaction and savepoint state machine using `ImperativeCommand` | 1 000 scenarios, up to 50 commands |
-| `HranaJsonCodecPropertyTest` | `libsql-hrana-codec` | both codecs agree on encode and decode, 64-bit integers, base64 blobs | 1 000 |
+| `HranaJsonCodecPropertyTest` | `libsql-hrana-codec` | both codecs agree on encode and decode of the whole response, 64-bit integers, base64 blobs | 1 000 |
 
 The suites add well under a second to the unit lane. They do not start a container.
 
 The statement splitter was the first target because a wrong split silently changes migration
 behavior. The generated scripts combine text literals, quoted identifiers, line and block comments,
-and trigger bodies that contain inner semicolons. The properties assert that:
+empty and comment-only statements, and trigger bodies that contain inner semicolons. The properties
+assert that:
 
-- `split` returns exactly the statements that were joined, in order;
+- `split` returns exactly the statements that were joined, in order, dropping empty and
+  comment-only ones;
 - arbitrary text never makes `split` throw;
 - every returned statement is non-blank;
 - splitting any returned statement again returns that same statement;
+- an unterminated quote stays inside one statement;
 - `?` inside quoted text, bracket identifiers, blob literals and comments is not a placeholder.
 
 The lifecycle suite is a small model, not a replay of named examples. The model tracks `closed`,
@@ -136,8 +139,8 @@ and savepoint work has more value in generated command sequences than in more pr
 
 ## Conventions and limits
 
-- Property tests complement the named examples. They do not replace the Appendix B profile or the
-  xerial conformance suite.
+- Property tests are the primary check for the pure seams they cover; they do not replace the
+  Appendix B profile or the xerial conformance suite.
 - Use AssertJ inside the property and finish with `return true`. The assertion failure is caught and
   shrunk by jetCheck.
 - Keep generators described and deterministic. Do not depend on outside state.

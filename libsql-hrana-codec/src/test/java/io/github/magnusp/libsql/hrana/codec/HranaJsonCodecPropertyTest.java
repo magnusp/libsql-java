@@ -58,6 +58,11 @@ class HranaJsonCodecPropertyTest {
                     PipelineRespBody jacksonResponse = decodeUnchecked(jackson, json);
 
                     assertThat(jacksonResponse).isEqualTo(directResponse);
+                    assertThat(directResponse.baton()).isEqualTo("baton-1");
+                    StreamResult.Ok ok = (StreamResult.Ok) directResponse.results().get(0);
+                    StreamResponse.Execute execute = (StreamResponse.Execute) ok.response();
+                    assertThat(execute.result().cols()).containsExactly(new Col("v", "TEXT"));
+                    assertThat(execute.result().lastInsertRowid()).isEqualTo(100L);
                     assertThat(firstValue(directResponse)).isEqualTo(described.value());
                     return true;
                 });
@@ -247,6 +252,8 @@ class HranaJsonCodecPropertyTest {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         try (JsonGenerator json = new JsonFactory().createGenerator(out)) {
             json.writeStartObject();
+            json.writeStringField("baton", "baton-1");
+            json.writeNullField("base_url");
             json.writeArrayFieldStart("results");
             json.writeStartObject();
             json.writeStringField("type", "ok");
@@ -265,7 +272,7 @@ class HranaJsonCodecPropertyTest {
             json.writeEndArray();
             json.writeEndArray();
             json.writeNumberField("affected_row_count", 0);
-            json.writeStringField("last_insert_rowid", "0");
+            json.writeStringField("last_insert_rowid", "100");
             json.writeEndObject();
             json.writeEndObject();
             json.writeEndObject();
