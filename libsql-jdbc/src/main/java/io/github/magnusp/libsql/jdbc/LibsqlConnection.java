@@ -298,20 +298,44 @@ public class LibsqlConnection implements Connection {
         }
     }
 
-    /** Callers hold {@link #stateLock}. */
+    /**
+     * Begins the manual transaction lazily. An auto-commit stream may already be open when the
+     * first transactional statement arrives, and that stream may have expired while the connection
+     * was idle. The begin did not run in that case, so drop the stale stream and retry once.
+     *
+     * <p>Callers hold {@link #stateLock}.
+     */
     private void ensureTransactionStarted() throws SQLException {
         if (transactionActive) return;
+        Stmt begin = new Stmt(transactionMode.beginSql());
         try {
-            sendOnStream(new Stmt(transactionMode.beginSql()));
-            if (!client.hasOpenStream()) {
-                throw new SQLException("The server closed the stream before the transaction began");
+            sendBegin(begin);
+        } catch (LibsqlException e) {
+            if (!isExpiredStream(e)) {
+                closeStreamQuietly();
+                throw LibsqlErrorMapper.toSQLException(e);
             }
-            transactionActive = true;
+            closeStreamQuietly();
+            try {
+                sendBegin(begin);
+            } catch (LibsqlException retry) {
+                closeStreamQuietly();
+                throw LibsqlErrorMapper.toSQLException(retry);
+            }
         } catch (SQLException e) {
             // The begin failed, so the fresh stream holds no transaction state.
             closeStreamQuietly();
             throw e;
         }
+    }
+
+    /** Callers hold {@link #stateLock}. */
+    private void sendBegin(Stmt begin) throws SQLException {
+        client.executeOnStream(begin);
+        if (!client.hasOpenStream()) {
+            throw new SQLException("The server closed the stream before the transaction began");
+        }
+        transactionActive = true;
     }
 
     /** Callers hold {@link #stateLock}. */

@@ -626,6 +626,32 @@ class LibsqlConnectionTest {
                 .isEqualTo(BATON);
     }
 
+    @Test
+    void anExpiredSessionStreamIsRetriedWhenTheTransactionBegins() throws SQLException {
+        AtomicInteger begins = new AtomicInteger();
+        ScriptedClient client = new ScriptedClient((request, index) -> {
+            if ("BEGIN".equals(executedSql(request)) && begins.incrementAndGet() == 1) {
+                return errorResponse(new HranaError(
+                        "The stream has expired due to inactivity", "STREAM_EXPIRED"));
+            }
+            return successResponse(request);
+        });
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.executeStatement(new Stmt("SELECT 1"));
+        connection.setAutoCommit(false);
+
+        connection.executeStatement(new Stmt("INSERT INTO sample VALUES (1)"));
+
+        assertThat(client.executedStatements())
+                .containsExactly("SELECT 1", "BEGIN", "BEGIN", "INSERT INTO sample VALUES (1)");
+        assertThat(client.requests.get(2).requests())
+                .as("the expired auto-commit stream is closed before the begin is retried")
+                .containsExactly(StreamRequest.Close.INSTANCE);
+        assertThat(client.requests.get(3).baton())
+                .as("the retried begin opens a fresh stream")
+                .isNull();
+    }
+
     private static int[] countsOfStepsThatRan(int failAt) {
         int[] counts = new int[failAt];
         for (int i = 0; i < counts.length; i++) {
