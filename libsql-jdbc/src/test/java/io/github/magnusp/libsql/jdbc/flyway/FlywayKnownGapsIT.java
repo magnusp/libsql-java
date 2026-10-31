@@ -14,11 +14,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Pins the Flyway-facing gaps the smoke test found.
+ * Pins the Flyway-facing behavior the smoke test found.
  *
- * <p>These assertions describe current behavior, not desired behavior. If a test
- * starts failing, the driver improved and the workaround in the assertion message
- * can be removed.
+ * <p>URL-based Flyway configuration cannot select the driver from a
+ * {@code jdbc:libsql:} URL; the supported configurations are documented in the
+ * README. {@code clean()} works when foreign keys are disabled on the
+ * connection before Flyway starts its transaction, as SQLite ignores
+ * {@code PRAGMA foreign_keys} inside a transaction.
  */
 class FlywayKnownGapsIT extends FlywaySqldSupport {
 
@@ -27,6 +29,21 @@ class FlywayKnownGapsIT extends FlywaySqldSupport {
                 .dataSource(dataSource())
                 .locations("classpath:flyway/migration")
                 .cleanDisabled(false)
+                .load();
+    }
+
+    /**
+     * Flyway wraps {@code clean()} in a transaction. SQLite ignores
+     * {@code PRAGMA foreign_keys} inside a transaction, so the pragma must run when the
+     * connection is initialized, before Flyway begins its transaction. The driver's
+     * connection-scoped auto-commit stream keeps that session state for the later statements.
+     */
+    private static Flyway flywayWithForeignKeysDisabled() {
+        return Flyway.configure()
+                .dataSource(dataSource())
+                .locations("classpath:flyway/migration")
+                .cleanDisabled(false)
+                .initSql("PRAGMA foreign_keys = OFF")
                 .load();
     }
 
@@ -74,42 +91,30 @@ class FlywayKnownGapsIT extends FlywaySqldSupport {
     }
 
     @Test
-    void cleanIsBlockedUntilMultiStatementSupportLands() throws Exception {
-        Flyway flyway = flyway();
+    void cleanDropsEveryUserTableAndTheSchemaHistory() throws Exception {
+        Flyway flyway = flywayWithForeignKeysDisabled();
         flyway.migrate();
+        assertThat(userTables()).contains("author", "book", "flyway_schema_history");
 
-        assertThat(scalarInt("PRAGMA foreign_keys"))
-                .as("sqld enables foreign keys on a fresh connection, unlike vanilla SQLite")
-                .isEqualTo(1);
-
-        // The decision is to support clean(); see #258. This pin flips when
-        // multi-statement PRAGMA/DROP scripts are supported.
-        assertThatThrownBy(flyway::clean)
-                .as("Flyway sees foreign keys enabled and sends"
-                        + " 'PRAGMA foreign_keys = OFF; DROP TABLE ...; PRAGMA foreign_keys = ON'"
-                        + " as one statement. sqld rejects that string, so clean cannot finish."
-                        + " Supporting clean() is tracked in #258.")
-                .isInstanceOf(FlywayException.class)
-                .hasMessageContaining("Unable to drop")
-                .hasStackTraceContaining("SQL string contains more than one statement");
+        flyway.clean();
 
         assertThat(userTables())
-                .as("clean stopped at the first table")
-                .contains("author");
+                .as("Flyway sends a PRAGMA/DROP script per table; the driver splits it and"
+                        + " runs every statement on the connection's stream")
+                .isEmpty();
     }
 
     @Test
-    void autoCommitStatementsDoNotShareSessionState() throws SQLException {
+    void autoCommitStatementsShareSessionState() throws SQLException {
         try (Connection connection = connect(); Statement statement = connection.createStatement()) {
             statement.execute("PRAGMA foreign_keys = OFF");
 
             try (ResultSet resultSet = statement.executeQuery("PRAGMA foreign_keys")) {
                 assertThat(resultSet.next()).isTrue();
                 assertThat(resultSet.getInt(1))
-                        .as("each auto-commit statement runs as a one-shot Hrana stream, so"
-                                + " connection-scoped state set by PRAGMA is gone by the next"
-                                + " statement. Wrap related statements in a transaction.")
-                        .isEqualTo(1);
+                        .as("auto-commit statements run on the connection's session stream, so"
+                                + " connection-scoped state set by PRAGMA survives")
+                        .isZero();
             }
         }
     }

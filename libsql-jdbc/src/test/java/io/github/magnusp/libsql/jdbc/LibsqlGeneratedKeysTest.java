@@ -30,8 +30,8 @@ class LibsqlGeneratedKeysTest {
 
     @Test
     void autoCommitInsertReturnsLastInsertRowidFromStmtResult() throws SQLException {
-        // Auto-commit runs every statement one-shot, so the only rowid the driver can report is
-        // the one the server sent on this statement's result.
+        // The generated keys come from the rowid the server sent on this statement's result,
+        // without a follow-up last_insert_rowid() query.
         StmtResult insert = insertResult(42L);
         RecordingConnection connection = new RecordingConnection(insert);
         assertThat(connection.getAutoCommit()).isTrue();

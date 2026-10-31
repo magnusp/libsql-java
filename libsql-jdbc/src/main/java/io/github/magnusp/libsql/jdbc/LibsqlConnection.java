@@ -71,6 +71,7 @@ public class LibsqlConnection implements Connection {
     private TransactionMode transactionMode = TransactionMode.DEFERRED;
     private LibsqlDatabaseMetaData meta;
     private int nextSavepointId = 0;
+    private boolean transactionActive = false;
     private boolean transactionStartedBySavepoint = false;
     private final List<String> savepointNames = new ArrayList<>();
 
@@ -102,7 +103,9 @@ public class LibsqlConnection implements Connection {
         }
     }
 
-    // Interactive stream state lives in the client; see LibsqlClient.hasOpenStream().
+    // The client owns the Hrana stream. Auto-commit keeps one open between statements so session
+    // state survives; a manual transaction tracks its begin explicitly because the stream may
+    // already be open for auto-commit when the transaction starts.
 
     public LibsqlConnection(LibsqlClientConfig config, LibsqlClient client) {
         this(config, client, null);
@@ -135,11 +138,12 @@ public class LibsqlConnection implements Connection {
         synchronized (stateLock) {
             checkClosed();
             if (autoCommit) {
-                // One-shot: single-round-trip close, so no idle stream is left for the server to reap.
-                return sending(() -> client.executeOneShot(stmt));
+                return sendAutoCommit(stmt);
             }
             ensureTransactionStarted();
-            return sendOnStream(stmt);
+            StmtResult result = sendOnStream(stmt);
+            requireTransactionStream();
+            return result;
         }
     }
 
@@ -162,10 +166,11 @@ public class LibsqlConnection implements Connection {
             Batch batch = new Batch(steps);
             BatchResult result;
             if (autoCommit) {
-                result = sending(() -> client.executeBatchOneShot(batch));
+                result = sendBatchAutoCommit(batch);
             } else {
                 ensureTransactionStarted();
                 result = sendBatchOnStream(batch);
+                requireTransactionStream();
             }
             return extractBatchResults(result, statements.size());
         }
@@ -215,6 +220,62 @@ public class LibsqlConnection implements Connection {
         }
     }
 
+    /**
+     * Sends an auto-commit statement on the connection's session stream. sqld expires idle streams
+     * (around 10 seconds); when it rejects the baton, the statement did not run, so the driver drops
+     * the stale stream and retries once on a fresh one. Auto-commit has no transaction to lose.
+     * Session state set before the expiry is gone, by design.
+     *
+     * <p>Callers hold {@link #stateLock}.
+     */
+    private StmtResult sendAutoCommit(Stmt stmt) throws SQLException {
+        try {
+            return client.executeOnStream(stmt);
+        } catch (LibsqlException e) {
+            if (!isExpiredStream(e)) {
+                throw LibsqlErrorMapper.toSQLException(e);
+            }
+            closeStreamQuietly();
+            try {
+                return client.executeOnStream(stmt);
+            } catch (LibsqlException retry) {
+                throw LibsqlErrorMapper.toSQLException(retry);
+            }
+        }
+    }
+
+    /** Auto-commit counterpart of {@link #sendAutoCommit(Stmt)}, with the same one retry. */
+    private BatchResult sendBatchAutoCommit(Batch batch) throws SQLException {
+        try {
+            return client.executeBatchOnStream(batch);
+        } catch (LibsqlException e) {
+            if (!isExpiredStream(e)) {
+                throw LibsqlErrorMapper.toSQLException(e);
+            }
+            closeStreamQuietly();
+            try {
+                return client.executeBatchOnStream(batch);
+            } catch (LibsqlException retry) {
+                throw LibsqlErrorMapper.toSQLException(retry);
+            }
+        }
+    }
+
+    private static boolean isExpiredStream(LibsqlException e) {
+        String code = e.getCode();
+        if (code != null) {
+            String upper = code.toUpperCase(java.util.Locale.ROOT);
+            if (upper.equals("STREAM_EXPIRED")
+                    || upper.equals("BATON_EXPIRED")
+                    || upper.equals("STALE_BATON")) {
+                return true;
+            }
+        }
+        String message = e.getMessage();
+        return message != null
+                && message.toLowerCase(java.util.Locale.ROOT).contains("stream has expired");
+    }
+
     /** Stream sends. Callers hold {@link #stateLock}. */
     private StmtResult sendOnStream(Stmt stmt) throws SQLException {
         return sending(() -> client.executeOnStream(stmt));
@@ -224,11 +285,43 @@ public class LibsqlConnection implements Connection {
         return sending(() -> client.executeBatchOnStream(batch));
     }
 
-    /** Callers hold {@link #stateLock}. */
+    /**
+     * Fails the transaction when the server closed its stream anyway. Executing the next statement
+     * on a fresh stream would silently run it outside the transaction the caller asked for.
+     * Callers hold {@link #stateLock}.
+     */
+    private void requireTransactionStream() throws SQLException {
+        if (!client.hasOpenStream()) {
+            transactionActive = false;
+            clearSavepoints();
+            throw new SQLException("The server closed the transaction stream");
+        }
+    }
+
+    /**
+     * Begins the manual transaction lazily. An auto-commit stream may already be open when the
+     * first transactional statement arrives, and that stream may have expired while the connection
+     * was idle. The begin did not run in that case, so drop the stale stream and retry once.
+     *
+     * <p>Callers hold {@link #stateLock}.
+     */
     private void ensureTransactionStarted() throws SQLException {
-        if (!beginPending()) return;
+        if (transactionActive) return;
+        Stmt begin = new Stmt(transactionMode.beginSql());
         try {
-            sendOnStream(new Stmt(transactionMode.beginSql()));
+            sendBegin(begin);
+        } catch (LibsqlException e) {
+            if (!isExpiredStream(e)) {
+                closeStreamQuietly();
+                throw LibsqlErrorMapper.toSQLException(e);
+            }
+            closeStreamQuietly();
+            try {
+                sendBegin(begin);
+            } catch (LibsqlException retry) {
+                closeStreamQuietly();
+                throw LibsqlErrorMapper.toSQLException(retry);
+            }
         } catch (SQLException e) {
             // The begin failed, so the fresh stream holds no transaction state.
             closeStreamQuietly();
@@ -236,15 +329,13 @@ public class LibsqlConnection implements Connection {
         }
     }
 
-    /**
-     * The begin-pending state is derived rather than stored: auto-commit is off and the client has
-     * no open stream, so the next statement must begin the transaction. A separate boolean would be
-     * a second source of truth for a fact the client's stream state already carries.
-     *
-     * <p>Callers hold {@link #stateLock}.
-     */
-    private boolean beginPending() {
-        return !autoCommit && !client.hasOpenStream();
+    /** Callers hold {@link #stateLock}. */
+    private void sendBegin(Stmt begin) throws SQLException {
+        client.executeOnStream(begin);
+        if (!client.hasOpenStream()) {
+            throw new SQLException("The server closed the stream before the transaction began");
+        }
+        transactionActive = true;
     }
 
     /** Callers hold {@link #stateLock}. */
@@ -293,13 +384,14 @@ public class LibsqlConnection implements Connection {
      *
      * <ul>
      *   <li>Disabling auto-commit only records that the next statement must begin a transaction in
-     *       the configured {@link TransactionMode}. No request is sent, so an idle non-auto-commit
-     *       connection holds no Hrana stream and cannot hit sqld's idle stream expiry.
+     *       the configured {@link TransactionMode}. No request is sent. An auto-commit stream that
+     *       was already open stays open and the begin runs on it, so session state set in
+     *       auto-commit survives into the transaction.
      *   <li>{@link #commit()} and {@link #rollback()} end the open transaction and close its stream
      *       without beginning the next one. A commit or rollback with no work sent nothing to the
      *       server, as in xerial.
      *   <li>Re-enabling auto-commit commits the open transaction and ends the Hrana transaction
-     *       stream.
+     *       stream. The next auto-commit statement opens a fresh session stream.
      * </ul>
      *
      * <p>This diverges from xerial only in when the server sees the begin: an {@code IMMEDIATE} or
@@ -351,7 +443,7 @@ public class LibsqlConnection implements Connection {
 
     /** Callers hold {@link #stateLock}. */
     private void endTransaction(String sql) throws SQLException {
-        if (beginPending()) {
+        if (!transactionActive) {
             // No transaction has started, so there is nothing to send and nothing to close.
             return;
         }
@@ -361,6 +453,7 @@ public class LibsqlConnection implements Connection {
         // The server committed or rolled back, so the stream has no state left worth holding.
         // Closing it lets an idle connection drop its server-side stream. On an error above the
         // stream stays, so the caller can retry or roll back on the same stream.
+        transactionActive = false;
         clearSavepoints();
         closeStreamQuietly();
     }
@@ -370,6 +463,7 @@ public class LibsqlConnection implements Connection {
         synchronized (stateLock) {
             if (!closed) {
                 closed = true;
+                transactionActive = false;
                 clearSavepoints();
                 closeStreamQuietly();
                 if (client != null) {
@@ -563,12 +657,14 @@ public class LibsqlConnection implements Connection {
     private void beginSavepointTransaction(Stmt stmt, String sqlName) throws SQLException {
         try {
             sendOnStream(stmt);
+            requireTransactionStream();
         } catch (SQLException e) {
             // No transaction was started, so the fresh stream holds no state.
             closeStreamQuietly();
             throw e;
         }
         autoCommit = false;
+        transactionActive = true;
         transactionStartedBySavepoint = true;
         savepointNames.clear();
         savepointNames.add(sqlName);
@@ -617,6 +713,7 @@ public class LibsqlConnection implements Connection {
         savepointNames.subList(index, savepointNames.size()).clear();
         if (index > 0 || !transactionStartedBySavepoint) return;
         transactionStartedBySavepoint = false;
+        transactionActive = false;
         closeStreamQuietly();
     }
 

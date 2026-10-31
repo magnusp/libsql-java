@@ -11,11 +11,12 @@ import io.github.magnusp.libsql.hrana.codec.StmtResult;
  * <p>Both transports expose the same two execution styles. A <em>one-shot</em> call opens a stream,
  * runs the work and closes the stream in as few round trips as possible, so it leaves no server-side
  * state behind and needs no explicit cleanup. An <em>on-stream</em> call reuses a lazily opened
- * interactive stream, which is what a transaction needs: the server keeps the transaction open
- * between calls.
+ * interactive stream. The JDBC driver uses the on-stream style for every statement, so auto-commit
+ * retains SQLite session state such as {@code last_insert_rowid()} and {@code PRAGMA} settings, and
+ * manual transactions stay open between calls.
  *
- * <p>Implementations track their own stream state. {@link #hasOpenStream()} is the single source of
- * truth for whether a transaction begin is still pending.
+ * <p>Implementations track their own stream state. {@link #hasOpenStream()} tells a caller whether
+ * the lazily opened stream still exists, which matters after the server expires an idle stream.
  */
 public interface LibsqlClient extends AutoCloseable {
 

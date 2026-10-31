@@ -11,6 +11,7 @@ import java.sql.BatchUpdateException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.sql.SQLIntegrityConstraintViolationException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -189,6 +190,106 @@ class LibsqlStatementTest {
         statement.execute("insert into t values (?)");
 
         assertThat(connection.executedStatements.get(0).args()).containsExactly(Value.ofNull());
+    }
+
+    @Test
+    void multiStatementUpdateSumsAffectedRowsAndSendsEachStatementInOrder() throws SQLException {
+        ScriptedConnection connection = new ScriptedConnection(
+                List.of(updateResult(1), updateResult(1)));
+        LibsqlStatement statement = new LibsqlStatement(connection);
+
+        assertThat(statement.executeUpdate(
+                        "insert into t values (1); insert into t values (2)"))
+                .isEqualTo(2);
+
+        assertThat(connection.executedStatements)
+                .containsExactly("insert into t values (1)", "insert into t values (2)");
+        assertThat(statement.getUpdateCount()).isEqualTo(2);
+    }
+
+    @Test
+    void multiStatementExecuteExposesTheFinalResultSet() throws SQLException {
+        StmtResult select = new StmtResult(
+                List.of(new Col("value", null)),
+                List.of(new Row(List.of(Value.of(2L)))),
+                0,
+                null);
+        ScriptedConnection connection = new ScriptedConnection(
+                List.of(updateResult(1), select));
+        LibsqlStatement statement = new LibsqlStatement(connection);
+
+        assertThat(statement.execute("insert into t values (1); select 2")).isTrue();
+
+        try (ResultSet resultSet = statement.getResultSet()) {
+            assertThat(resultSet.next()).isTrue();
+            assertThat(resultSet.getLong(1)).isEqualTo(2L);
+        }
+    }
+
+    @Test
+    void multiStatementStopsAtTheFirstFailureAndRunsNoLaterStatement() {
+        ScriptedConnection connection = new ScriptedConnection(List.of(updateResult(1)));
+        connection.failOnStatement = 2;
+        LibsqlStatement statement = new LibsqlStatement(connection);
+
+        assertThatThrownBy(() -> statement.execute(
+                        "insert into t values (1); insert into t values (2); insert into t values (3)"))
+                .isInstanceOf(SQLIntegrityConstraintViolationException.class)
+                .hasMessageContaining("constraint failed");
+
+        assertThat(connection.executedStatements)
+                .containsExactly("insert into t values (1)", "insert into t values (2)");
+    }
+
+    @Test
+    void multiStatementWithPlaceholdersIsRejectedBeforeAnythingRuns() {
+        ScriptedConnection connection = new ScriptedConnection(List.of(updateResult(1)));
+        LibsqlStatement statement = new LibsqlStatement(connection);
+
+        assertThatThrownBy(() -> statement.execute(
+                        "insert into t values (?); insert into t values (2)"))
+                .isInstanceOf(SQLFeatureNotSupportedException.class)
+                .hasMessageContaining("multi-statement");
+
+        assertThat(connection.executedStatements).isEmpty();
+    }
+
+    @Test
+    void preparedMultiStatementWithBoundArgumentsIsRejectedBeforeAnythingRuns() throws SQLException {
+        ScriptedConnection connection = new ScriptedConnection(List.of(updateResult(1)));
+        LibsqlPreparedStatement statement = new LibsqlPreparedStatement(
+                connection, "insert into t values (1); insert into t values (2)");
+        statement.setInt(1, 1);
+
+        assertThatThrownBy(statement::executeUpdate)
+                .isInstanceOf(SQLFeatureNotSupportedException.class)
+                .hasMessageContaining("multi-statement");
+
+        assertThat(connection.executedStatements).isEmpty();
+    }
+
+    private static StmtResult updateResult(long affectedRows) {
+        return new StmtResult(List.of(), List.of(), affectedRows, null);
+    }
+
+    private static final class ScriptedConnection extends LibsqlConnection {
+        private final List<StmtResult> results;
+        private final List<String> executedStatements = new ArrayList<>();
+        private int failOnStatement = -1;
+
+        private ScriptedConnection(List<StmtResult> results) {
+            super(null, null);
+            this.results = results;
+        }
+
+        @Override
+        public StmtResult executeStatement(Stmt stmt) throws SQLException {
+            executedStatements.add(stmt.sql());
+            if (executedStatements.size() == failOnStatement) {
+                throw new SQLIntegrityConstraintViolationException("constraint failed");
+            }
+            return results.get(executedStatements.size() - 1);
+        }
     }
 
     private static final class RecordingConnection extends LibsqlConnection {

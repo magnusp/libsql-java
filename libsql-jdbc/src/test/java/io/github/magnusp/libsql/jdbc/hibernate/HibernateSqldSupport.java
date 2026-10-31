@@ -31,8 +31,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * schema back through the driver's metadata.
  *
  * <p>Hibernate generates SQLite identities with a separate
- * {@code select last_insert_rowid()}, so the probes keep auto-commit off. Issue #83
- * records why that query cannot see an insert from an earlier auto-commit statement.
+ * {@code select last_insert_rowid()}. Auto-commit statements share the connection's
+ * session stream, so the query sees the insert even without an explicit transaction.
  */
 @Testcontainers
 abstract class HibernateSqldSupport {
@@ -62,7 +62,6 @@ abstract class HibernateSqldSupport {
                 .addAnnotatedClass(Note.class)
                 .setProperty("jakarta.persistence.jdbc.url", jdbcUrl())
                 .setProperty("hibernate.dialect", "org.hibernate.community.dialect.SQLiteDialect")
-                .setProperty("hibernate.connection.autocommit", "false")
                 .setProperty("hibernate.show_sql", "false")
                 .setProperty("hibernate.format_sql", "false")
                 .setProperty("hibernate.highlight_sql", "false");

@@ -16,8 +16,6 @@ import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Statement;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.logging.Logger;
 
@@ -63,13 +61,13 @@ abstract class FlywaySqldSupport {
 
     static void resetDatabase() throws SQLException {
         try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+            // Auto-commit statements share the connection's stream, so the PRAGMA applies to
+            // every DROP that follows instead of forcing a foreign-key-aware drop order.
+            statement.execute("PRAGMA foreign_keys = OFF");
             for (String view : names(statement, "view")) {
                 statement.execute("DROP VIEW IF EXISTS \"" + view + "\"");
             }
-            // A PRAGMA does not survive into the next auto-commit statement, so the
-            // drop order has to respect the foreign-key graph instead of disabling
-            // checks.
-            for (String table : dropOrder(statement, names(statement, "table"))) {
+            for (String table : names(statement, "table")) {
                 statement.execute("DROP TABLE IF EXISTS \"" + table + "\"");
             }
         }
@@ -120,45 +118,6 @@ abstract class FlywaySqldSupport {
             }
         }
         return names;
-    }
-
-    /** Orders children before the parents they reference. */
-    private static List<String> dropOrder(Statement statement, List<String> tables) throws SQLException {
-        var parents = new LinkedHashMap<String, List<String>>();
-        var childCount = new LinkedHashMap<String, Integer>();
-        for (String table : tables) {
-            List<String> references = new ArrayList<>();
-            try (ResultSet resultSet = statement.executeQuery("PRAGMA foreign_key_list(\"" + table + "\")")) {
-                while (resultSet.next()) {
-                    String parent = resultSet.getString("table");
-                    if (tables.contains(parent) && !references.contains(parent)) {
-                        references.add(parent);
-                    }
-                }
-            }
-            parents.put(table, references);
-            childCount.put(table, 0);
-        }
-        for (List<String> references : parents.values()) {
-            for (String parent : references) {
-                childCount.merge(parent, 1, Integer::sum);
-            }
-        }
-
-        List<String> order = new ArrayList<>();
-        var remaining = new LinkedHashSet<>(tables);
-        while (!remaining.isEmpty()) {
-            String leaf = remaining.stream()
-                    .filter(table -> childCount.get(table) == 0)
-                    .findFirst()
-                    .orElseGet(() -> remaining.iterator().next());
-            order.add(leaf);
-            remaining.remove(leaf);
-            for (String parent : parents.get(leaf)) {
-                childCount.merge(parent, -1, Integer::sum);
-            }
-        }
-        return order;
     }
 
     private static String requireLibsqlImage() {

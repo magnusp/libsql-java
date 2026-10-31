@@ -37,11 +37,11 @@ import static org.jooq.impl.DSL.table;
 /**
  * Drives the in-tree driver through jOOQ, including code generation.
  *
- * <p>Identity-dependent queries run inside an explicit transaction. jOOQ's
- * SQLite dialect reads identities with
- * {@code SELECT ... WHERE _rowid_ = last_insert_rowid()}, which only works
- * while the insert and the follow-up select share one Hrana stream. The
- * auto-commit gap itself is pinned below.
+ * <p>Identity-dependent queries run inside an explicit transaction and in
+ * auto-commit. jOOQ's SQLite dialect reads identities with
+ * {@code SELECT ... WHERE _rowid_ = last_insert_rowid()}; auto-commit
+ * statements share the connection's session stream, so the follow-up select
+ * sees the insert.
  */
 class JooqIT extends JooqSqldSupport {
 
@@ -255,7 +255,7 @@ class JooqIT extends JooqSqldSupport {
     }
 
     @Test
-    void autoCommitInsertDoesNotExposeGeneratedIdentity() {
+    void autoCommitInsertExposesGeneratedIdentity() {
         Record inserted = dsl.insertInto(AUTHOR)
                 .set(AUTHOR_NAME, "Auto Commit")
                 .set(AUTHOR_COUNTRY, "SE")
@@ -267,13 +267,15 @@ class JooqIT extends JooqSqldSupport {
                 .isEqualTo(1);
         assertThat(inserted)
                 .as("jOOQ reads identities with SELECT ... WHERE _rowid_ = last_insert_rowid();"
-                        + " in auto-commit the select runs on a fresh Hrana stream, so it sees 0."
-                        + " Use an explicit transaction while this is null.")
-                .isNull();
+                        + " auto-commit statements share the connection's session stream, so the"
+                        + " select sees the insert.")
+                .isNotNull();
+        Integer authorId = inserted.get(AUTHOR_ID);
+        assertThat(authorId).isNotNull().isPositive();
         assertThat(dsl.select(field("last_insert_rowid()", Integer.class))
                 .fetchOne(0, Integer.class))
-                .as("a new auto-commit stream has no last_insert_rowid state")
-                .isZero();
+                .as("last_insert_rowid() survives between auto-commit statements")
+                .isEqualTo(authorId);
     }
 
     @Test

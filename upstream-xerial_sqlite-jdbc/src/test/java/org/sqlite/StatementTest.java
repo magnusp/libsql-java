@@ -52,24 +52,23 @@ public class StatementTest {
         // count_changes_pgrama. truncate_optimization
         assertThat(stat.executeUpdate("delete from s1;")).isEqualTo(3);
 
-        // multiple SQL statements: Hrana carries one statement per Stmt and sqld
-        // rejects a multi-statement string, so the xerial expectation is control-only.
-        if (!isLibsql()) {
-            assertThat(stat.executeUpdate("insert into s1 values (11);" + "insert into s1 values (12)"))
-                    .isEqualTo(2);
-            assertThat(
-                            stat.executeUpdate(
-                                    "update s1 set c1 = 21 where c1 = 11;"
-                                            + "update s1 set c1 = 22 where c1 = 12;"
-                                            + "update s1 set c1 = 23 where c1 = 13"))
-                    .isEqualTo(2); // c1 = 13 does not exist
-            assertThat(
-                            stat.executeUpdate(
-                                    "delete from s1 where c1 = 21;"
-                                            + "delete from s1 where c1 = 22;"
-                                            + "delete from s1 where c1 = 23"))
-                    .isEqualTo(2); // c1 = 23 does not exist
-        }
+        // Multiple SQL statements: the driver splits the script and sends each
+        // statement on the connection's session stream. The update count is the
+        // total affected rows, as in xerial.
+        assertThat(stat.executeUpdate("insert into s1 values (11);" + "insert into s1 values (12)"))
+                .isEqualTo(2);
+        assertThat(
+                        stat.executeUpdate(
+                                "update s1 set c1 = 21 where c1 = 11;"
+                                        + "update s1 set c1 = 22 where c1 = 12;"
+                                        + "update s1 set c1 = 23 where c1 = 13"))
+                .isEqualTo(2); // c1 = 13 does not exist
+        assertThat(
+                        stat.executeUpdate(
+                                "delete from s1 where c1 = 21;"
+                                        + "delete from s1 where c1 = 22;"
+                                        + "delete from s1 where c1 = 23"))
+                .isEqualTo(2); // c1 = 23 does not exist
 
         assertThat(stat.executeUpdate("drop table s1;")).isEqualTo(0);
     }
@@ -540,8 +539,7 @@ public class StatementTest {
 
     @Test
     public void multipleStatements() throws SQLException {
-        assumeFalse(isLibsql(), "sqld rejects a multi-statement SQL string with SQL_MANY_STATEMENTS");
-        // ; insert into person values(1,'leo')
+        // The driver splits the script into statements and runs them in order.
         stat.executeUpdate(
                 "create table person (id integer, name string); "
                         + "insert into person values(1, 'leo'); insert into person values(2, 'yui');");
