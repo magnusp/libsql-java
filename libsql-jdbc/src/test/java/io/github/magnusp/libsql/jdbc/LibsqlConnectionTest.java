@@ -23,6 +23,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.sql.BatchUpdateException;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLIntegrityConstraintViolationException;
 import java.sql.SQLTransientConnectionException;
 import java.util.ArrayList;
@@ -52,6 +53,19 @@ class LibsqlConnectionTest {
 
         assertThat(connection.getMetaData()).isSameAs(connection.getMetaData());
         assertThat(other.getMetaData()).isNotSameAs(connection.getMetaData());
+    }
+
+    @Test
+    void createArrayOfAndCreateStructThrowFeatureNotSupported() throws SQLException {
+        LibsqlConnection connection = new LibsqlConnection(
+                CONFIG, new ScriptedClient((request, index) -> successResponse(request)));
+
+        assertThatThrownBy(() -> connection.createArrayOf("INTEGER", new Object[0]))
+                .isExactlyInstanceOf(SQLFeatureNotSupportedException.class)
+                .hasMessage("createArrayOf is not supported");
+        assertThatThrownBy(() -> connection.createStruct("point", new Object[0]))
+                .isExactlyInstanceOf(SQLFeatureNotSupportedException.class)
+                .hasMessage("createStruct is not supported");
     }
 
     @Test
