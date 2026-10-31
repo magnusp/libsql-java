@@ -809,10 +809,10 @@ public class LibsqlConnection implements Connection {
     public Properties getClientInfo() throws SQLException { return new Properties(); }
 
     @Override
-    public Array createArrayOf(String typeName, Object[] elements) throws SQLException { throw new UnsupportedOperationException(); }
+    public Array createArrayOf(String typeName, Object[] elements) throws SQLException { throw new SQLFeatureNotSupportedException("createArrayOf is not supported"); }
 
     @Override
-    public Struct createStruct(String typeName, Object[] attributes) throws SQLException { throw new UnsupportedOperationException(); }
+    public Struct createStruct(String typeName, Object[] attributes) throws SQLException { throw new SQLFeatureNotSupportedException("createStruct is not supported"); }
 
     @Override
     public void setSchema(String schema) throws SQLException {}
