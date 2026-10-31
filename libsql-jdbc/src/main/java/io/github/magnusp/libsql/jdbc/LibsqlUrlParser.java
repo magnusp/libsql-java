@@ -5,15 +5,23 @@ import io.github.magnusp.libsql.client.LibsqlClientConfig;
 import java.net.URI;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 public class LibsqlUrlParser {
 
     public static final String PREFIX = "jdbc:libsql:";
     public static final String SQLITE_PREFIX = "jdbc:sqlite:";
+
+    private static final Set<String> CREDENTIAL_QUERY_PARAMS =
+            Set.of("authToken", "jwt", "password", "token");
+    private static final Pattern USER_INFO = Pattern.compile("^(jdbc:[a-zA-Z]+:[a-zA-Z]+://)[^/@]*@");
 
     public static boolean acceptsUrl(String url) {
         if (url == null) return false;
@@ -39,6 +47,38 @@ public class LibsqlUrlParser {
                 resolveDuration("busyTimeout", queryParams, info, LibsqlClientConfig.DEFAULT_BUSY_TIMEOUT);
         return new LibsqlClientConfig(
                 buildEndpoint(uri, scheme), authToken, connectTimeout, busyTimeout, encoding);
+    }
+
+    /**
+     * Returns the URL for {@code DatabaseMetaData.getURL()} without credentials. The driver
+     * accepts an auth token in the query string, so returning the raw URL would leak it to any
+     * consumer that inspects metadata.
+     */
+    static String metadataUrl(String url) {
+        if (url == null) {
+            return null;
+        }
+        String redacted = USER_INFO.matcher(url).replaceFirst("$1");
+        int queryStart = redacted.indexOf('?');
+        if (queryStart < 0) {
+            return redacted;
+        }
+        String query = redacted.substring(queryStart + 1);
+        String[] pairs = query.split("&");
+        List<String> kept = new ArrayList<>(pairs.length);
+        for (String pair : pairs) {
+            int equals = pair.indexOf('=');
+            String key = equals >= 0 ? pair.substring(0, equals) : pair;
+            if (!CREDENTIAL_QUERY_PARAMS.contains(key)) {
+                kept.add(pair);
+            }
+        }
+        if (kept.size() == pairs.length) {
+            return redacted;
+        }
+        return kept.isEmpty()
+                ? redacted.substring(0, queryStart)
+                : redacted.substring(0, queryStart) + "?" + String.join("&", kept);
     }
 
     private static URI normalizeUri(String url) throws SQLException {

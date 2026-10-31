@@ -134,4 +134,27 @@ public class LibsqlUrlParserTest {
         assertThat(LibsqlUrlParser.acceptsUrl("jdbc:sqlite:wss://localhost:8080")).isTrue();
         assertThat(LibsqlUrlParser.acceptsUrl("jdbc:other:ws://localhost:8080")).isFalse();
     }
+
+    @Test
+    void testMetadataUrlRedactsAuthenticationQueryParameters() {
+        assertThat(LibsqlUrlParser.metadataUrl(
+                        "jdbc:libsql:http://localhost:8080/dev/tenant"
+                                + "?authToken=secretToken&connectTimeout=5000"))
+                .isEqualTo("jdbc:libsql:http://localhost:8080/dev/tenant?connectTimeout=5000");
+        assertThat(LibsqlUrlParser.metadataUrl(
+                        "jdbc:libsql:http://localhost:8080?jwt=secretToken&password=secret"))
+                .isEqualTo("jdbc:libsql:http://localhost:8080");
+    }
+
+    @Test
+    void testMetadataUrlRedactsUserInfo() {
+        assertThat(LibsqlUrlParser.metadataUrl("jdbc:libsql:http://user:pass@localhost:8080/dev"))
+                .isEqualTo("jdbc:libsql:http://localhost:8080/dev");
+    }
+
+    @Test
+    void testMetadataUrlLeavesANonCredentialUrlUnchanged() {
+        String url = "jdbc:sqlite:http://localhost:8080/dev/tenant?connectTimeout=5000";
+        assertThat(LibsqlUrlParser.metadataUrl(url)).isEqualTo(url);
+    }
 }
