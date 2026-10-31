@@ -277,10 +277,12 @@ class JooqIT extends JooqSqldSupport {
     }
 
     @Test
-    void jdbcUrlIsDetectedAsSqliteDialect() {
+    void dialectDetectionUsesTheUrlNotTheProductName() {
         assertThat(JDBCUtils.dialect(connection))
-                .as("DatabaseMetaData reports exactly 'SQLite', so jOOQ maps the connection"
-                        + " to SQLDialect.SQLITE without an explicit dialect.")
-                .isEqualTo(SQLDialect.SQLITE);
+                .as("jOOQ 3.21 derives the dialect from DatabaseMetaData.getURL(), not from"
+                        + " the product name. The driver reports its transport endpoint there,"
+                        + " so jOOQ returns SQLDialect.DEFAULT; pass SQLDialect.SQLITE"
+                        + " explicitly.")
+                .isEqualTo(SQLDialect.DEFAULT);
     }
 }
