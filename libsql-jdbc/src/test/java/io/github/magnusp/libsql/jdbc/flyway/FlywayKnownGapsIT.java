@@ -35,15 +35,14 @@ class FlywayKnownGapsIT extends FlywaySqldSupport {
     /**
      * Flyway wraps {@code clean()} in a transaction. SQLite ignores
      * {@code PRAGMA foreign_keys} inside a transaction, so the pragma must run when the
-     * connection is initialized, before Flyway begins its transaction. The driver's
-     * connection-scoped auto-commit stream keeps that session state for the later statements.
+     * DataSource hands over the connection, before Flyway begins any transaction. The
+     * driver's connection-scoped auto-commit stream keeps that state for the later statements.
      */
     private static Flyway flywayWithForeignKeysDisabled() {
         return Flyway.configure()
-                .dataSource(dataSource())
+                .dataSource(dataSourceWithForeignKeysDisabled())
                 .locations("classpath:flyway/migration")
                 .cleanDisabled(false)
-                .initSql("PRAGMA foreign_keys = OFF")
                 .load();
     }
 

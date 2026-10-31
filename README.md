@@ -245,23 +245,23 @@ driver=io.github.magnusp.libsql.jdbc.LibsqlDriver
 `jdbc:libsql:` cannot be used with URL-based configuration at all, even with an
 explicit driver, because the plugin lookup fails first.
 
-Auto-commit statements on one JDBC connection share a Hrana stream, so `initSql` and
-`afterConnect` statements that set session state such as `PRAGMA foreign_keys` apply
-to the migrations that follow on that connection.
+Auto-commit statements on one JDBC connection share a Hrana stream, so a
+connection-init statement that sets session state such as `PRAGMA foreign_keys`
+applies to the migrations that follow on that connection.
 
 Flyway wraps `clean()` in a transaction, and SQLite ignores `PRAGMA foreign_keys`
-inside a transaction. Set the pragma when the connection is initialized, before
-Flyway begins that transaction:
+inside a transaction. Run the pragma when the DataSource hands over the connection,
+before Flyway begins that transaction:
 
 ```properties
-# flyway.properties
-initSql=PRAGMA foreign_keys = OFF
+# HikariCP / Spring Boot
+spring.datasource.hikari.connection-init-sql=PRAGMA foreign_keys = OFF
 ```
 
-```properties
-# Spring Boot
-spring.flyway.init-sqls=PRAGMA foreign_keys = OFF
-```
+For a programmatic `DataSource`, run the same statement in `getConnection()` before
+returning the connection. Do not use an `AFTER_CONNECT` callback for this: Flyway has
+already disabled auto-commit by then, so the driver starts a transaction before the
+pragma and SQLite ignores it.
 
 The driver splits Flyway's `PRAGMA foreign_keys = OFF; DROP TABLE ...; PRAGMA
 foreign_keys = ON` scripts and runs every statement on the connection's stream (see
