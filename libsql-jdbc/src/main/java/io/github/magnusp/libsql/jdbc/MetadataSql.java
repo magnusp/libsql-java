@@ -1,5 +1,7 @@
 package io.github.magnusp.libsql.jdbc;
 
+import java.util.Locale;
+
 /**
  * Query builders for the JDBC metadata surfaces. The SQL text is the contract: tests assert
  * fragments byte for byte, and the test doubles dispatch on substrings such as {@code JOIN
@@ -33,7 +35,7 @@ final class MetadataSql {
                 if (i > 0) {
                     sql.append(",");
                 }
-                sql.append("'").append(literal(types[i].toUpperCase())).append("'");
+                sql.append("'").append(literal(types[i].toUpperCase(Locale.ROOT))).append("'");
             }
             sql.append(")");
         }

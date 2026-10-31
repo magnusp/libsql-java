@@ -96,7 +96,7 @@ public class LibsqlConnection implements Connection {
 
         public static TransactionMode from(String mode) {
             try {
-                return valueOf(mode.toUpperCase());
+                return valueOf(mode.toUpperCase(java.util.Locale.ROOT));
             } catch (RuntimeException e) {
                 throw new IllegalArgumentException("Unknown transaction mode: " + mode, e);
             }
