@@ -10,8 +10,6 @@ import java.io.InputStream;
 import java.io.Reader;
 import java.io.StringReader;
 import java.math.BigDecimal;
-import java.net.MalformedURLException;
-import java.net.URI;
 import java.net.URL;
 import java.sql.Array;
 import java.sql.Blob;
@@ -29,13 +27,9 @@ import java.sql.SQLXML;
 import java.sql.Statement;
 import java.sql.Time;
 import java.sql.Timestamp;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.OffsetTime;
 import java.time.ZoneId;
-import java.time.format.DateTimeParseException;
 import java.util.Calendar;
 import java.util.HashMap;
 import java.util.List;
@@ -214,17 +208,7 @@ public class LibsqlResultSet implements ResultSet {
     @Override
     public String getString(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
-        return stringValue(getCurrentValue(columnIndex));
-    }
-
-    private static String stringValue(Value val) {
-        return switch (val) {
-            case Value.Null n -> null;
-            case Value.Integer i -> Long.toString(i.value());
-            case Value.Float f -> SqliteRealText.format(f.value());
-            case Value.Text t -> t.value();
-            case Value.Blob b -> new String(b.bytes(), java.nio.charset.StandardCharsets.UTF_8);
-        };
+        return JdbcValueReader.stringValue(getCurrentValue(columnIndex));
     }
 
     /**
@@ -237,20 +221,7 @@ public class LibsqlResultSet implements ResultSet {
     @Override
     public boolean getBoolean(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
-        return booleanValue(getCurrentValue(columnIndex));
-    }
-
-    private static boolean booleanValue(Value value) {
-        if (value instanceof Value.Text text) {
-            String string = text.value().trim();
-            if ("true".equalsIgnoreCase(string)) {
-                return true;
-            }
-            if ("false".equalsIgnoreCase(string)) {
-                return false;
-            }
-        }
-        return (int) toLong(value) != 0;
+        return JdbcValueReader.booleanValue(getCurrentValue(columnIndex));
     }
 
     @Override
@@ -295,65 +266,13 @@ public class LibsqlResultSet implements ResultSet {
      * permissive storage fallback that xerial users rely on.
      */
     private long longValue(int columnIndex) throws SQLException {
-        Value value = getCurrentValue(columnIndex);
-        if (declaredTypes[columnIndex - 1] == null) {
-            return toLong(value);
-        }
-        return switch (value) {
-            case Value.Text text -> strictLong(text.value());
-            case Value.Blob blob -> strictLong(SqliteNumericText.blobAsText(blob.bytes()));
-            default -> toLong(value);
-        };
+        return JdbcValueReader.longValue(
+                getCurrentValue(columnIndex), declaredTypes[columnIndex - 1] != null);
     }
 
     private double doubleValue(int columnIndex) throws SQLException {
-        Value value = getCurrentValue(columnIndex);
-        if (declaredTypes[columnIndex - 1] == null) {
-            return toDouble(value);
-        }
-        return switch (value) {
-            case Value.Text text -> strictDouble(text.value());
-            case Value.Blob blob -> strictDouble(SqliteNumericText.blobAsText(blob.bytes()));
-            default -> toDouble(value);
-        };
-    }
-
-    private static long strictLong(String text) throws SQLException {
-        try {
-            return new BigDecimal(text.trim()).longValue();
-        } catch (NumberFormatException e) {
-            throw new SQLException("Bad value for type numeric: " + text, e);
-        }
-    }
-
-    private static double strictDouble(String text) throws SQLException {
-        try {
-            return Double.parseDouble(text.trim());
-        } catch (NumberFormatException e) {
-            throw new SQLException("Bad value for type numeric: " + text, e);
-        }
-    }
-
-    private static long toLong(Value val) {
-        return switch (val) {
-            case Value.Null n -> 0L;
-            case Value.Integer i -> i.value();
-            case Value.Float f -> (long) f.value();
-            case Value.Text t -> SqliteNumericText.parseLong(t.value());
-            case Value.Blob b ->
-                    SqliteNumericText.parseLong(SqliteNumericText.blobAsText(b.bytes()));
-        };
-    }
-
-    private static double toDouble(Value val) {
-        return switch (val) {
-            case Value.Null n -> 0.0;
-            case Value.Integer i -> (double) i.value();
-            case Value.Float f -> f.value();
-            case Value.Text t -> SqliteNumericText.parseDouble(t.value());
-            case Value.Blob b ->
-                    SqliteNumericText.parseDouble(SqliteNumericText.blobAsText(b.bytes()));
-        };
+        return JdbcValueReader.doubleValue(
+                getCurrentValue(columnIndex), declaredTypes[columnIndex - 1] != null);
     }
 
     @Override
@@ -366,128 +285,31 @@ public class LibsqlResultSet implements ResultSet {
     @Override
     public byte[] getBytes(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
-        return bytesValue(getCurrentValue(columnIndex));
-    }
-
-    private static byte[] bytesValue(Value val) {
-        return switch (val) {
-            case Value.Null n -> null;
-            case Value.Blob b -> b.bytes();
-            case Value.Text t -> t.value().getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            case Value.Integer i -> Long.toString(i.value()).getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            case Value.Float f -> SqliteRealText.format(f.value()).getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        };
+        return JdbcValueReader.bytesValue(getCurrentValue(columnIndex));
     }
 
     @Override
     public Date getDate(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
-        return dateValue(getCurrentValue(columnIndex));
-    }
-
-    private static Date dateValue(Value value) throws SQLException {
-        LocalDateTime dateTime = dateTimeValue(value, "Date");
-        return dateTime == null ? null : Date.valueOf(dateTime.toLocalDate());
-    }
-
-    private static Date dateValue(Value value, ZoneId zone) throws SQLException {
-        LocalDateTime dateTime = dateTimeValue(value, "Date", zone);
-        if (dateTime == null) {
-            return null;
-        }
-        return new Date(dateTime.toLocalDate().atStartOfDay(zone).toInstant().toEpochMilli());
+        return JdbcValueReader.dateValue(getCurrentValue(columnIndex));
     }
 
     @Override
     public Time getTime(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
-        return timeValue(getCurrentValue(columnIndex));
-    }
-
-    private static Time timeValue(Value value) throws SQLException {
-        LocalDateTime dateTime = dateTimeValue(value, "Time");
-        return dateTime == null ? null : Time.valueOf(dateTime.toLocalTime());
-    }
-
-    private static Time timeValue(Value value, ZoneId zone) throws SQLException {
-        LocalDateTime dateTime = dateTimeValue(value, "Time", zone);
-        if (dateTime == null) {
-            return null;
-        }
-        return new Time(LocalDate.of(1970, 1, 1)
-                .atTime(dateTime.toLocalTime())
-                .atZone(zone)
-                .toInstant()
-                .toEpochMilli());
+        return JdbcValueReader.timeValue(getCurrentValue(columnIndex));
     }
 
     @Override
     public Timestamp getTimestamp(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
-        return timestampValue(getCurrentValue(columnIndex));
-    }
-
-    private static Timestamp timestampValue(Value value) throws SQLException {
-        LocalDateTime dateTime = dateTimeValue(value, "Timestamp");
-        return dateTime == null ? null : Timestamp.valueOf(dateTime);
-    }
-
-    private static Timestamp timestampValue(Value value, ZoneId zone) throws SQLException {
-        LocalDateTime dateTime = dateTimeValue(value, "Timestamp", zone);
-        return dateTime == null ? null : Timestamp.from(dateTime.atZone(zone).toInstant());
-    }
-
-    private static OffsetTime offsetTimeValue(Value value) throws SQLException {
-        String text = stringValue(value);
-        if (text == null) {
-            return null;
-        }
-        try {
-            return OffsetTime.parse(text);
-        } catch (DateTimeParseException e) {
-            throw new SQLException("Bad value for type OffsetTime: " + text, e);
-        }
-    }
-
-    private static OffsetDateTime offsetDateTimeValue(Value value) throws SQLException {
-        String text = stringValue(value);
-        if (text == null) {
-            return null;
-        }
-        try {
-            return OffsetDateTime.parse(sqlTimestampSeparator(text));
-        } catch (DateTimeParseException e) {
-            throw new SQLException("Bad value for type OffsetDateTime: " + text, e);
-        }
-    }
-
-    /**
-     * Accepts the SQLite text form with a space between the date and the time as well as the
-     * ISO-8601 form with {@code T}. {@link OffsetDateTime#parse(CharSequence)} accepts only the
-     * latter, and SQLite columns are commonly written with the former.
-     */
-    private static String sqlTimestampSeparator(String text) {
-        return text.length() > 10 && text.charAt(10) == ' '
-                ? text.substring(0, 10) + 'T' + text.substring(11)
-                : text;
+        return JdbcValueReader.timestampValue(getCurrentValue(columnIndex));
     }
 
     @Override
     public BigDecimal getBigDecimal(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
-        return bigDecimalValue(getCurrentValue(columnIndex));
-    }
-
-    private static BigDecimal bigDecimalValue(Value value) throws SQLException {
-        String s = stringValue(value);
-        if (s == null) {
-            return null;
-        }
-        try {
-            return new BigDecimal(s);
-        } catch (NumberFormatException e) {
-            throw new SQLException("Bad value for type BigDecimal: " + s, e);
-        }
+        return JdbcValueReader.bigDecimalValue(getCurrentValue(columnIndex));
     }
 
     @Override
@@ -504,7 +326,7 @@ public class LibsqlResultSet implements ResultSet {
         // Shortcuts for a value already stored as the declared Java box. They mirror the storage
         // switch trunk used, so a matching column costs one class test and one type test.
         if (value instanceof Value.Integer integer && type.objectClass() == Integer.class) {
-            return checkedInt(integer.value(), type.sqlType());
+            return JdbcValueReader.checkedInt(integer.value(), type.sqlType());
         }
         if (value instanceof Value.Float floating) {
             if (type.objectClass() == Float.class) {
@@ -517,112 +339,7 @@ public class LibsqlResultSet implements ResultSet {
         if (value instanceof Value.Text text && type.objectClass() == String.class) {
             return text.value();
         }
-        return objectValue(value, type);
-    }
-
-    private static Object objectValue(Value value, JdbcTypeMapping.JdbcType type) throws SQLException {
-        Class<?> objectClass = type.objectClass();
-        if (objectClass == Integer.class) {
-            return checkedInt(value, type.sqlType());
-        }
-        if (objectClass == Long.class) {
-            return toLong(value);
-        }
-        if (objectClass == Double.class) {
-            return toDouble(value);
-        }
-        if (objectClass == Float.class) {
-            return (float) toDouble(value);
-        }
-        if (objectClass == String.class) {
-            return stringValue(value);
-        }
-        return convertedObject(value, type);
-    }
-
-    /**
-     * Converts every declared type outside the numeric and text fast path. It stays out of {@link
-     * #getObject} so the common reads stay small enough for the JIT to inline and scalar-replace
-     * their boxes.
-     */
-    private static Object convertedObject(Value value, JdbcTypeMapping.JdbcType type) throws SQLException {
-        Class<?> objectClass = type.objectClass();
-        if (objectClass == BigDecimal.class) {
-            return bigDecimalValue(value);
-        }
-        if (objectClass == Boolean.class) {
-            return booleanValue(value);
-        }
-        if (objectClass == byte[].class) {
-            return bytesValue(value);
-        }
-        if (objectClass == Date.class) {
-            return dateValue(value);
-        }
-        if (objectClass == Time.class) {
-            return timeValue(value);
-        }
-        if (objectClass == Timestamp.class) {
-            return timestampValue(value);
-        }
-        if (objectClass == OffsetTime.class) {
-            return offsetTimeValue(value);
-        }
-        if (objectClass == OffsetDateTime.class) {
-            return offsetDateTimeValue(value);
-        }
-        if (objectClass == Clob.class) {
-            return clobValue(value);
-        }
-        if (objectClass == NClob.class) {
-            return nclobValue(value);
-        }
-        if (objectClass == Blob.class) {
-            return blobValue(value);
-        }
-        if (objectClass == RowId.class) {
-            return rowIdValue(value);
-        }
-        if (objectClass == SQLXML.class) {
-            return sqlxmlValue(value);
-        }
-        if (objectClass == URL.class) {
-            return urlValue(value);
-        }
-        return storedObject(value);
-    }
-
-    private static Object storedObject(Value value) {
-        return switch (value) {
-            case Value.Null n -> null;
-            case Value.Integer i -> i.value() >= Integer.MIN_VALUE && i.value() <= Integer.MAX_VALUE
-                    ? (Object) (int) i.value()
-                    : (Object) i.value();
-            case Value.Float f -> f.value();
-            case Value.Text t -> t.value();
-            case Value.Blob b -> b.bytes();
-        };
-    }
-
-    private static Integer checkedInt(Value value, int sqlType) throws SQLException {
-        return checkedInt(toLong(value), sqlType);
-    }
-
-    private static Integer checkedInt(long number, int sqlType) throws SQLException {
-        if (number < Integer.MIN_VALUE || number > Integer.MAX_VALUE) {
-            throw new SQLException(
-                    "Value " + number + " does not fit the declared " + sqlTypeName(sqlType) + " type");
-        }
-        return (int) number;
-    }
-
-    private static String sqlTypeName(int sqlType) {
-        return switch (sqlType) {
-            case java.sql.Types.TINYINT -> "TINYINT";
-            case java.sql.Types.SMALLINT -> "SMALLINT";
-            case java.sql.Types.INTEGER -> "INTEGER";
-            default -> "numeric";
-        };
+        return JdbcValueReader.objectValue(value, type);
     }
 
     private static void rejectTypeMap(Map<String, Class<?>> map) throws SQLException {
@@ -787,7 +504,7 @@ public class LibsqlResultSet implements ResultSet {
     @Override
     public InputStream getAsciiStream(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
-        String text = stringValue(getCurrentValue(columnIndex));
+        String text = JdbcValueReader.stringValue(getCurrentValue(columnIndex));
         return text == null
                 ? null
                 : new ByteArrayInputStream(text.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
@@ -795,7 +512,7 @@ public class LibsqlResultSet implements ResultSet {
     @Override @Deprecated @SuppressWarnings("deprecation") public InputStream getUnicodeStream(int columnIndex) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public InputStream getBinaryStream(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
-        byte[] bytes = bytesValue(getCurrentValue(columnIndex));
+        byte[] bytes = JdbcValueReader.bytesValue(getCurrentValue(columnIndex));
         return bytes == null ? null : new ByteArrayInputStream(bytes);
     }
     @Override public InputStream getAsciiStream(String columnLabel) throws SQLException { return getAsciiStream(findColumn(columnLabel)); }
@@ -806,7 +523,7 @@ public class LibsqlResultSet implements ResultSet {
     @Override public String getCursorName() throws SQLException { return null; }
     @Override public Reader getCharacterStream(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
-        String string = stringValue(getCurrentValue(columnIndex));
+        String string = JdbcValueReader.stringValue(getCurrentValue(columnIndex));
         return string == null ? null : new StringReader(string);
     }
     @Override public Reader getCharacterStream(String columnLabel) throws SQLException { return getCharacterStream(findColumn(columnLabel)); }
@@ -893,19 +610,11 @@ public class LibsqlResultSet implements ResultSet {
     }
     @Override public Blob getBlob(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
-        return blobValue(getCurrentValue(columnIndex));
-    }
-    private static Blob blobValue(Value value) {
-        byte[] bytes = bytesValue(value);
-        return bytes == null ? null : new LibsqlBlob(bytes);
+        return JdbcValueReader.blobValue(getCurrentValue(columnIndex));
     }
     @Override public Clob getClob(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
-        return clobValue(getCurrentValue(columnIndex));
-    }
-    private static Clob clobValue(Value value) {
-        String string = stringValue(value);
-        return string == null ? null : new LibsqlClob(string);
+        return JdbcValueReader.clobValue(getCurrentValue(columnIndex));
     }
     @Override public Array getArray(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
@@ -925,7 +634,7 @@ public class LibsqlResultSet implements ResultSet {
             return getDate(columnIndex);
         }
         checkReadable(columnIndex);
-        return dateValue(getCurrentValue(columnIndex), zone(cal));
+        return JdbcValueReader.dateValue(getCurrentValue(columnIndex), zone(cal));
     }
 
     @Override public Date getDate(String columnLabel, Calendar cal) throws SQLException { return getDate(findColumn(columnLabel), cal); }
@@ -936,7 +645,7 @@ public class LibsqlResultSet implements ResultSet {
             return getTime(columnIndex);
         }
         checkReadable(columnIndex);
-        return timeValue(getCurrentValue(columnIndex), zone(cal));
+        return JdbcValueReader.timeValue(getCurrentValue(columnIndex), zone(cal));
     }
 
     @Override public Time getTime(String columnLabel, Calendar cal) throws SQLException { return getTime(findColumn(columnLabel), cal); }
@@ -947,7 +656,7 @@ public class LibsqlResultSet implements ResultSet {
             return getTimestamp(columnIndex);
         }
         checkReadable(columnIndex);
-        return timestampValue(getCurrentValue(columnIndex), zone(cal));
+        return JdbcValueReader.timestampValue(getCurrentValue(columnIndex), zone(cal));
     }
 
     @Override public Timestamp getTimestamp(String columnLabel, Calendar cal) throws SQLException { return getTimestamp(findColumn(columnLabel), cal); }
@@ -958,20 +667,7 @@ public class LibsqlResultSet implements ResultSet {
     @Override
     public URL getURL(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
-        return urlValue(getCurrentValue(columnIndex));
-    }
-
-    private static URL urlValue(Value value) throws SQLException {
-        String text = stringValue(value);
-        if (text == null) {
-            return null;
-        }
-        try {
-            // URI.toURL replaces the deprecated URL(String) constructor and rejects the same text.
-            return URI.create(text).toURL();
-        } catch (IllegalArgumentException | MalformedURLException e) {
-            throw new SQLException("Bad value for type URL: " + text, e);
-        }
+        return JdbcValueReader.urlValue(getCurrentValue(columnIndex));
     }
 
     @Override public URL getURL(String columnLabel) throws SQLException { return getURL(findColumn(columnLabel)); }
@@ -985,11 +681,7 @@ public class LibsqlResultSet implements ResultSet {
     @Override public void updateArray(String columnLabel, Array x) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public RowId getRowId(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
-        return rowIdValue(getCurrentValue(columnIndex));
-    }
-    private static RowId rowIdValue(Value value) {
-        byte[] bytes = bytesValue(value);
-        return bytes == null ? null : new LibsqlRowId(bytes);
+        return JdbcValueReader.rowIdValue(getCurrentValue(columnIndex));
     }
     @Override public RowId getRowId(String columnLabel) throws SQLException { return getRowId(findColumn(columnLabel)); }
     @Override public void updateRowId(int columnIndex, RowId x) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
@@ -1001,32 +693,24 @@ public class LibsqlResultSet implements ResultSet {
     @Override public void updateNClob(String columnLabel, NClob nClob) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public NClob getNClob(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
-        return nclobValue(getCurrentValue(columnIndex));
-    }
-    private static NClob nclobValue(Value value) {
-        String text = stringValue(value);
-        return text == null ? null : new LibsqlNClob(text);
+        return JdbcValueReader.nclobValue(getCurrentValue(columnIndex));
     }
     @Override public NClob getNClob(String columnLabel) throws SQLException { return getNClob(findColumn(columnLabel)); }
     @Override public SQLXML getSQLXML(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
-        return sqlxmlValue(getCurrentValue(columnIndex));
-    }
-    private static SQLXML sqlxmlValue(Value value) {
-        String text = stringValue(value);
-        return text == null ? null : new LibsqlSQLXML(text);
+        return JdbcValueReader.sqlxmlValue(getCurrentValue(columnIndex));
     }
     @Override public SQLXML getSQLXML(String columnLabel) throws SQLException { return getSQLXML(findColumn(columnLabel)); }
     @Override public void updateSQLXML(int columnIndex, SQLXML xmlObject) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public void updateSQLXML(String columnLabel, SQLXML xmlObject) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
     @Override public String getNString(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
-        return stringValue(getCurrentValue(columnIndex));
+        return JdbcValueReader.stringValue(getCurrentValue(columnIndex));
     }
     @Override public String getNString(String columnLabel) throws SQLException { return getNString(findColumn(columnLabel)); }
     @Override public Reader getNCharacterStream(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
-        String text = stringValue(getCurrentValue(columnIndex));
+        String text = JdbcValueReader.stringValue(getCurrentValue(columnIndex));
         return text == null ? null : new StringReader(text);
     }
     @Override public Reader getNCharacterStream(String columnLabel) throws SQLException { return getNCharacterStream(findColumn(columnLabel)); }
@@ -1132,98 +816,7 @@ public class LibsqlResultSet implements ResultSet {
             throw new SQLException("requested type cannot be null");
         }
         checkReadable(columnIndex);
-        if (type == String.class) {
-            return type.cast(getString(columnIndex));
-        }
-        if (type == Boolean.class) {
-            return type.cast(getBoolean(columnIndex));
-        }
-        if (type == BigDecimal.class) {
-            return type.cast(getBigDecimal(columnIndex));
-        }
-        if (type == byte[].class) {
-            return type.cast(getBytes(columnIndex));
-        }
-        if (type == Date.class) {
-            return type.cast(getDate(columnIndex));
-        }
-        if (type == Time.class) {
-            return type.cast(getTime(columnIndex));
-        }
-        if (type == Timestamp.class) {
-            return type.cast(getTimestamp(columnIndex));
-        }
-        if (type == LocalDate.class) {
-            return type.cast(getLocalDate(columnIndex));
-        }
-        if (type == LocalTime.class) {
-            return type.cast(getLocalTime(columnIndex));
-        }
-        if (type == LocalDateTime.class) {
-            return type.cast(getLocalDateTime(columnIndex));
-        }
-        if (type == OffsetTime.class) {
-            return type.cast(offsetTimeValue(getCurrentValue(columnIndex)));
-        }
-        if (type == OffsetDateTime.class) {
-            return type.cast(offsetDateTimeValue(getCurrentValue(columnIndex)));
-        }
-
-        Value stored = getCurrentValue(columnIndex);
-        boolean numeric = stored instanceof Value.Integer || stored instanceof Value.Float;
-        if (type == Double.class) {
-            if (numeric) {
-                return type.cast(getDouble(columnIndex));
-            }
-            throw new SQLException("Bad value for type Double");
-        }
-        if (type == Long.class) {
-            if (numeric) {
-                return type.cast(getLong(columnIndex));
-            }
-            throw new SQLException("Bad value for type Long");
-        }
-        if (type == Float.class) {
-            if (numeric) {
-                return type.cast(getFloat(columnIndex));
-            }
-            throw new SQLException("Bad value for type Float");
-        }
-        if (type == Integer.class) {
-            if (numeric) {
-                return type.cast(getInt(columnIndex));
-            }
-            throw new SQLException("Bad value for type Integer");
-        }
-
-        throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver");
-    }
-
-    private LocalDate getLocalDate(int columnIndex) throws SQLException {
-        LocalDateTime value = dateTimeValue(getCurrentValue(columnIndex), "LocalDate");
-        return value == null ? null : value.toLocalDate();
-    }
-
-    private LocalTime getLocalTime(int columnIndex) throws SQLException {
-        LocalDateTime value = dateTimeValue(getCurrentValue(columnIndex), "LocalTime");
-        return value == null ? null : value.toLocalTime();
-    }
-
-    private LocalDateTime getLocalDateTime(int columnIndex) throws SQLException {
-        return dateTimeValue(getCurrentValue(columnIndex), "LocalDateTime");
-    }
-
-    /**
-     * Reads a value as a local date and time using SQLite storage-class conventions: INTEGER is
-     * epoch milliseconds, FLOAT is a Julian day, and TEXT is a SQLite date/time string.
-     */
-    private static LocalDateTime dateTimeValue(Value value, String targetType) throws SQLException {
-        return SqliteDateTimeValues.from(value, targetType);
-    }
-
-    private static LocalDateTime dateTimeValue(Value value, String targetType, ZoneId zone)
-            throws SQLException {
-        return SqliteDateTimeValues.from(value, targetType, zone);
+        return JdbcValueReader.typedObject(getCurrentValue(columnIndex), type);
     }
 
     @Override
