@@ -18,8 +18,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *
  * <p>URL-based Flyway configuration cannot select the driver from a
  * {@code jdbc:libsql:} URL; the supported configurations are documented in the
- * README. Everything else, including {@code clean()} and session-scoped
- * {@code PRAGMA} state, works through the driver.
+ * README. {@code clean()} works when foreign keys are disabled on the
+ * connection before Flyway starts its transaction, as SQLite ignores
+ * {@code PRAGMA foreign_keys} inside a transaction.
  */
 class FlywayKnownGapsIT extends FlywaySqldSupport {
 
@@ -28,6 +29,21 @@ class FlywayKnownGapsIT extends FlywaySqldSupport {
                 .dataSource(dataSource())
                 .locations("classpath:flyway/migration")
                 .cleanDisabled(false)
+                .load();
+    }
+
+    /**
+     * Flyway wraps {@code clean()} in a transaction. SQLite ignores
+     * {@code PRAGMA foreign_keys} inside a transaction, so the pragma must run when the
+     * connection is initialized, before Flyway begins its transaction. The driver's
+     * connection-scoped auto-commit stream keeps that session state for the later statements.
+     */
+    private static Flyway flywayWithForeignKeysDisabled() {
+        return Flyway.configure()
+                .dataSource(dataSource())
+                .locations("classpath:flyway/migration")
+                .cleanDisabled(false)
+                .initSql("PRAGMA foreign_keys = OFF")
                 .load();
     }
 
@@ -76,7 +92,7 @@ class FlywayKnownGapsIT extends FlywaySqldSupport {
 
     @Test
     void cleanDropsEveryUserTableAndTheSchemaHistory() throws Exception {
-        Flyway flyway = flyway();
+        Flyway flyway = flywayWithForeignKeysDisabled();
         flyway.migrate();
         assertThat(userTables()).contains("author", "book", "flyway_schema_history");
 
