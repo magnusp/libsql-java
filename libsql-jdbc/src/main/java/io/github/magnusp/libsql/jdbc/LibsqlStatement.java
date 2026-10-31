@@ -1,7 +1,5 @@
 package io.github.magnusp.libsql.jdbc;
 
-import io.github.magnusp.libsql.hrana.codec.Col;
-import io.github.magnusp.libsql.hrana.codec.Row;
 import io.github.magnusp.libsql.hrana.codec.Stmt;
 import io.github.magnusp.libsql.hrana.codec.StmtResult;
 import io.github.magnusp.libsql.hrana.codec.Value;
@@ -15,7 +13,6 @@ import java.sql.SQLWarning;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 
 /**
  * Statement over the Hrana transport.
@@ -74,15 +71,12 @@ public class LibsqlStatement implements Statement {
     protected boolean closed = false;
     protected boolean closeOnCompletion = false;
     protected final List<Stmt> batchStatements = new ArrayList<>();
-    private ResultSet generatedKeys = null;
+    private final GeneratedKeys generatedKeys = new GeneratedKeys();
     private boolean resultSetRequested = false;
     private boolean closing = false;
     private int fetchSize = 0;
     private int maxRows = 0;
     private boolean escapeProcessing = true;
-
-    private static final Set<String> STATEMENT_KEYWORDS =
-            Set.of("SELECT", "VALUES", "INSERT", "REPLACE", "UPDATE", "DELETE");
 
     public LibsqlStatement(LibsqlConnection connection) {
         this.connection = connection;
@@ -342,94 +336,14 @@ public class LibsqlStatement implements Statement {
 
     protected void updateGeneratedKeys(String sql, StmtResult result) throws SQLException {
         synchronized (stateLock) {
-            clearGeneratedKeys();
-            if (sql != null
-                    && result != null
-                    && result.lastInsertRowid() != null
-                    && isInsertSql(sql)) {
-                generatedKeys = generatedKeysResultSet(List.of(result.lastInsertRowid()));
-            }
+            generatedKeys.update(this, sql, result);
         }
-    }
-
-    /**
-     * Builds the generated keys for a batch from the {@code BatchResult} step results. Each insert
-     * step contributes one row, matching the java.sql shape of a result set with one row per
-     * generated key. Steps that are not inserts contribute nothing because Hrana leaves {@code
-     * last_insert_rowid} undefined for them.
-     */
-    private void updateBatchGeneratedKeys(List<Stmt> statements, List<StmtResult> results)
-            throws SQLException {
-        synchronized (stateLock) {
-            clearGeneratedKeys();
-            List<Long> rowids = new ArrayList<>();
-            for (int i = 0; i < results.size(); i++) {
-                StmtResult result = results.get(i);
-                String sql = statements.get(i).sql();
-                if (result != null
-                        && result.lastInsertRowid() != null
-                        && sql != null
-                        && isInsertSql(sql)) {
-                    rowids.add(result.lastInsertRowid());
-                }
-            }
-            if (!rowids.isEmpty()) {
-                generatedKeys = generatedKeysResultSet(rowids);
-            }
-        }
-    }
-
-    private LibsqlResultSet generatedKeysResultSet(List<Long> rowids) {
-        List<Row> rows = new ArrayList<>(rowids.size());
-        for (Long rowid : rowids) {
-            rows.add(new Row(List.of(Value.of(rowid))));
-        }
-        StmtResult keys = new StmtResult(
-                List.of(new Col("last_insert_rowid()", null)),
-                rows,
-                0,
-                rowids.get(rowids.size() - 1));
-        return new LibsqlResultSet(this, keys);
     }
 
     protected void clearGeneratedKeys() throws SQLException {
         synchronized (stateLock) {
-            ResultSet keys = generatedKeys;
-            generatedKeys = null;
-            if (keys instanceof LibsqlResultSet libsqlKeys) {
-                libsqlKeys.closeDetached();
-            } else if (keys != null) {
-                keys.close();
-            }
+            generatedKeys.clear();
         }
-    }
-
-    private static boolean isInsertSql(String sql) {
-        List<String> script = SqlScript.split(sql);
-        String statementSql = script.isEmpty() ? sql : script.get(script.size() - 1);
-        List<SqlTokenizer.Token> tokens = SqlTokenizer.tokenize(statementSql);
-        if (tokens == null) {
-            return false;
-        }
-        String first = SqlTokenizer.wordAt(tokens, 0, 0);
-        if ("INSERT".equals(first) || "REPLACE".equals(first)) {
-            return true;
-        }
-        if (!"WITH".equals(first)) {
-            return false;
-        }
-        int index = SqlTokenizer.indexOfAnyWord(tokens, 1, tokens.size(), 0, STATEMENT_KEYWORDS);
-        String statement = SqlTokenizer.wordAt(tokens, index, 0);
-        return "INSERT".equals(statement) || "REPLACE".equals(statement);
-    }
-
-    private ResultSet emptyGeneratedKeys() {
-        StmtResult empty = new StmtResult(
-                List.of(new Col("1", null)),
-                List.of(),
-                0,
-                null);
-        return new LibsqlResultSet(this, empty);
     }
 
     @Override
@@ -514,7 +428,7 @@ public class LibsqlStatement implements Statement {
                 affectedRows += result.affectedRowCount();
             }
             synchronized (stateLock) {
-                updateBatchGeneratedKeys(statements, results);
+                generatedKeys.updateBatch(this, statements, results);
                 updateCount = affectedRows;
                 resultSetRequested = false;
             }
@@ -653,10 +567,7 @@ public class LibsqlStatement implements Statement {
     public ResultSet getGeneratedKeys() throws SQLException {
         synchronized (stateLock) {
             checkClosed();
-            if (generatedKeys == null) {
-                generatedKeys = emptyGeneratedKeys();
-            }
-            return generatedKeys;
+            return generatedKeys.currentOrEmpty(this);
         }
     }
     @Override public int executeUpdate(String sql, int autoGeneratedKeys) throws SQLException { return executeUpdate(sql); }
