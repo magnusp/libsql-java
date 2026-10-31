@@ -55,6 +55,23 @@ public class LibsqlUrlParserTest {
     }
 
     @Test
+    void testRejectsANonNumericTimeoutAsAJDBCError() {
+        assertThatThrownBy(() -> LibsqlUrlParser.parse(
+                        "jdbc:libsql:http://localhost:8080/dev/tenant?connectTimeout=soon",
+                        new Properties()))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("connectTimeout")
+                .hasCauseInstanceOf(NumberFormatException.class);
+
+        Properties properties = new Properties();
+        properties.setProperty("busyTimeout", "later");
+        assertThatThrownBy(() -> LibsqlUrlParser.parse("jdbc:libsql:http://localhost:8080", properties))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("busyTimeout")
+                .hasCauseInstanceOf(NumberFormatException.class);
+    }
+
+    @Test
     void testParseWebSocketUrlKeepsTheSchemeAndPath() throws SQLException {
         LibsqlClientConfig config = LibsqlUrlParser.parse(
                 "jdbc:libsql:ws://localhost:8080/dev/tenant?authToken=secretToken", new Properties());
