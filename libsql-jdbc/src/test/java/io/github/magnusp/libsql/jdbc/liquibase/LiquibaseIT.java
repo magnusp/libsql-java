@@ -163,17 +163,17 @@ class LiquibaseIT extends LiquibaseSqldSupport {
     }
 
     /**
-     * The supported bootstrapping path for a {@code jdbc:libsql:} URL: name the
-     * driver class explicitly, which {@link DatabaseFactory#openDatabase}
-     * accepts before it resolves the SQLite implementation.
+     * The supported bootstrapping path: use the {@code jdbc:sqlite:} prefix that
+     * Liquibase's SQLite implementation claims and name the driver class
+     * explicitly. The driver maps that prefix to sqld.
      */
     @Test
-    void databaseFactoryOpensALibsqlUrlWithAnExplicitDriver() throws Exception {
+    void databaseFactoryOpensASqliteAliasUrlWithAnExplicitDriver() throws Exception {
         // The five-argument openDatabase overload names a property-provider class, not a
         // driver. The eight-argument overload takes the driver explicitly.
         Database database = DatabaseFactory.getInstance()
                 .openDatabase(
-                        jdbcUrl(),
+                        sqliteJdbcUrl(),
                         null,
                         null,
                         LibsqlDriver.class.getName(),

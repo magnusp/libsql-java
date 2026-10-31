@@ -137,12 +137,13 @@ The compliance profile is in [`docs/jdbc-appendix-b-compliance.md`](docs/jdbc-ap
 
 ### Liquibase
 
-Liquibase resolves a JDBC driver class from the URL before it opens a connection. Its
-SQLite implementation claims only the `jdbc:sqlite:` prefix, so a `jdbc:libsql:` URL
-needs an explicit driver class or a `DataSource`.
+Liquibase's SQLite implementation claims the `jdbc:sqlite:` prefix and selects its
+dialect from the database product name. The driver maps `jdbc:sqlite:http://...` to
+sqld and reports the product name as exactly `SQLite`, so the two work together.
 
-The driver reports the database product name as exactly `SQLite`, so Liquibase selects
-its SQLite dialect through the normal `DatabaseFactory` path once a connection is open.
+Liquibase still resolves a JDBC driver class from the URL before it opens a connection.
+It maps `jdbc:sqlite:` to `org.sqlite.JDBC`, which is not on the classpath, so name
+`LibsqlDriver` explicitly or pass a `DataSource`.
 
 Use one of these configurations:
 
@@ -155,7 +156,7 @@ import liquibase.database.DatabaseFactory;
 import liquibase.resource.ClassLoaderResourceAccessor;
 
 Database database = DatabaseFactory.getInstance().openDatabase(
-        "jdbc:libsql:http://localhost:8080",
+        "jdbc:sqlite:http://localhost:8080",
         null,                          // username
         null,                          // password
         LibsqlDriver.class.getName(),  // driver
@@ -168,7 +169,7 @@ Database database = DatabaseFactory.getInstance().openDatabase(
 **Liquibase Maven plugin or `liquibase.properties`**
 
 ```properties
-url=jdbc:libsql:http://localhost:8080
+url=jdbc:sqlite:http://localhost:8080
 driver=io.github.magnusp.libsql.jdbc.LibsqlDriver
 ```
 
@@ -177,13 +178,13 @@ driver=io.github.magnusp.libsql.jdbc.LibsqlDriver
 Pass a `DataSource` and set the driver class explicitly:
 
 ```properties
-spring.datasource.url=jdbc:libsql:http://localhost:8080
+spring.datasource.url=jdbc:sqlite:http://localhost:8080
 spring.datasource.driver-class-name=io.github.magnusp.libsql.jdbc.LibsqlDriver
 ```
 
-The `jdbc:libsql:` prefix is the supported form. Liquibase never asks `DriverManager`
-which driver accepts a URL, so leaving the driver unset fails before the connection is
-made.
+Use the `jdbc:sqlite:` prefix so Liquibase's SQLite implementation claims the URL.
+`jdbc:libsql:` also reaches the driver, but Liquibase cannot resolve a driver from it
+and still needs the explicit driver class.
 
 ## Contributing
 

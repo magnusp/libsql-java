@@ -37,6 +37,11 @@ abstract class LiquibaseSqldSupport {
         return "jdbc:libsql:http://" + LIBSQL.getHost() + ":" + LIBSQL.getMappedPort(PORT);
     }
 
+    /** The prefix Liquibase's SQLite implementation claims; the driver maps it to sqld. */
+    static String sqliteJdbcUrl() {
+        return "jdbc:sqlite:http://" + LIBSQL.getHost() + ":" + LIBSQL.getMappedPort(PORT);
+    }
+
     private static String requireLibsqlImage() {
         String image = System.getProperty("libsql.image");
         if (image == null || image.isBlank()) {
