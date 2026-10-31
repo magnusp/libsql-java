@@ -8,6 +8,9 @@ import io.github.magnusp.libsql.hrana.codec.Value;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.Reader;
 import java.io.StringReader;
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -696,6 +699,111 @@ class LibsqlPreparedStatementTest {
                 (proxy, method, args) -> method.getName().equals("getCharacterStream")
                         ? new StringReader(text)
                         : null);
+    }
+
+
+    @Test
+    void nullStreamsBindSqlNull() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "insert into t values (?, ?, ?)")) {
+            statement.setBinaryStream(1, null);
+            statement.setCharacterStream(2, null);
+            statement.setAsciiStream(3, null);
+
+            statement.executeUpdate();
+        }
+
+        assertThat(connection.executed.get(0).args())
+                .containsExactly(Value.ofNull(), Value.ofNull(), Value.ofNull());
+    }
+
+    @Test
+    void streamLengthOutsideIntRangeUsesTheXerialMessage() throws SQLException {
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(new RecordingConnection(NO_ROWS), "insert into t values (?)")) {
+            assertThatThrownBy(() -> statement.setBinaryStream(
+                            1, new ByteArrayInputStream(new byte[0]), -1))
+                    .isInstanceOf(SQLException.class)
+                    .hasMessage("Data must have a length between 0 and Integer.MAX_VALUE");
+            assertThatThrownBy(() -> statement.setCharacterStream(
+                            1, new StringReader(""), Integer.MAX_VALUE + 1L))
+                    .isInstanceOf(SQLException.class)
+                    .hasMessage("Data must have a length between 0 and Integer.MAX_VALUE");
+        }
+    }
+
+    @Test
+    void shortBinaryStreamUsesTheXerialMessage() throws SQLException {
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(new RecordingConnection(NO_ROWS), "insert into t values (?)")) {
+            assertThatThrownBy(() -> statement.setBinaryStream(
+                            1, new ByteArrayInputStream(new byte[] {1, 2, 3}), 5))
+                    .isInstanceOf(SQLException.class)
+                    .hasMessage("End of stream reached before 5 bytes were read");
+        }
+    }
+
+    @Test
+    void shortCharacterStreamUsesTheXerialMessage() throws SQLException {
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(new RecordingConnection(NO_ROWS), "insert into t values (?)")) {
+            assertThatThrownBy(() -> statement.setCharacterStream(1, new StringReader("abc"), 5))
+                    .isInstanceOf(SQLException.class)
+                    .hasMessage("End of stream reached before 5 characters were read");
+        }
+    }
+
+    @Test
+    void binaryReadFailureKeepsTheXerialMessage() throws SQLException {
+        InputStream failing = new InputStream() {
+            @Override
+            public int read() throws IOException {
+                throw new IOException("boom");
+            }
+        };
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(new RecordingConnection(NO_ROWS), "insert into t values (?)")) {
+            assertThatThrownBy(() -> statement.setBinaryStream(1, failing))
+                    .isInstanceOf(SQLException.class)
+                    .hasMessage("Cannot read from binary stream: boom");
+        }
+    }
+
+    @Test
+    void characterReadFailureKeepsTheXerialMessage() throws SQLException {
+        Reader failing = new Reader() {
+            @Override
+            public int read(char[] buffer, int offset, int length) throws IOException {
+                throw new IOException("boom");
+            }
+
+            @Override
+            public void close() {}
+        };
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(new RecordingConnection(NO_ROWS), "insert into t values (?)")) {
+            assertThatThrownBy(() -> statement.setCharacterStream(1, failing))
+                    .isInstanceOf(SQLException.class)
+                    .hasMessage("Cannot read from character stream: boom");
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    @Test
+    void asciiStreamDecodesAsAsciiAndUnicodeStreamDecodesAsUtf8() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(NO_ROWS);
+        byte[] eAcute = "\u00e9".getBytes(StandardCharsets.UTF_8);
+        try (LibsqlPreparedStatement statement =
+                new LibsqlPreparedStatement(connection, "insert into t values (?, ?)")) {
+            statement.setAsciiStream(1, new ByteArrayInputStream(eAcute), eAcute.length);
+            statement.setUnicodeStream(2, new ByteArrayInputStream(eAcute), eAcute.length);
+
+            statement.executeUpdate();
+        }
+
+        assertThat(connection.executed.get(0).args())
+                .containsExactly(Value.of("\uFFFD\uFFFD"), Value.of("\u00e9"));
     }
 
     private static final class RecordingConnection extends LibsqlConnection {
