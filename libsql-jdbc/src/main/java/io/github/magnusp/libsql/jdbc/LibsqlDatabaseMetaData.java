@@ -189,7 +189,7 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     public boolean allTablesAreSelectable() throws SQLException { return true; }
     @Override
     public String getURL() throws SQLException {
-        return connection.getConfig() != null ? connection.getConfig().url() : null;
+        return connection.getJdbcUrl();
     }
     @Override
     public String getUserName() throws SQLException { return null; }
@@ -204,7 +204,7 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     @Override
     public boolean nullsAreSortedAtEnd() throws SQLException { return false; }
     @Override
-    public String getDatabaseProductName() throws SQLException { return "SQLite (libSQL)"; }
+    public String getDatabaseProductName() throws SQLException { return "SQLite"; }
     @Override
     public String getDatabaseProductVersion() throws SQLException { return resolveDatabaseProductVersion(); }
     @Override

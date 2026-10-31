@@ -113,7 +113,7 @@ public class LibsqlJdbcIT extends SqldContainerBase {
             }
 
             DatabaseMetaData meta = conn.getMetaData();
-            assertThat(meta.getDatabaseProductName()).contains("libSQL");
+            assertThat(meta.getDatabaseProductName()).isEqualTo("SQLite");
 
             try (ResultSet rs = meta.getTables(null, null, "meta_table", null)) {
                 assertThat(rs.next()).isTrue();

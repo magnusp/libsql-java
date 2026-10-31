@@ -18,7 +18,7 @@ class LibsqlConformanceGuardTest {
         Connection connection =
                 connection(
                         "libSQL JDBC Driver",
-                        "SQLite (libSQL)",
+                        "SQLite",
                         "2024-10-21 16:30:22 03a9703e27c44437c39363d0baf82db4ebc94538a0f284"
                                 + "11c85dda156f82alt1");
 
@@ -43,7 +43,7 @@ class LibsqlConformanceGuardTest {
         Connection connection =
                 connection(
                         "libSQL JDBC Driver",
-                        "SQLite (libSQL)",
+                        "SQLite",
                         "2024-10-21 16:30:22 03a9703e27c44437c39363d0baf82db4ebc94538a0f284"
                                 + "11c85dda156f82");
 

@@ -58,6 +58,9 @@ public class LibsqlConnection implements Connection {
     private final LibsqlClientConfig config;
     private final LibsqlClient client;
 
+    /** The JDBC URL the caller connected with, kept for {@code DatabaseMetaData.getURL()}. */
+    private final String jdbcUrl;
+
     /** Guards every field below and every transport round trip. See the class javadoc. */
     private final Object stateLock = new Object();
 
@@ -102,12 +105,22 @@ public class LibsqlConnection implements Connection {
     // Interactive stream state lives in the client; see LibsqlClient.hasOpenStream().
 
     public LibsqlConnection(LibsqlClientConfig config, LibsqlClient client) {
+        this(config, client, null);
+    }
+
+    public LibsqlConnection(LibsqlClientConfig config, LibsqlClient client, String jdbcUrl) {
         this.config = config;
         this.client = client;
+        this.jdbcUrl = jdbcUrl;
     }
 
     public LibsqlClientConfig getConfig() {
         return config;
+    }
+
+    /** The JDBC URL used to open this connection, or the transport endpoint for test doubles. */
+    String getJdbcUrl() {
+        return jdbcUrl != null ? jdbcUrl : (config != null ? config.url() : null);
     }
 
     public void checkClosed() throws SQLException {

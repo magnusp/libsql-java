@@ -55,6 +55,17 @@ class LibsqlConnectionTest {
     }
 
     @Test
+    void metadataReportsTheJdbcUrlUsedToConnect() throws SQLException {
+        LibsqlConnection connection = new LibsqlConnection(
+                CONFIG,
+                new ScriptedClient((request, index) -> successResponse(request)),
+                "jdbc:sqlite:http://localhost:1");
+
+        assertThat(connection.getMetaData().getURL())
+                .isEqualTo("jdbc:sqlite:http://localhost:1");
+    }
+
+    @Test
     void disablingAutoCommitDefersTheBeginUntilTheNextStatement() throws SQLException {
         ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
         LibsqlConnection connection = new LibsqlConnection(CONFIG, client);

@@ -52,11 +52,15 @@ abstract class JooqSqldSupport {
                     .withStartupTimeout(Duration.ofSeconds(60)));
 
     static String jdbcUrl() {
-        return "jdbc:libsql:http://" + LIBSQL.getHost() + ":" + LIBSQL.getMappedPort(PORT);
+        return "jdbc:libsql:" + httpUrl();
+    }
+
+    static String httpUrl() {
+        return "http://" + LIBSQL.getHost() + ":" + LIBSQL.getMappedPort(PORT);
     }
 
     static void createSchema() {
-        String baseUrl = "http://" + LIBSQL.getHost() + ":" + LIBSQL.getMappedPort(PORT);
+        String baseUrl = httpUrl();
         String requests = SCHEMA.stream()
                 .map(sql -> "{\"type\":\"execute\",\"stmt\":{\"sql\":\"" + escape(sql) + "\"}}")
                 .collect(Collectors.joining(",", "", ",{\"type\":\"close\"}"));
