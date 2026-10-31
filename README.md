@@ -133,6 +133,55 @@ DOCKER_CONFIG="$PWD/libsql-conformance/src/test/docker-config" ./mvnw clean veri
 
 The compliance profile is in [`docs/jdbc-appendix-b-compliance.md`](docs/jdbc-appendix-b-compliance.md).
 
+## Integrations
+
+### Liquibase
+
+Liquibase resolves a JDBC driver class from the URL before it opens a connection. Its
+SQLite implementation claims only the `jdbc:sqlite:` prefix, so a `jdbc:libsql:` URL
+needs an explicit driver class or a `DataSource`.
+
+The driver reports the database product name as exactly `SQLite`, so Liquibase selects
+its SQLite dialect through the normal `DatabaseFactory` path once a connection is open.
+
+Use one of these configurations:
+
+**API with an explicit driver class**
+
+```java
+import io.github.magnusp.libsql.jdbc.LibsqlDriver;
+import liquibase.database.Database;
+import liquibase.database.DatabaseFactory;
+import liquibase.resource.ClassLoaderResourceAccessor;
+
+Database database = DatabaseFactory.getInstance().openDatabase(
+        "jdbc:libsql:http://localhost:8080",
+        null,
+        null,
+        LibsqlDriver.class.getName(),
+        new ClassLoaderResourceAccessor());
+```
+
+**Liquibase Maven plugin or `liquibase.properties`**
+
+```properties
+url=jdbc:libsql:http://localhost:8080
+driver=io.github.magnusp.libsql.jdbc.LibsqlDriver
+```
+
+**Spring Boot or a connection pool**
+
+Pass a `DataSource` and set the driver class explicitly:
+
+```properties
+spring.datasource.url=jdbc:libsql:http://localhost:8080
+spring.datasource.driver-class-name=io.github.magnusp.libsql.jdbc.LibsqlDriver
+```
+
+The `jdbc:libsql:` prefix is the supported form. Liquibase never asks `DriverManager`
+which driver accepts a URL, so leaving the driver unset fails before the connection is
+made.
+
 ## Contributing
 
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and development workflow, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community standards.

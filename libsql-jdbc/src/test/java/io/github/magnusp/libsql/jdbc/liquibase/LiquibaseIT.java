@@ -1,5 +1,6 @@
 package io.github.magnusp.libsql.jdbc.liquibase;
 
+import io.github.magnusp.libsql.jdbc.LibsqlDriver;
 import liquibase.Contexts;
 import liquibase.LabelExpression;
 import liquibase.Liquibase;
@@ -158,6 +159,27 @@ class LiquibaseIT extends LiquibaseSqldSupport {
                     .findCorrectDatabaseImplementation(new JdbcConnection(conn));
 
             assertThat(database).isInstanceOf(SQLiteDatabase.class);
+        }
+    }
+
+    /**
+     * The supported bootstrapping path for a {@code jdbc:libsql:} URL: name the
+     * driver class explicitly, which {@link DatabaseFactory#openDatabase}
+     * accepts before it resolves the SQLite implementation.
+     */
+    @Test
+    void databaseFactoryOpensALibsqlUrlWithAnExplicitDriver() throws Exception {
+        Database database = DatabaseFactory.getInstance()
+                .openDatabase(
+                        jdbcUrl(),
+                        null,
+                        null,
+                        LibsqlDriver.class.getName(),
+                        new ClassLoaderResourceAccessor());
+        try {
+            assertThat(database).isInstanceOf(SQLiteDatabase.class);
+        } finally {
+            database.close();
         }
     }
 
