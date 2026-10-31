@@ -186,6 +186,73 @@ Use the `jdbc:sqlite:` prefix so Liquibase's SQLite implementation claims the UR
 `jdbc:libsql:` also reaches the driver, but Liquibase cannot resolve a driver from it
 and still needs the explicit driver class.
 
+### Flyway
+
+Flyway selects its database plugin from the URL before it opens a connection. Its
+SQLite plugin claims `jdbc:sqlite:`, `jdbc:sqldroid:`, and the p6spy prefixes, so a
+`jdbc:libsql:` URL is rejected with:
+
+```text
+No Flyway database plugin found to handle jdbc:libsql:********
+```
+
+The `jdbc:sqlite:` alias is claimed, but its plugin resolves the driver to
+`org.sqlite.JDBC`. Programmatic `Flyway.configure().dataSource(url, ...)` builds a
+`DriverDataSource` eagerly with a null driver class, so a later `driver(...)` call is
+ignored.
+
+Use one of these configurations:
+
+**DataSource with either URL form (recommended)**
+
+`jdbc:libsql:` works when Flyway receives a `DataSource`, because the plugin lookup
+has already happened by the time the connection is opened:
+
+```java
+Flyway flyway = Flyway.configure()
+        .dataSource(dataSource) // any pool or DriverManager-backed DataSource
+        .locations("classpath:db/migration")
+        .load();
+flyway.migrate();
+```
+
+Spring Boot configuration, using the application `DataSource` that Flyway receives
+automatically:
+
+```properties
+spring.datasource.url=jdbc:libsql:http://localhost:8080
+spring.datasource.driver-class-name=io.github.magnusp.libsql.jdbc.LibsqlDriver
+```
+
+**URL configuration with an explicit driver**
+
+URL-based configuration must use the `jdbc:sqlite:` alias and name the driver
+explicitly. This mirrors the Flyway Maven plugin and `flyway.properties` path:
+
+```java
+ClassicConfiguration configuration = new ClassicConfiguration();
+configuration.setUrl("jdbc:sqlite:http://localhost:8080");
+configuration.setDriver("io.github.magnusp.libsql.jdbc.LibsqlDriver");
+Flyway flyway = new Flyway(configuration);
+```
+
+```properties
+# flyway.properties
+url=jdbc:sqlite:http://localhost:8080
+driver=io.github.magnusp.libsql.jdbc.LibsqlDriver
+```
+
+`jdbc:libsql:` cannot be used with URL-based configuration at all, even with an
+explicit driver, because the plugin lookup fails first.
+
+Auto-commit statements on one JDBC connection share a Hrana stream, so `initSql` and
+`afterConnect` statements that set session state such as `PRAGMA foreign_keys` apply
+to the migrations that follow on that connection. sqld expires an idle stream after
+about ten seconds and the state resets with it; for deterministic state, set it in
+the pool's connection initialization instead. Flyway's `clean()` is supported
+through multi-statement script splitting (see
+[#258](https://github.com/magnusp/libsql-java/issues/258)).
+
 ## Contributing
 
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and development workflow, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community standards.
