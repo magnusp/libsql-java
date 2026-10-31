@@ -159,6 +159,27 @@ class LocaleFoldingTest {
     }
 
     @Test
+    void transactionModeFoldsUnderATurkishDefaultLocale() {
+        Locale.setDefault(TURKISH);
+
+        assertThat(LibsqlConnection.TransactionMode.from("immediate"))
+                .as("TransactionMode.from must fold with Locale.ROOT, not the default locale")
+                .isEqualTo(LibsqlConnection.TransactionMode.IMMEDIATE);
+        assertThat(LibsqlConnection.TransactionMode.from("exclusive"))
+                .as("TransactionMode.from must fold with Locale.ROOT, not the default locale")
+                .isEqualTo(LibsqlConnection.TransactionMode.EXCLUSIVE);
+    }
+
+    @Test
+    void tableTypeFilterFoldsUnderATurkishDefaultLocale() {
+        Locale.setDefault(TURKISH);
+
+        assertThat(MetadataSql.tables("%", new String[] {"table", "view"}))
+                .as("MetadataSql must fold table types with Locale.ROOT, not the default locale")
+                .contains("AND TABLE_TYPE IN ('TABLE','VIEW')");
+    }
+
+    @Test
     void declaredTypeFoldsUnderATurkishDefaultLocale() {
         Locale.setDefault(TURKISH);
 
@@ -178,7 +199,7 @@ class LocaleFoldingTest {
                         Value.of("parent_id"),
                         Value.of("id"),
                         Value.of("cascade"), // update rule
-                        Value.of("set null"), // delete rule
+                        Value.of("restrict"), // delete rule
                         Value.of("CREATE TABLE child (parent_id INTEGER REFERENCES parent(id))"),
                         Value.of("CREATE TABLE parent (id INTEGER PRIMARY KEY)"),
                         Value.of("id")))),
@@ -195,7 +216,7 @@ class LocaleFoldingTest {
                 .isEqualTo(DatabaseMetaData.importedKeyCascade);
         assertThat(integer(imported, FOREIGN_KEY_COLUMNS, "DELETE_RULE"))
                 .as("ForeignKeyMetadata must fold the rule with Locale.ROOT, not the default locale")
-                .isEqualTo(DatabaseMetaData.importedKeySetNull);
+                .isEqualTo(DatabaseMetaData.importedKeyRestrict);
     }
 
     private static String typeName(StmtResult result) {
