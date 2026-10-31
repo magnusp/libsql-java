@@ -260,7 +260,7 @@ initSql=PRAGMA foreign_keys = OFF
 
 ```properties
 # Spring Boot
-spring.flyway.init-sql=PRAGMA foreign_keys = OFF
+spring.flyway.init-sqls=PRAGMA foreign_keys = OFF
 ```
 
 The driver splits Flyway's `PRAGMA foreign_keys = OFF; DROP TABLE ...; PRAGMA
