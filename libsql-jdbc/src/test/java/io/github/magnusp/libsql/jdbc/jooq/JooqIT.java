@@ -277,12 +277,19 @@ class JooqIT extends JooqSqldSupport {
     }
 
     @Test
-    void dialectDetectionUsesTheUrlNotTheProductName() {
+    void libsqlUrlIsNotDetectedByJooq() {
         assertThat(JDBCUtils.dialect(connection))
-                .as("jOOQ 3.21 derives the dialect from DatabaseMetaData.getURL(), not from"
-                        + " the product name. The driver reports its transport endpoint there,"
-                        + " so jOOQ returns SQLDialect.DEFAULT; pass SQLDialect.SQLITE"
-                        + " explicitly.")
+                .as("jOOQ 3.21 derives the dialect from DatabaseMetaData.getURL(), and it"
+                        + " has no jdbc:libsql: prefix. Pass SQLDialect.SQLITE explicitly.")
                 .isEqualTo(SQLDialect.DEFAULT);
+    }
+
+    @Test
+    void sqliteAliasUrlIsDetectedAsSqliteDialect() throws Exception {
+        try (Connection alias = DriverManager.getConnection("jdbc:sqlite:" + httpUrl())) {
+            assertThat(JDBCUtils.dialect(alias))
+                    .as("getURL() preserves the jdbc:sqlite: prefix, which jOOQ recognizes")
+                    .isEqualTo(SQLDialect.SQLITE);
+        }
     }
 }

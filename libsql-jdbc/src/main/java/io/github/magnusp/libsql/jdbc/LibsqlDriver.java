@@ -45,7 +45,7 @@ public class LibsqlDriver implements Driver {
         } else {
             client = new LibsqlHttpClient(config);
         }
-        return new LibsqlConnection(config, client);
+        return new LibsqlConnection(config, client, url);
     }
 
     private static boolean isWebSocketUrl(String url) {

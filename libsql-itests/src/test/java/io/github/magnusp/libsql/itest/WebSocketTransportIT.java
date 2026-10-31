@@ -108,7 +108,7 @@ public class WebSocketTransportIT extends SqldContainerBase {
         try (Connection connection = connect(scheme)) {
             DatabaseMetaData metaData = connection.getMetaData();
             assertThat(metaData.getDatabaseProductName()).isEqualTo("SQLite");
-            assertThat(metaData.getURL()).isEqualTo(url(scheme));
+            assertThat(metaData.getURL()).isEqualTo("jdbc:libsql:" + url(scheme));
 
             try (Statement statement = connection.createStatement()) {
                 statement.execute(

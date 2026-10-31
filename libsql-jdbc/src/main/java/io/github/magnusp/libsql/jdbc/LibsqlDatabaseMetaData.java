@@ -189,7 +189,7 @@ public class LibsqlDatabaseMetaData implements DatabaseMetaData {
     public boolean allTablesAreSelectable() throws SQLException { return true; }
     @Override
     public String getURL() throws SQLException {
-        return connection.getConfig() != null ? connection.getConfig().url() : null;
+        return connection.getJdbcUrl();
     }
     @Override
     public String getUserName() throws SQLException { return null; }
