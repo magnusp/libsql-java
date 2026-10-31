@@ -34,6 +34,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.OffsetTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
 import java.util.Calendar;
 import java.util.HashMap;
@@ -389,6 +390,14 @@ public class LibsqlResultSet implements ResultSet {
         return dateTime == null ? null : Date.valueOf(dateTime.toLocalDate());
     }
 
+    private static Date dateValue(Value value, ZoneId zone) throws SQLException {
+        LocalDateTime dateTime = dateTimeValue(value, "Date", zone);
+        if (dateTime == null) {
+            return null;
+        }
+        return new Date(dateTime.toLocalDate().atStartOfDay(zone).toInstant().toEpochMilli());
+    }
+
     @Override
     public Time getTime(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
@@ -400,6 +409,18 @@ public class LibsqlResultSet implements ResultSet {
         return dateTime == null ? null : Time.valueOf(dateTime.toLocalTime());
     }
 
+    private static Time timeValue(Value value, ZoneId zone) throws SQLException {
+        LocalDateTime dateTime = dateTimeValue(value, "Time", zone);
+        if (dateTime == null) {
+            return null;
+        }
+        return new Time(LocalDate.of(1970, 1, 1)
+                .atTime(dateTime.toLocalTime())
+                .atZone(zone)
+                .toInstant()
+                .toEpochMilli());
+    }
+
     @Override
     public Timestamp getTimestamp(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
@@ -409,6 +430,11 @@ public class LibsqlResultSet implements ResultSet {
     private static Timestamp timestampValue(Value value) throws SQLException {
         LocalDateTime dateTime = dateTimeValue(value, "Timestamp");
         return dateTime == null ? null : Timestamp.valueOf(dateTime);
+    }
+
+    private static Timestamp timestampValue(Value value, ZoneId zone) throws SQLException {
+        LocalDateTime dateTime = dateTimeValue(value, "Timestamp", zone);
+        return dateTime == null ? null : Timestamp.from(dateTime.atZone(zone).toInstant());
     }
 
     private static OffsetTime offsetTimeValue(Value value) throws SQLException {
@@ -889,16 +915,46 @@ public class LibsqlResultSet implements ResultSet {
         rejectTypeMap(map);
         return getObject(columnLabel);
     }
-    @Override public Ref getRef(String columnLabel) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
+    @Override public Ref getRef(String columnLabel) throws SQLException { return getRef(findColumn(columnLabel)); }
     @Override public Blob getBlob(String columnLabel) throws SQLException { return getBlob(findColumn(columnLabel)); }
     @Override public Clob getClob(String columnLabel) throws SQLException { return getClob(findColumn(columnLabel)); }
-    @Override public Array getArray(String columnLabel) throws SQLException { throw new SQLFeatureNotSupportedException("not implemented by SQLite JDBC driver"); }
-    @Override public Date getDate(int columnIndex, Calendar cal) throws SQLException { return getDate(columnIndex); }
-    @Override public Date getDate(String columnLabel, Calendar cal) throws SQLException { return getDate(columnLabel); }
-    @Override public Time getTime(int columnIndex, Calendar cal) throws SQLException { return getTime(columnIndex); }
-    @Override public Time getTime(String columnLabel, Calendar cal) throws SQLException { return getTime(columnLabel); }
-    @Override public Timestamp getTimestamp(int columnIndex, Calendar cal) throws SQLException { return getTimestamp(columnIndex); }
-    @Override public Timestamp getTimestamp(String columnLabel, Calendar cal) throws SQLException { return getTimestamp(columnLabel); }
+    @Override public Array getArray(String columnLabel) throws SQLException { return getArray(findColumn(columnLabel)); }
+    @Override
+    public Date getDate(int columnIndex, Calendar cal) throws SQLException {
+        if (cal == null) {
+            return getDate(columnIndex);
+        }
+        checkReadable(columnIndex);
+        return dateValue(getCurrentValue(columnIndex), zone(cal));
+    }
+
+    @Override public Date getDate(String columnLabel, Calendar cal) throws SQLException { return getDate(findColumn(columnLabel), cal); }
+
+    @Override
+    public Time getTime(int columnIndex, Calendar cal) throws SQLException {
+        if (cal == null) {
+            return getTime(columnIndex);
+        }
+        checkReadable(columnIndex);
+        return timeValue(getCurrentValue(columnIndex), zone(cal));
+    }
+
+    @Override public Time getTime(String columnLabel, Calendar cal) throws SQLException { return getTime(findColumn(columnLabel), cal); }
+
+    @Override
+    public Timestamp getTimestamp(int columnIndex, Calendar cal) throws SQLException {
+        if (cal == null) {
+            return getTimestamp(columnIndex);
+        }
+        checkReadable(columnIndex);
+        return timestampValue(getCurrentValue(columnIndex), zone(cal));
+    }
+
+    @Override public Timestamp getTimestamp(String columnLabel, Calendar cal) throws SQLException { return getTimestamp(findColumn(columnLabel), cal); }
+
+    private static ZoneId zone(Calendar cal) {
+        return cal.getTimeZone().toZoneId();
+    }
     @Override
     public URL getURL(int columnIndex) throws SQLException {
         checkReadable(columnIndex);
@@ -1163,6 +1219,11 @@ public class LibsqlResultSet implements ResultSet {
      */
     private static LocalDateTime dateTimeValue(Value value, String targetType) throws SQLException {
         return SqliteDateTimeValues.from(value, targetType);
+    }
+
+    private static LocalDateTime dateTimeValue(Value value, String targetType, ZoneId zone)
+            throws SQLException {
+        return SqliteDateTimeValues.from(value, targetType, zone);
     }
 
     @Override

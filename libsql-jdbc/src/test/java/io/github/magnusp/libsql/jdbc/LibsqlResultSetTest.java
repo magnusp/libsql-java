@@ -16,26 +16,34 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Array;
 import java.sql.Blob;
 import java.sql.Clob;
+import java.sql.Date;
 import java.sql.NClob;
 import java.sql.Ref;
 import java.sql.RowId;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLXML;
+import java.sql.Time;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.Calendar;
 import java.util.List;
 import java.util.Map;
+import java.util.TimeZone;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class LibsqlResultSetTest {
+
+    private static final ZoneId TOKYO = ZoneId.of("Asia/Tokyo");
+    private static final ZoneId UTC = ZoneId.of("UTC");
 
     private static final StmtResult INTEGER_ROWS = new StmtResult(
             List.of(new Col("id", "INTEGER")),
@@ -308,6 +316,131 @@ class LibsqlResultSetTest {
     }
 
     @Test
+    void calendarTimestampGetterUsesTheCalendarZone() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Text("2024-01-02 23:30:00"));
+        assertThat(rs.next()).isTrue();
+        LocalDateTime local = LocalDateTime.of(2024, 1, 2, 23, 30);
+        long utcMillis = local.atZone(UTC).toInstant().toEpochMilli();
+        long tokyoMillis = local.atZone(TOKYO).toInstant().toEpochMilli();
+
+        assertThat(rs.getTimestamp(1, calendar("UTC")).getTime()).isEqualTo(utcMillis);
+        assertThat(rs.getTimestamp(1, calendar("Asia/Tokyo")).getTime()).isEqualTo(tokyoMillis);
+        assertThat(rs.getTimestamp("c1", calendar("Asia/Tokyo")).getTime()).isEqualTo(tokyoMillis);
+        assertThat(utcMillis - tokyoMillis).isEqualTo(9L * 60 * 60 * 1000);
+    }
+
+    @Test
+    void calendarDateGetterProjectsMidnightInTheCalendarZone() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Text("2024-01-02 23:30:00"));
+        assertThat(rs.next()).isTrue();
+        LocalDate date = LocalDate.of(2024, 1, 2);
+        long utcMillis = date.atStartOfDay(UTC).toInstant().toEpochMilli();
+        long tokyoMillis = date.atStartOfDay(TOKYO).toInstant().toEpochMilli();
+
+        assertThat(rs.getDate(1, calendar("UTC")).getTime()).isEqualTo(utcMillis);
+        assertThat(rs.getDate(1, calendar("Asia/Tokyo")).getTime()).isEqualTo(tokyoMillis);
+        assertThat(rs.getDate("c1", calendar("Asia/Tokyo")).getTime()).isEqualTo(tokyoMillis);
+    }
+
+    @Test
+    void calendarTimeGetterProjectsTheTimeOnTheEpochDate() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Text("2024-01-02 23:30:00"));
+        assertThat(rs.next()).isTrue();
+        long utcMillis = LocalDate.of(1970, 1, 1)
+                .atTime(LocalTime.of(23, 30))
+                .atZone(UTC)
+                .toInstant()
+                .toEpochMilli();
+        long tokyoMillis = LocalDate.of(1970, 1, 1)
+                .atTime(LocalTime.of(23, 30))
+                .atZone(TOKYO)
+                .toInstant()
+                .toEpochMilli();
+
+        assertThat(rs.getTime(1, calendar("UTC")).getTime()).isEqualTo(utcMillis);
+        assertThat(rs.getTime(1, calendar("Asia/Tokyo")).getTime()).isEqualTo(tokyoMillis);
+        assertThat(rs.getTime("c1", calendar("Asia/Tokyo")).getTime()).isEqualTo(tokyoMillis);
+    }
+
+    @Test
+    void offsetTextIsAFixedInstantConvertedIntoTheCalendarZone() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Text("2024-01-03T08:30:00+09:00"));
+        assertThat(rs.next()).isTrue();
+        Instant instant = Instant.parse("2024-01-02T23:30:00Z");
+
+        assertThat(rs.getTimestamp(1, calendar("UTC")).getTime()).isEqualTo(instant.toEpochMilli());
+        assertThat(rs.getDate(1, calendar("UTC")).getTime())
+                .isEqualTo(LocalDate.of(2024, 1, 2).atStartOfDay(UTC).toInstant().toEpochMilli());
+    }
+
+    @Test
+    void calendarTimestampGetterPreservesNanos() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Text("2024-01-02 23:30:00.123456789"));
+        assertThat(rs.next()).isTrue();
+
+        Timestamp timestamp = rs.getTimestamp(1, calendar("Asia/Tokyo"));
+
+        assertThat(timestamp.getNanos()).isEqualTo(123_456_789);
+        assertThat(timestamp.getTime())
+                .isEqualTo(LocalDateTime.of(2024, 1, 2, 23, 30, 0, 123_456_789)
+                        .atZone(TOKYO)
+                        .toInstant()
+                        .toEpochMilli());
+    }
+
+    @Test
+    void integerEpochMillisIsAFixedInstantProjectedInTheCalendarZone() throws SQLException {
+        long epochMillis = Instant.parse("2024-01-02T20:00:00Z").toEpochMilli();
+        LibsqlResultSet rs = resultSet(new Value.Integer(epochMillis));
+        assertThat(rs.next()).isTrue();
+
+        assertThat(rs.getTimestamp(1, calendar("Asia/Tokyo")).getTime()).isEqualTo(epochMillis);
+        assertThat(rs.getDate(1, calendar("UTC")).getTime())
+                .isEqualTo(LocalDate.of(2024, 1, 2).atStartOfDay(UTC).toInstant().toEpochMilli());
+        assertThat(rs.getDate(1, calendar("Asia/Tokyo")).getTime())
+                .isEqualTo(LocalDate.of(2024, 1, 3).atStartOfDay(TOKYO).toInstant().toEpochMilli());
+    }
+
+    @Test
+    void floatJulianDayIsAFixedInstantProjectedInTheCalendarZone() throws SQLException {
+        long epochMillis = Instant.parse("2024-01-02T20:00:00Z").toEpochMilli();
+        double julianDay = 2440587.5 + epochMillis / 86_400_000.0;
+        LibsqlResultSet rs = resultSet(Value.of(julianDay));
+        assertThat(rs.next()).isTrue();
+
+        assertThat(rs.getTimestamp(1, calendar("Asia/Tokyo")).getTime()).isEqualTo(epochMillis);
+        assertThat(rs.getDate(1, calendar("Asia/Tokyo")).getTime())
+                .isEqualTo(LocalDate.of(2024, 1, 3).atStartOfDay(TOKYO).toInstant().toEpochMilli());
+    }
+
+    @Test
+    void nullCalendarGetterEqualsTheDefaultOverload() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Text("2024-01-02 23:30:00"));
+        assertThat(rs.next()).isTrue();
+
+        assertThat(rs.getTimestamp(1, null).getTime()).isEqualTo(rs.getTimestamp(1).getTime());
+        assertThat(rs.getTimestamp("c1", null).getTime()).isEqualTo(rs.getTimestamp("c1").getTime());
+        assertThat(rs.getDate(1, null).getTime()).isEqualTo(rs.getDate(1).getTime());
+        assertThat(rs.getTime(1, null).getTime()).isEqualTo(rs.getTime(1).getTime());
+    }
+
+    @Test
+    void calendarGettersReturnNullForNullAndBlankValues() throws SQLException {
+        for (Value value : List.of(Value.ofNull(), Value.of(""))) {
+            LibsqlResultSet rs = resultSet(value);
+            assertThat(rs.next()).isTrue();
+            Calendar tokyo = calendar("Asia/Tokyo");
+
+            assertThat(rs.getTimestamp(1, tokyo)).isNull();
+            assertThat(rs.getTimestamp("c1", tokyo)).isNull();
+            assertThat(rs.getDate(1, tokyo)).isNull();
+            assertThat(rs.getDate("c1", tokyo)).isNull();
+            assertThat(rs.getTime(1, tokyo)).isNull();
+            assertThat(rs.getTime("c1", tokyo)).isNull();
+        }
+    }
+
+    @Test
     void realJulianDayFeedsEveryDateAndTimeGetter() throws SQLException {
         LibsqlResultSet rs = resultSet(new Value.Float(2460311.5));
         assertThat(rs.next()).isTrue();
@@ -445,6 +578,85 @@ class LibsqlResultSetTest {
         assertThatThrownBy(() -> rs.getObject("c1", typeMap))
                 .isInstanceOf(SQLFeatureNotSupportedException.class)
                 .hasMessageContaining("Type maps");
+    }
+
+    @ParameterizedTest(name = "{0} closed on {1}")
+    @ValueSource(strings = {"getRef", "getArray"})
+    void labelAndIntGettersShareTheClosedResultSetCheck(String getter) throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Integer(1));
+        assertThat(rs.next()).isTrue();
+        rs.close();
+
+        assertThatThrownBy(() -> readArrayOrRef(rs, getter, 1))
+                .as("%s(int) on a closed result set", getter)
+                .isInstanceOf(SQLException.class)
+                .hasMessage("ResultSet is closed");
+        assertThatThrownBy(() -> readArrayOrRef(rs, getter, "c1"))
+                .as("%s(String) on a closed result set", getter)
+                .isInstanceOf(SQLException.class)
+                .hasMessage("ResultSet is closed");
+    }
+
+    @ParameterizedTest(name = "{0} declared {1}")
+    @ValueSource(strings = {"ARRAY", "STRUCT", "REF", "DISTINCT", "JAVA_OBJECT"})
+    void labelAndIntGettersShareTheDeclaredTypeCheck(String declaredType) throws SQLException {
+        LibsqlResultSet rs = declaredResultSet(declaredType, Value.of("42"));
+        assertThat(rs.next()).isTrue();
+
+        assertThatThrownBy(() -> rs.getArray(1))
+                .as("getArray(int) on declared %s", declaredType)
+                .isInstanceOf(SQLFeatureNotSupportedException.class)
+                .hasMessage("Declared " + declaredType + " is not supported");
+        assertThatThrownBy(() -> rs.getArray("c1"))
+                .as("getArray(String) on declared %s", declaredType)
+                .isInstanceOf(SQLFeatureNotSupportedException.class)
+                .hasMessage("Declared " + declaredType + " is not supported");
+        assertThatThrownBy(() -> rs.getRef(1))
+                .as("getRef(int) on declared %s", declaredType)
+                .isInstanceOf(SQLFeatureNotSupportedException.class)
+                .hasMessage("Declared " + declaredType + " is not supported");
+        assertThatThrownBy(() -> rs.getRef("c1"))
+                .as("getRef(String) on declared %s", declaredType)
+                .isInstanceOf(SQLFeatureNotSupportedException.class)
+                .hasMessage("Declared " + declaredType + " is not supported");
+    }
+
+    @Test
+    void labelGettersRejectAnUnknownLabelBeforeTheUnsupportedThrow() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Integer(1));
+        assertThat(rs.next()).isTrue();
+
+        assertThatThrownBy(() -> rs.getArray("missing"))
+                .isInstanceOf(SQLException.class)
+                .isNotInstanceOf(SQLFeatureNotSupportedException.class)
+                .hasMessage("no such column: 'missing'");
+        assertThatThrownBy(() -> rs.getRef("missing"))
+                .isInstanceOf(SQLException.class)
+                .isNotInstanceOf(SQLFeatureNotSupportedException.class)
+                .hasMessage("no such column: 'missing'");
+    }
+
+    @Test
+    void labelAndIntGettersStillRejectAnOrdinaryOpenColumn() throws SQLException {
+        LibsqlResultSet rs = resultSet(new Value.Integer(1));
+        assertThat(rs.next()).isTrue();
+
+        assertThatThrownBy(() -> rs.getArray(1))
+                .isInstanceOf(SQLFeatureNotSupportedException.class);
+        assertThatThrownBy(() -> rs.getArray("c1"))
+                .isInstanceOf(SQLFeatureNotSupportedException.class);
+        assertThatThrownBy(() -> rs.getRef(1))
+                .isInstanceOf(SQLFeatureNotSupportedException.class);
+        assertThatThrownBy(() -> rs.getRef("c1"))
+                .isInstanceOf(SQLFeatureNotSupportedException.class);
+    }
+
+    private static Object readArrayOrRef(LibsqlResultSet rs, String getter, Object column)
+            throws SQLException {
+        if ("getArray".equals(getter)) {
+            return column instanceof Integer ? rs.getArray((Integer) column) : rs.getArray((String) column);
+        }
+        return column instanceof Integer ? rs.getRef((Integer) column) : rs.getRef((String) column);
     }
 
     @Test
@@ -611,9 +823,22 @@ class LibsqlResultSetTest {
         assertThat(rs.getDouble(column)).isEqualTo(expectedDouble);
     }
 
+    private static Calendar calendar(String zoneId) {
+        return Calendar.getInstance(TimeZone.getTimeZone(zoneId));
+    }
+
     private static LibsqlResultSet resultSet(Value... values) {
+        String[] declaredTypes = new String[values.length];
+        return declaredResultSet(declaredTypes, values);
+    }
+
+    private static LibsqlResultSet declaredResultSet(String declaredType, Value value) {
+        return declaredResultSet(new String[] {declaredType}, value);
+    }
+
+    private static LibsqlResultSet declaredResultSet(String[] declaredTypes, Value... values) {
         List<Col> cols = IntStream.range(0, values.length)
-                .mapToObj(i -> new Col("c" + (i + 1), null))
+                .mapToObj(i -> new Col("c" + (i + 1), declaredTypes[i]))
                 .toList();
         StmtResult result = new StmtResult(cols, List.of(new Row(List.of(values))), 1, null);
         return new LibsqlResultSet(null, result);

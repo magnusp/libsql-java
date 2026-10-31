@@ -20,22 +20,35 @@ final class SqliteDateTimeValues {
     private SqliteDateTimeValues() {}
 
     static LocalDateTime from(Value value, String targetType) throws SQLException {
+        return from(value, targetType, ZoneId.systemDefault());
+    }
+
+    /**
+     * Converts a value into the wall-clock fields of {@code zone}. An INTEGER or FLOAT value is a
+     * fixed instant, and text with an explicit offset is too; both are projected into {@code zone}.
+     * Naive text is wall-clock time in {@code zone}.
+     */
+    static LocalDateTime from(Value value, String targetType, ZoneId zone) throws SQLException {
         return switch (value) {
             case Value.Null n -> null;
-            case Value.Integer i -> epochMillisToLocalDateTime(i.value(), targetType);
+            case Value.Integer i -> epochMillisToLocalDateTime(i.value(), targetType, zone);
             case Value.Float f ->
-                    epochMillisToLocalDateTime(julianDayToEpochMillis(f.value()), targetType);
+                    epochMillisToLocalDateTime(julianDayToEpochMillis(f.value()), targetType, zone);
             case Value.Text t ->
-                    t.value().isBlank() ? null : parseSqliteDateTime(t.value(), targetType);
+                    t.value().isBlank() ? null : parseSqliteDateTime(t.value(), targetType, zone);
             case Value.Blob b -> throw new SQLException("Bad value for type " + targetType);
         };
     }
 
     static LocalDateTime epochMillisToLocalDateTime(long epochMillis, String targetType)
             throws SQLException {
+        return epochMillisToLocalDateTime(epochMillis, targetType, ZoneId.systemDefault());
+    }
+
+    static LocalDateTime epochMillisToLocalDateTime(
+            long epochMillis, String targetType, ZoneId zone) throws SQLException {
         try {
-            return LocalDateTime.ofInstant(
-                    Instant.ofEpochMilli(epochMillis), ZoneId.systemDefault());
+            return LocalDateTime.ofInstant(Instant.ofEpochMilli(epochMillis), zone);
         } catch (DateTimeException e) {
             throw new SQLException("Bad value for type " + targetType, e);
         }
@@ -46,6 +59,11 @@ final class SqliteDateTimeValues {
     }
 
     static LocalDateTime parseSqliteDateTime(String text, String targetType)
+            throws SQLException {
+        return parseSqliteDateTime(text, targetType, ZoneId.systemDefault());
+    }
+
+    static LocalDateTime parseSqliteDateTime(String text, String targetType, ZoneId zone)
             throws SQLException {
         String value = text.trim();
         ZoneOffset offset = null;
@@ -91,9 +109,7 @@ final class SqliteDateTimeValues {
             LocalDateTime local = LocalDateTime.of(date, time);
             return offset == null
                     ? local
-                    : local.atOffset(offset)
-                            .atZoneSameInstant(ZoneId.systemDefault())
-                            .toLocalDateTime();
+                    : local.atOffset(offset).atZoneSameInstant(zone).toLocalDateTime();
         } catch (DateTimeException | NumberFormatException e) {
             throw new SQLException("Bad value for type " + targetType + ": " + text, e);
         }
