@@ -59,6 +59,7 @@ The repository is organized as a multi-module Maven project:
 - **`libsql-jdbc`**: Standard JDBC 4.3 compliant driver implementation (`jdbc:libsql:...`).
 - **`libsql-itests`**: End-to-end integration tests using Testcontainers and sqld.
 - **`libsql-conformance`**: Selected xerial/sqlite-jdbc tests running against libSQL.
+- **`libsql-perf`**: Driver-side codec and JDBC benchmark used for the PR performance comment.
 
 ## Code Style & Quality
 

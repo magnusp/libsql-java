@@ -34,6 +34,7 @@ libsql-java/
 ├── libsql-jdbc/                # Standard JDBC 4.3 driver (java.sql.* implementation)
 ├── libsql-itests/              # Testcontainers (sqld) and Toxiproxy integration tests
 ├── libsql-conformance/         # Selected xerial/sqlite-jdbc tests running against libSQL
+├── libsql-perf/                # Driver-side codec/JDBC benchmark posted on pull requests
 ├── tools/                      # Maintainer scripts such as export-upstream
 ├── upstream-xerial_sqlite-jdbc/  # Vendored xerial/sqlite-jdbc sources for conformance tests
 └── vendor/                     # Upstream specifications and documentation (Hrana v3, sqld)
@@ -98,6 +99,23 @@ mise exec -- ./mvnw -pl libsql-itests -Dtest=HikariCpIntegrationIT test
 ```
 
 Under nono, set `DOCKER_CONFIG` before the command, as described in the workaround below.
+
+### Performance Benchmark
+
+`libsql-perf` measures codec decode/encode and the JDBC result-set getters without a server. The
+[`Performance`](.github/workflows/perf.yml) workflow builds the PR merge commit and its base
+commit, runs three interleaved rounds, and posts a sticky comparison comment. The job flags
+regressions over 10% but does not fail the check.
+
+```bash
+mise exec -- ./mvnw -pl libsql-perf -am -DskipTests package
+mise exec -- java -cp 'libsql-perf/target/classes:libsql-perf/target/lib/*' \
+  io.github.magnusp.libsql.perf.PerfBenchmark --quick
+```
+
+See [`libsql-perf/README.md`](libsql-perf/README.md) for the workloads and how to change them. The
+benchmark payload is a measured baseline: change it in a dedicated PR and call it out, so the first
+comment after the change is not read as a regression.
 
 ### nono Sandbox and Docker Config
 
