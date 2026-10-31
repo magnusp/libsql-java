@@ -156,9 +156,12 @@ import liquibase.resource.ClassLoaderResourceAccessor;
 
 Database database = DatabaseFactory.getInstance().openDatabase(
         "jdbc:libsql:http://localhost:8080",
-        null,
-        null,
-        LibsqlDriver.class.getName(),
+        null,                          // username
+        null,                          // password
+        LibsqlDriver.class.getName(),  // driver
+        null,                          // database class
+        null,                          // driver properties file
+        null,                          // property provider class
         new ClassLoaderResourceAccessor());
 ```
 

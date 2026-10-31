@@ -169,12 +169,17 @@ class LiquibaseIT extends LiquibaseSqldSupport {
      */
     @Test
     void databaseFactoryOpensALibsqlUrlWithAnExplicitDriver() throws Exception {
+        // The five-argument openDatabase overload names a property-provider class, not a
+        // driver. The eight-argument overload takes the driver explicitly.
         Database database = DatabaseFactory.getInstance()
                 .openDatabase(
                         jdbcUrl(),
                         null,
                         null,
                         LibsqlDriver.class.getName(),
+                        null,
+                        null,
+                        null,
                         new ClassLoaderResourceAccessor());
         try {
             assertThat(database).isInstanceOf(SQLiteDatabase.class);
