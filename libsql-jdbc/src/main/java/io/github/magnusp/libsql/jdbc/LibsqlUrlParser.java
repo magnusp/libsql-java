@@ -21,7 +21,7 @@ public class LibsqlUrlParser {
 
     private static final Set<String> CREDENTIAL_QUERY_PARAMS =
             Set.of("authToken", "jwt", "password", "token");
-    private static final Pattern USER_INFO = Pattern.compile("^(jdbc:[a-zA-Z]+:[a-zA-Z]+://)[^/@]*@");
+    private static final Pattern USER_INFO = Pattern.compile("^(jdbc:[a-zA-Z]+:[a-zA-Z]+://)[^/?#]*@");
 
     public static boolean acceptsUrl(String url) {
         if (url == null) return false;

@@ -170,6 +170,18 @@ public class LibsqlUrlParserTest {
     }
 
     @Test
+    void testMetadataUrlRedactsRepeatedUserInfo() {
+        assertThat(LibsqlUrlParser.metadataUrl("jdbc:libsql:http://user:pass@user:pass@localhost:8080/dev"))
+                .isEqualTo("jdbc:libsql:http://localhost:8080/dev");
+    }
+
+    @Test
+    void testMetadataUrlDoesNotTreatAnAtSignInTheQueryAsUserInfo() {
+        String url = "jdbc:libsql:http://localhost:8080/dev?filter=a@b";
+        assertThat(LibsqlUrlParser.metadataUrl(url)).isEqualTo(url);
+    }
+
+    @Test
     void testMetadataUrlLeavesANonCredentialUrlUnchanged() {
         String url = "jdbc:sqlite:http://localhost:8080/dev/tenant?connectTimeout=5000";
         assertThat(LibsqlUrlParser.metadataUrl(url)).isEqualTo(url);
