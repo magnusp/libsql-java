@@ -78,6 +78,14 @@ CI will fail if files contain trailing whitespace, missing newline terminations,
 mise exec -- ./mvnw test
 ```
 
+### Property-Based Tests
+
+The unit lanes use jetCheck for the extracted pure seams and the connection transaction lifecycle.
+A failure prints the minimized value and a `rechecking(...)` token. Use the token while debugging,
+then add a named regression test for the minimized case; do not commit a fixed seed. See
+[`docs/property-based-testing.md`](docs/property-based-testing.md) for the suite list, conventions,
+and the xerial and Appendix B follow-ups.
+
 ### Running Integration & Toxicity Tests
 Requires a running Docker or Podman daemon:
 ```bash
