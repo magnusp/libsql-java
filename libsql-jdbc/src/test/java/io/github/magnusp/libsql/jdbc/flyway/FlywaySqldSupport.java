@@ -55,6 +55,11 @@ abstract class FlywaySqldSupport {
         return new DriverManagerDataSource(jdbcUrl());
     }
 
+    /** A DataSource that disables foreign keys before handing the connection to Flyway. */
+    static DataSource dataSourceWithForeignKeysDisabled() {
+        return new DriverManagerDataSource(jdbcUrl(), true);
+    }
+
     static Connection connect() throws SQLException {
         return DriverManager.getConnection(jdbcUrl());
     }
@@ -138,14 +143,30 @@ abstract class FlywaySqldSupport {
     static final class DriverManagerDataSource implements DataSource {
 
         private final String url;
+        private final boolean disableForeignKeys;
 
         DriverManagerDataSource(String url) {
+            this(url, false);
+        }
+
+        DriverManagerDataSource(String url, boolean disableForeignKeys) {
             this.url = url;
+            this.disableForeignKeys = disableForeignKeys;
         }
 
         @Override
         public Connection getConnection() throws SQLException {
-            return DriverManager.getConnection(url);
+            Connection connection = DriverManager.getConnection(url);
+            if (!disableForeignKeys) {
+                return connection;
+            }
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("PRAGMA foreign_keys = OFF");
+                return connection;
+            } catch (SQLException e) {
+                connection.close();
+                throw e;
+            }
         }
 
         @Override
