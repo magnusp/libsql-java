@@ -411,6 +411,34 @@ class LibsqlGeneratedKeysTest {
     }
 
     @Test
+    void emptyGeneratedKeysUseTheXerialColumnName() throws SQLException {
+        RecordingConnection connection = new RecordingConnection(insertResult(1L));
+
+        try (Statement statement = connection.createStatement();
+                ResultSet keys = statement.getGeneratedKeys()) {
+            assertThat(keys.getMetaData().getColumnName(1)).isEqualTo("1");
+        }
+    }
+
+    @Test
+    void mixedBatchReportsOnlyTheInsertStepKeys() throws SQLException {
+        RecordingConnection connection = new RecordingConnection();
+        connection.batchResults(insertResult(21L), updateResult(1, 99L));
+
+        try (Statement statement = connection.createStatement()) {
+            statement.addBatch("insert into k (v) values ('a')");
+            statement.addBatch("update k set v = 'b'");
+
+            assertThat(statement.executeBatch()).containsExactly(1, 1);
+            try (ResultSet keys = statement.getGeneratedKeys()) {
+                assertThat(keys.next()).isTrue();
+                assertThat(keys.getLong(1)).isEqualTo(21L);
+                assertThat(keys.next()).isFalse();
+            }
+        }
+    }
+
+    @Test
     void supportsGetGeneratedKeysMatchesImplementedBehavior() throws SQLException {
         LibsqlDatabaseMetaData metadata = new LibsqlDatabaseMetaData(new RecordingConnection(insertResult(1L)));
 
