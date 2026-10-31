@@ -27,9 +27,16 @@ import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLXML;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Prepared statement over the Hrana transport.
@@ -44,6 +51,9 @@ import java.util.List;
  * metadata lives in {@link ParameterMetaDataView}.
  */
 public class LibsqlPreparedStatement extends LibsqlStatement implements PreparedStatement, ParameterMetaData {
+
+    private static final DateTimeFormatter DATE_TEXT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final DateTimeFormatter TIME_TEXT = DateTimeFormatter.ofPattern("HH:mm:ss");
 
     private final String sql;
     private final boolean returnsResultSet;
@@ -324,17 +334,55 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
 
     @Override
     public void setDate(int parameterIndex, Date x, Calendar cal) throws SQLException {
-        setDate(parameterIndex, x);
+        if (cal == null || x == null) {
+            setDate(parameterIndex, x);
+            return;
+        }
+        setParam(parameterIndex, Value.of(DATE_TEXT.format(Instant.ofEpochMilli(x.getTime()).atZone(zone(cal)))));
     }
 
     @Override
     public void setTime(int parameterIndex, Time x, Calendar cal) throws SQLException {
-        setTime(parameterIndex, x);
+        if (cal == null || x == null) {
+            setTime(parameterIndex, x);
+            return;
+        }
+        LocalTime time = Instant.ofEpochMilli(x.getTime())
+                .atZone(zone(cal))
+                .toLocalTime()
+                .truncatedTo(ChronoUnit.SECONDS);
+        setParam(parameterIndex, Value.of(TIME_TEXT.format(time)));
     }
 
     @Override
     public void setTimestamp(int parameterIndex, Timestamp x, Calendar cal) throws SQLException {
-        setTimestamp(parameterIndex, x);
+        if (cal == null || x == null) {
+            setTimestamp(parameterIndex, x);
+            return;
+        }
+        setParam(parameterIndex, Value.of(timestampText(x.toInstant().atZone(zone(cal)))));
+    }
+
+    private static ZoneId zone(Calendar cal) {
+        return cal.getTimeZone().toZoneId();
+    }
+
+    /**
+     * The {@link Timestamp#toString()} text form: {@code yyyy-MM-dd HH:mm:ss}, a fraction with
+     * trailing zeros removed when nanos are non-zero, and {@code .0} when nanos are zero.
+     */
+    private static String timestampText(ZonedDateTime value) {
+        String dateTime = DATE_TEXT.format(value) + " " + TIME_TEXT.format(value);
+        int nanos = value.getNano();
+        if (nanos == 0) {
+            return dateTime + ".0";
+        }
+        String fraction = String.format(Locale.ROOT, "%09d", nanos);
+        int end = fraction.length();
+        while (end > 1 && fraction.charAt(end - 1) == '0') {
+            end--;
+        }
+        return dateTime + "." + fraction.substring(0, end);
     }
 
     @Override
