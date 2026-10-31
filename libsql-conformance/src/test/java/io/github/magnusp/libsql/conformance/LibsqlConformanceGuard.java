@@ -10,7 +10,7 @@ import java.sql.Statement;
 final class LibsqlConformanceGuard {
 
     static final String EXPECTED_DRIVER_NAME = "libSQL JDBC Driver";
-    static final String EXPECTED_DATABASE_PRODUCT_NAME = "SQLite (libSQL)";
+    static final String EXPECTED_DATABASE_PRODUCT_NAME = "SQLite";
     static final String LIBSQL_SOURCE_ID_SUFFIX = "alt1";
 
     private static final String PROBE_URL = "jdbc:sqlite::memory:";
