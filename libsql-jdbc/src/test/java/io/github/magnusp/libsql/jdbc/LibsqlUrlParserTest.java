@@ -55,6 +55,23 @@ public class LibsqlUrlParserTest {
     }
 
     @Test
+    void testRejectsANonNumericTimeoutAsAJDBCError() {
+        assertThatThrownBy(() -> LibsqlUrlParser.parse(
+                        "jdbc:libsql:http://localhost:8080/dev/tenant?connectTimeout=soon",
+                        new Properties()))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("connectTimeout")
+                .hasCauseInstanceOf(NumberFormatException.class);
+
+        Properties properties = new Properties();
+        properties.setProperty("busyTimeout", "later");
+        assertThatThrownBy(() -> LibsqlUrlParser.parse("jdbc:libsql:http://localhost:8080", properties))
+                .isInstanceOf(SQLException.class)
+                .hasMessageContaining("busyTimeout")
+                .hasCauseInstanceOf(NumberFormatException.class);
+    }
+
+    @Test
     void testParseWebSocketUrlKeepsTheSchemeAndPath() throws SQLException {
         LibsqlClientConfig config = LibsqlUrlParser.parse(
                 "jdbc:libsql:ws://localhost:8080/dev/tenant?authToken=secretToken", new Properties());
@@ -150,6 +167,18 @@ public class LibsqlUrlParserTest {
     void testMetadataUrlRedactsUserInfo() {
         assertThat(LibsqlUrlParser.metadataUrl("jdbc:libsql:http://user:pass@localhost:8080/dev"))
                 .isEqualTo("jdbc:libsql:http://localhost:8080/dev");
+    }
+
+    @Test
+    void testMetadataUrlRedactsRepeatedUserInfo() {
+        assertThat(LibsqlUrlParser.metadataUrl("jdbc:libsql:http://user:pass@user:pass@localhost:8080/dev"))
+                .isEqualTo("jdbc:libsql:http://localhost:8080/dev");
+    }
+
+    @Test
+    void testMetadataUrlDoesNotTreatAnAtSignInTheQueryAsUserInfo() {
+        String url = "jdbc:libsql:http://localhost:8080/dev?filter=a@b";
+        assertThat(LibsqlUrlParser.metadataUrl(url)).isEqualTo(url);
     }
 
     @Test

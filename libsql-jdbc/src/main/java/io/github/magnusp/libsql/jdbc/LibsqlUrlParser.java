@@ -21,7 +21,7 @@ public class LibsqlUrlParser {
 
     private static final Set<String> CREDENTIAL_QUERY_PARAMS =
             Set.of("authToken", "jwt", "password", "token");
-    private static final Pattern USER_INFO = Pattern.compile("^(jdbc:[a-zA-Z]+:[a-zA-Z]+://)[^/@]*@");
+    private static final Pattern USER_INFO = Pattern.compile("^(jdbc:[a-zA-Z]+:[a-zA-Z]+://)[^/?#]*@");
 
     public static boolean acceptsUrl(String url) {
         if (url == null) return false;
@@ -145,14 +145,26 @@ public class LibsqlUrlParser {
     }
 
     private static Duration resolveDuration(
-            String name, Map<String, String> queryParams, Properties info, Duration defaultValue) {
+            String name,
+            Map<String, String> queryParams,
+            Properties info,
+            Duration defaultValue) throws SQLException {
         if (queryParams.containsKey(name)) {
-            return Duration.ofMillis(Long.parseLong(queryParams.get(name)));
+            return parseDuration(name, queryParams.get(name));
         }
         if (info != null && info.containsKey(name)) {
-            return Duration.ofMillis(Long.parseLong(info.getProperty(name)));
+            return parseDuration(name, info.getProperty(name));
         }
         return defaultValue;
+    }
+
+    /** Keeps a bad timeout a JDBC error instead of leaking {@link NumberFormatException}. */
+    private static Duration parseDuration(String name, String value) throws SQLException {
+        try {
+            return Duration.ofMillis(Long.parseLong(value));
+        } catch (NumberFormatException e) {
+            throw new SQLException("Invalid " + name + " '" + value + "': expected milliseconds", e);
+        }
     }
 
     private static String buildEndpoint(URI uri, String scheme) {
