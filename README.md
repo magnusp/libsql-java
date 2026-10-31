@@ -133,6 +133,59 @@ DOCKER_CONFIG="$PWD/libsql-conformance/src/test/docker-config" ./mvnw clean veri
 
 The compliance profile is in [`docs/jdbc-appendix-b-compliance.md`](docs/jdbc-appendix-b-compliance.md).
 
+## Integrations
+
+### Liquibase
+
+Liquibase's SQLite implementation claims the `jdbc:sqlite:` prefix and selects its
+dialect from the database product name. The driver maps `jdbc:sqlite:http://...` to
+sqld and reports the product name as exactly `SQLite`, so the two work together.
+
+Liquibase still resolves a JDBC driver class from the URL before it opens a connection.
+It maps `jdbc:sqlite:` to `org.sqlite.JDBC`, which is not on the classpath, so name
+`LibsqlDriver` explicitly or pass a `DataSource`.
+
+Use one of these configurations:
+
+**API with an explicit driver class**
+
+```java
+import io.github.magnusp.libsql.jdbc.LibsqlDriver;
+import liquibase.database.Database;
+import liquibase.database.DatabaseFactory;
+import liquibase.resource.ClassLoaderResourceAccessor;
+
+Database database = DatabaseFactory.getInstance().openDatabase(
+        "jdbc:sqlite:http://localhost:8080",
+        null,                          // username
+        null,                          // password
+        LibsqlDriver.class.getName(),  // driver
+        null,                          // database class
+        null,                          // driver properties file
+        null,                          // property provider class
+        new ClassLoaderResourceAccessor());
+```
+
+**Liquibase Maven plugin or `liquibase.properties`**
+
+```properties
+url=jdbc:sqlite:http://localhost:8080
+driver=io.github.magnusp.libsql.jdbc.LibsqlDriver
+```
+
+**Spring Boot or a connection pool**
+
+Pass a `DataSource` and set the driver class explicitly:
+
+```properties
+spring.datasource.url=jdbc:sqlite:http://localhost:8080
+spring.datasource.driver-class-name=io.github.magnusp.libsql.jdbc.LibsqlDriver
+```
+
+Use the `jdbc:sqlite:` prefix so Liquibase's SQLite implementation claims the URL.
+`jdbc:libsql:` also reaches the driver, but Liquibase cannot resolve a driver from it
+and still needs the explicit driver class.
+
 ## Contributing
 
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and development workflow, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community standards.
