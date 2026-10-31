@@ -4,13 +4,10 @@ import io.github.magnusp.libsql.hrana.codec.Stmt;
 import io.github.magnusp.libsql.hrana.codec.StmtResult;
 import io.github.magnusp.libsql.hrana.codec.Value;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.io.InputStream;
 import java.io.Reader;
 import java.math.BigDecimal;
 import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.sql.Array;
 import java.sql.Blob;
 import java.sql.Clob;
@@ -296,24 +293,24 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
 
     @Override
     public void setAsciiStream(int parameterIndex, InputStream x, int length) throws SQLException {
-        setParam(parameterIndex, asciiText(readBytes(x, length)));
+        setParam(parameterIndex, ParameterStreams.asciiText(ParameterStreams.readBytes(x, length)));
     }
 
     @Override
     @Deprecated
     @SuppressWarnings("deprecation")
     public void setUnicodeStream(int parameterIndex, InputStream x, int length) throws SQLException {
-        setParam(parameterIndex, utf8Text(readBytes(x, length)));
+        setParam(parameterIndex, ParameterStreams.utf8Text(ParameterStreams.readBytes(x, length)));
     }
 
     @Override
     public void setBinaryStream(int parameterIndex, InputStream x, int length) throws SQLException {
-        setParam(parameterIndex, Value.of(readBytes(x, length)));
+        setParam(parameterIndex, Value.of(ParameterStreams.readBytes(x, length)));
     }
 
     @Override
     public void setCharacterStream(int parameterIndex, Reader reader, int length) throws SQLException {
-        setParam(parameterIndex, Value.of(readCharacters(reader, length)));
+        setParam(parameterIndex, Value.of(ParameterStreams.readCharacters(reader, length)));
     }
 
     @Override
@@ -323,12 +320,12 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
 
     @Override
     public void setBlob(int parameterIndex, Blob x) throws SQLException {
-        setParam(parameterIndex, Value.of(x == null ? null : readAllBytes(x.getBinaryStream())));
+        setParam(parameterIndex, Value.of(x == null ? null : ParameterStreams.readAllBytes(x.getBinaryStream())));
     }
 
     @Override
     public void setClob(int parameterIndex, Clob x) throws SQLException {
-        setParam(parameterIndex, Value.of(x == null ? null : readAllCharacters(x.getCharacterStream())));
+        setParam(parameterIndex, Value.of(x == null ? null : ParameterStreams.readAllCharacters(x.getCharacterStream())));
     }
 
     @Override
@@ -441,12 +438,12 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
 
     @Override
     public void setClob(int parameterIndex, Reader reader, long length) throws SQLException {
-        setParam(parameterIndex, Value.of(readCharacters(reader, length)));
+        setParam(parameterIndex, Value.of(ParameterStreams.readCharacters(reader, length)));
     }
 
     @Override
     public void setBlob(int parameterIndex, InputStream inputStream, long length) throws SQLException {
-        setParam(parameterIndex, Value.of(readBytes(inputStream, length)));
+        setParam(parameterIndex, Value.of(ParameterStreams.readBytes(inputStream, length)));
     }
 
     @Override
@@ -461,32 +458,32 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
 
     @Override
     public void setAsciiStream(int parameterIndex, InputStream x, long length) throws SQLException {
-        setParam(parameterIndex, asciiText(readBytes(x, length)));
+        setParam(parameterIndex, ParameterStreams.asciiText(ParameterStreams.readBytes(x, length)));
     }
 
     @Override
     public void setBinaryStream(int parameterIndex, InputStream x, long length) throws SQLException {
-        setParam(parameterIndex, Value.of(readBytes(x, length)));
+        setParam(parameterIndex, Value.of(ParameterStreams.readBytes(x, length)));
     }
 
     @Override
     public void setCharacterStream(int parameterIndex, Reader reader, long length) throws SQLException {
-        setParam(parameterIndex, Value.of(readCharacters(reader, length)));
+        setParam(parameterIndex, Value.of(ParameterStreams.readCharacters(reader, length)));
     }
 
     @Override
     public void setAsciiStream(int parameterIndex, InputStream x) throws SQLException {
-        setParam(parameterIndex, asciiText(readAllBytes(x)));
+        setParam(parameterIndex, ParameterStreams.asciiText(ParameterStreams.readAllBytes(x)));
     }
 
     @Override
     public void setBinaryStream(int parameterIndex, InputStream x) throws SQLException {
-        setParam(parameterIndex, Value.of(readAllBytes(x)));
+        setParam(parameterIndex, Value.of(ParameterStreams.readAllBytes(x)));
     }
 
     @Override
     public void setCharacterStream(int parameterIndex, Reader reader) throws SQLException {
-        setParam(parameterIndex, Value.of(readAllCharacters(reader)));
+        setParam(parameterIndex, Value.of(ParameterStreams.readAllCharacters(reader)));
     }
 
     @Override
@@ -496,12 +493,12 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
 
     @Override
     public void setClob(int parameterIndex, Reader reader) throws SQLException {
-        setParam(parameterIndex, Value.of(readAllCharacters(reader)));
+        setParam(parameterIndex, Value.of(ParameterStreams.readAllCharacters(reader)));
     }
 
     @Override
     public void setBlob(int parameterIndex, InputStream inputStream) throws SQLException {
-        setParam(parameterIndex, Value.of(readAllBytes(inputStream)));
+        setParam(parameterIndex, Value.of(ParameterStreams.readAllBytes(inputStream)));
     }
 
     @Override
@@ -509,94 +506,4 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
         setClob(parameterIndex, reader);
     }
 
-    private static Value asciiText(byte[] bytes) {
-        return Value.of(bytes == null ? null : new String(bytes, StandardCharsets.US_ASCII));
-    }
-
-    private static Value utf8Text(byte[] bytes) {
-        return Value.of(bytes == null ? null : new String(bytes, StandardCharsets.UTF_8));
-    }
-
-    private static byte[] readAllBytes(InputStream in) throws SQLException {
-        if (in == null) {
-            return null;
-        }
-        try {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buffer = new byte[8192];
-            int read;
-            while ((read = in.read(buffer)) != -1) {
-                out.write(buffer, 0, read);
-            }
-            return out.toByteArray();
-        } catch (IOException e) {
-            throw new SQLException("Cannot read from binary stream: " + e.getMessage(), e);
-        }
-    }
-
-    private static byte[] readBytes(InputStream in, long length) throws SQLException {
-        if (in == null) {
-            return null;
-        }
-        if (length < 0 || length > Integer.MAX_VALUE) {
-            throw new SQLException("Data must have a length between 0 and Integer.MAX_VALUE");
-        }
-        byte[] bytes = new byte[(int) length];
-        int total = 0;
-        try {
-            while (total < bytes.length) {
-                int read = in.read(bytes, total, bytes.length - total);
-                if (read < 0) {
-                    throw new SQLException("End of stream reached before " + length + " bytes were read");
-                }
-                total += read;
-            }
-        } catch (IOException e) {
-            throw new SQLException("Cannot read from binary stream: " + e.getMessage(), e);
-        }
-        return bytes;
-    }
-
-    private static String readAllCharacters(Reader reader) throws SQLException {
-        if (reader == null) {
-            return null;
-        }
-        try {
-            StringBuilder text = new StringBuilder();
-            char[] buffer = new char[8192];
-            int read;
-            while ((read = reader.read(buffer)) != -1) {
-                text.append(buffer, 0, read);
-            }
-            return text.toString();
-        } catch (IOException e) {
-            throw new SQLException("Cannot read from character stream: " + e.getMessage(), e);
-        }
-    }
-
-    private static String readCharacters(Reader reader, long length) throws SQLException {
-        if (reader == null) {
-            return null;
-        }
-        if (length < 0 || length > Integer.MAX_VALUE) {
-            throw new SQLException("Data must have a length between 0 and Integer.MAX_VALUE");
-        }
-        StringBuilder text = new StringBuilder((int) Math.min(length, 8192));
-        char[] buffer = new char[8192];
-        long remaining = length;
-        try {
-            while (remaining > 0) {
-                int read = reader.read(buffer, 0, (int) Math.min(remaining, buffer.length));
-                if (read < 0) {
-                    throw new SQLException(
-                            "End of stream reached before " + length + " characters were read");
-                }
-                text.append(buffer, 0, read);
-                remaining -= read;
-            }
-        } catch (IOException e) {
-            throw new SQLException("Cannot read from character stream: " + e.getMessage(), e);
-        }
-        return text.toString();
-    }
 }
