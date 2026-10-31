@@ -12,9 +12,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Properties for the statement splitter and the local tokenizer.
  *
- * <p>The generated scripts contain the cases the hand-written tests enumerate: semicolons in
- * quoted text, comments and trigger bodies. The point is coverage of combinations, not a
- * replacement for the named examples in {@link SqlScriptTest}.
+ * <p>The generated scripts combine text literals, quoted identifiers, comments, trigger bodies,
+ * empty statements and malformed quotes. The properties assert conservation, order and the
+ * split fixpoint, so these cases need no separate named examples.
  */
 class SqlScriptPropertyTest {
 
@@ -80,23 +80,60 @@ class SqlScriptPropertyTest {
 
     private record Script(String sql, List<String> expected) {}
 
+    private record Fragment(String sql, boolean kept) {}
+
     private static Generator<Script> scripts() {
-        return Generator.listsOf(IntDistribution.uniform(0, 6), statements())
-                .map(statements -> new Script(
-                        String.join(";\n", statements) + (statements.isEmpty() ? "" : ";\n"),
-                        statements.stream().map(String::strip).toList()));
+        return Generator.listsOf(IntDistribution.uniform(0, 6), fragments())
+                .map(fragments -> new Script(
+                        String.join(";\n", fragments.stream().map(Fragment::sql).toList())
+                                + (fragments.isEmpty() ? "" : ";\n"),
+                        fragments.stream()
+                                .filter(Fragment::kept)
+                                .map(fragment -> fragment.sql().strip())
+                                .toList()));
+    }
+
+    private static Generator<Fragment> fragments() {
+        return Generator.anyOf(
+                statements().map(statement -> new Fragment(statement, true)),
+                Generator.constant(new Fragment("", false)),
+                Generator.constant(new Fragment("  ", false)),
+                Generator.constant(new Fragment("-- noise\n", false)),
+                Generator.constant(new Fragment("/* noise */", false)));
     }
 
     private static Generator<String> statements() {
         return Generator.anyOf(
                 Generator.constant("select 1"),
                 Generator.constant("insert into t values (1)"),
+                Generator.constant("begin"),
+                Generator.constant("commit"),
                 textLiteral(),
                 quotedIdentifier(),
                 bracketIdentifier(),
                 blockComment(),
                 lineComment(),
                 triggerBody());
+    }
+
+    /**
+     * Properties do not need to model a malformed quote. The splitter must leave it inside one
+     * statement rather than inventing a terminator or throwing.
+     */
+    @Test
+    void unterminatedQuotesStayInOneStatement() {
+        PropertyChecker.customized()
+                .withIterationCount(ITERATIONS)
+                .forAll(unterminatedScripts(), sql -> {
+                    assertThat(SqlScript.split(sql)).containsExactly(sql.strip());
+                    return true;
+                });
+    }
+
+    private static Generator<String> unterminatedScripts() {
+        return Generator.stringsOf(
+                        IntDistribution.uniform(0, 40), Generator.charsInRange((char) 0, (char) 127))
+                .map(text -> "select '" + text.replace("'", "''") + "; select 2");
     }
 
     private static Generator<String> textLiteral() {
