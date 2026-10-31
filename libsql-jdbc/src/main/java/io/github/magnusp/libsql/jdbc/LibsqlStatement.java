@@ -203,7 +203,61 @@ public class LibsqlStatement implements Statement {
     private StmtResult executeSql(String sql) throws SQLException {
         checkEscapeProcessing(sql);
         beginExecution();
+        List<String> script = SqlScript.split(sql);
+        if (script.size() > 1) {
+            rejectScriptParameters(sql, false);
+            return executeScript(script);
+        }
         return connection.executeStatement(statement(sql));
+    }
+
+    /**
+     * Executes an already-built prepared statement, splitting a multi-statement script the same way
+     * {@link #executeSql(String)} does. Callers have already run {@link #beginExecution()}.
+     */
+    protected StmtResult executePrepared(Stmt stmt, boolean hasBoundArguments) throws SQLException {
+        List<String> script = SqlScript.split(stmt.sql());
+        if (script.size() > 1) {
+            rejectScriptParameters(stmt.sql(), hasBoundArguments);
+            return executeScript(script);
+        }
+        return connection.executeStatement(stmt);
+    }
+
+    /**
+     * Rejects parameters in a multi-statement script. Binding the same argument list to every
+     * statement would be ambiguous, so the driver asks the caller to execute the statements
+     * separately instead. A single statement keeps the normal parameter behavior.
+     */
+    private static void rejectScriptParameters(String sql, boolean hasBoundArguments)
+            throws SQLException {
+        if (hasBoundArguments || SqlTokenizer.placeholderCount(sql) > 0) {
+            throw new SQLFeatureNotSupportedException(
+                    "Parameters are not supported in multi-statement SQL; execute each statement"
+                            + " separately");
+        }
+    }
+
+    /**
+     * Executes the statements in order on the connection's stream and stops at the first failure.
+     * The update count is the total affected rows, matching xerial. A final statement that
+     * produces a result set exposes that result, so intermediate results are discarded.
+     */
+    private StmtResult executeScript(List<String> statements) throws SQLException {
+        long affectedRows = 0;
+        StmtResult last = null;
+        for (String statement : statements) {
+            last = connection.executeStatement(new Stmt(statement));
+            affectedRows += last.affectedRowCount();
+        }
+        if (last == null) {
+            return new StmtResult(List.of(), List.of(), 0, null);
+        }
+        if (last.cols() != null && !last.cols().isEmpty()) {
+            return last;
+        }
+        return new StmtResult(
+                last.cols(), last.rows(), affectedRows, last.lastInsertRowid());
     }
 
     /**
@@ -351,7 +405,9 @@ public class LibsqlStatement implements Statement {
     }
 
     private static boolean isInsertSql(String sql) {
-        List<SqlTokenizer.Token> tokens = SqlTokenizer.tokenize(sql);
+        List<String> script = SqlScript.split(sql);
+        String statementSql = script.isEmpty() ? sql : script.get(script.size() - 1);
+        List<SqlTokenizer.Token> tokens = SqlTokenizer.tokenize(statementSql);
         if (tokens == null) {
             return false;
         }

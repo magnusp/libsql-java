@@ -555,6 +555,77 @@ class LibsqlConnectionTest {
                 .satisfies(thrown -> assertThat(((SQLException) thrown).getSQLState()).isEqualTo("23000"));
     }
 
+    @Test
+    void autoCommitStatementsShareOneSessionStream() throws SQLException {
+        ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+
+        connection.executeStatement(new Stmt("SELECT 1"));
+        connection.executeStatement(new Stmt("SELECT 2"));
+
+        assertThat(client.executedStatements()).containsExactly("SELECT 1", "SELECT 2");
+        assertThat(client.requests).hasSize(2);
+        assertThat(client.requests.get(0).baton()).isNull();
+        assertThat(client.requests.get(1).baton())
+                .as("the second auto-commit statement reuses the first statement's stream")
+                .isEqualTo(BATON);
+        assertThat(client.requests)
+                .as("auto-commit keeps the stream open between statements")
+                .noneSatisfy(request -> assertThat(request.requests())
+                        .containsExactly(StreamRequest.Close.INSTANCE));
+    }
+
+    @Test
+    void closeClosesTheAutoCommitSessionStream() throws SQLException {
+        ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.executeStatement(new Stmt("SELECT 1"));
+
+        connection.close();
+
+        assertThat(client.requests.get(1).requests()).containsExactly(StreamRequest.Close.INSTANCE);
+    }
+
+    @Test
+    void anExpiredAutoCommitStreamIsRetriedOnceOnAFreshStream() throws SQLException {
+        AtomicInteger executes = new AtomicInteger();
+        ScriptedClient client = new ScriptedClient((request, index) -> {
+            if (executedSql(request) != null && executes.incrementAndGet() == 2) {
+                return errorResponse(new HranaError(
+                        "The stream has expired due to inactivity", "STREAM_EXPIRED"));
+            }
+            return successResponse(request);
+        });
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.executeStatement(new Stmt("SELECT 1"));
+
+        connection.executeStatement(new Stmt("SELECT 2"));
+
+        assertThat(client.executedStatements())
+                .as("the statement did not run on the expired stream, so the retry is safe")
+                .containsExactly("SELECT 1", "SELECT 2", "SELECT 2");
+        assertThat(client.requests.get(2).requests()).containsExactly(StreamRequest.Close.INSTANCE);
+        assertThat(client.requests.get(3).baton())
+                .as("the retry opens a fresh stream")
+                .isNull();
+    }
+
+    @Test
+    void aTransactionBegunAfterAutoCommitWorkReusesTheSessionStream() throws SQLException {
+        ScriptedClient client = new ScriptedClient((request, index) -> successResponse(request));
+        LibsqlConnection connection = new LibsqlConnection(CONFIG, client);
+        connection.executeStatement(new Stmt("SELECT 1"));
+
+        connection.setAutoCommit(false);
+        connection.executeStatement(new Stmt("SELECT 2"));
+
+        assertThat(client.executedStatements())
+                .containsExactly("SELECT 1", "BEGIN", "SELECT 2");
+        assertThat(client.requests.get(1).baton())
+                .as("BEGIN runs on the open auto-commit stream instead of a new one")
+                .isEqualTo(BATON);
+    }
+
     private static int[] countsOfStepsThatRan(int failAt) {
         int[] counts = new int[failAt];
         for (int i = 0; i < counts.length; i++) {

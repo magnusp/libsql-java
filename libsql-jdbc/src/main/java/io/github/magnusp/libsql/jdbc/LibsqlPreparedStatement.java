@@ -68,9 +68,18 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
     public LibsqlPreparedStatement(LibsqlConnection connection, String sql) {
         super(connection);
         this.sql = sql;
-        this.returnsResultSet = returnsResultSet(sql);
+        this.returnsResultSet = returnsResultSet(finalStatement(sql));
         this.parameterCount = SqlTokenizer.placeholderCount(sql);
         this.parameterMetaData = new ParameterMetaDataView(this, parameterCount);
+    }
+
+    /**
+     * A multi-statement script exposes the final statement's result, so that statement decides
+     * whether the prepared execute returns a result set.
+     */
+    private static String finalStatement(String sql) {
+        List<String> statements = SqlScript.split(sql);
+        return statements.isEmpty() ? sql : statements.get(statements.size() - 1);
     }
 
     private void setParam(int parameterIndex, Value value) throws SQLException {
@@ -184,7 +193,7 @@ public class LibsqlPreparedStatement extends LibsqlStatement implements Prepared
         checkEscapeProcessing(sql);
         checkClosed();
         beginExecution();
-        return connection.executeStatement(buildCurrentStmt());
+        return executePrepared(buildCurrentStmt(), !parameters.isEmpty());
     }
 
     @Override

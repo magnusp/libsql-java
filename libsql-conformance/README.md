@@ -122,34 +122,33 @@ categories above, these occur in selected tests. They are driver behavior
 rather than edits to a vendored test, so they are described here and are not
 recorded as `# divergence:` lines.
 
-#### Auto-commit holds no stream
+#### Auto-commit holds one connection-scoped stream
 
-An auto-commit statement runs as a one-shot pipeline that executes the
-statement and closes the stream in the same round trip. The driver keeps no
-session stream open between statements, so an idle connection consumes no
-server stream slot and holds no baton for the idle expiry to invalidate.
-Keeping one open only to preserve session state would reintroduce stale-baton
-failures on idle connections.
+An auto-commit connection lazily opens one interactive Hrana stream and
+pipelines every statement on it, the same machinery explicit transactions
+use. `last_insert_rowid()`, `PRAGMA` settings, and other session state
+therefore behave as they do on a SQLite connection: they survive between
+statements on the same connection and do not cross connections.
+`Statement.getGeneratedKeys()` still reads `StmtResult.last_insert_rowid`
+without an extra round trip.
 
-Because `StmtResult.last_insert_rowid` describes the insert on one stream and
-nothing else, a later `SELECT last_insert_rowid()` runs on a fresh stream and
-returns `0`, even when the same `Statement` inserted a row immediately before.
-xerial returns that insert's rowid instead. Use `Statement.getGeneratedKeys()`
-after the insert, which the driver builds from `StmtResult.last_insert_rowid`
-with no extra round trip, or run the insert and the query inside one explicit
-transaction so both run on the same stream. `LibsqlGeneratedKeysTest` pins the
-generated-keys path.
+sqld expires idle streams (around 10 seconds). When it rejects a baton, the
+driver drops the stream and retries the statement once on a fresh one.
+Auto-commit has no transaction to lose, but session state set before the
+expiry is reset. A pool larger than sqld's stream limit can hit that limit,
+just as idle non-auto-commit connections already can.
 
 #### Transactions begin lazily
 
 `setAutoCommit(false)` sends nothing. The next statement begins the
-transaction on a new stream with `BEGIN`, `BEGIN IMMEDIATE`, or
+transaction on the connection's stream with `BEGIN`, `BEGIN IMMEDIATE`, or
 `BEGIN EXCLUSIVE` according to
 `LibsqlConnection.setTransactionMode(TransactionMode)` (default `DEFERRED`),
 sent as its own pipeline so a failed begin cannot be followed by the
-statement running outside a transaction. `commit()` and `rollback()` close
-the stream and do not begin the next transaction, so an idle non-auto-commit
-connection likewise holds no stream.
+statement running outside a transaction. A connection that used auto-commit
+first keeps that stream, so its session state carries into the transaction.
+`commit()` and `rollback()` close the stream and do not begin the next
+transaction.
 
 The divergence is timing only: an `IMMEDIATE` or `EXCLUSIVE` transaction takes
 its write lock when the first statement begins it, not at
