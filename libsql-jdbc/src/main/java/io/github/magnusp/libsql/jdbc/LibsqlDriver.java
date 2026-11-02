@@ -35,7 +35,8 @@ public class LibsqlDriver implements Driver {
         if (!acceptsURL(url)) {
             return null;
         }
-        LibsqlClientConfig config = LibsqlUrlParser.parse(url, info);
+        ParsedConnection parsed = LibsqlUrlParser.parseConnection(url, info);
+        LibsqlClientConfig config = parsed.client();
         LibsqlClient client;
         if (isWebSocketUrl(config.url())) {
             HranaWsCodec codec = config.encoding() == LibsqlClientConfig.Encoding.PROTOBUF
@@ -45,7 +46,8 @@ public class LibsqlDriver implements Driver {
         } else {
             client = new LibsqlHttpClient(config);
         }
-        return new LibsqlConnection(config, client, LibsqlUrlParser.metadataUrl(url));
+        return new LibsqlConnection(
+                config, client, LibsqlUrlParser.metadataUrl(url), parsed.transactionMode());
     }
 
     private static boolean isWebSocketUrl(String url) {

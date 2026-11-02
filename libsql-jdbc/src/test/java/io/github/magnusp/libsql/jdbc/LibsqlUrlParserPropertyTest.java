@@ -74,6 +74,24 @@ class LibsqlUrlParserPropertyTest {
     }
 
     @Test
+    void parseNeverThrowsAnUnexpectedExceptionFromTransactionMode() {
+        PropertyChecker.customized()
+                .withIterationCount(ITERATIONS)
+                .forAll(transactionModeValues(), value -> {
+                    Properties properties = new Properties();
+                    properties.setProperty("transactionMode", value);
+                    try {
+                        LibsqlUrlParser.parseConnection("jdbc:libsql:http://localhost:8080", properties);
+                    } catch (SQLException expected) {
+                        // A rejected mode is a caller error, not a driver crash.
+                    } catch (RuntimeException unexpected) {
+                        throw new AssertionError("unexpected " + unexpected + " for " + value, unexpected);
+                    }
+                    return true;
+                });
+    }
+
+    @Test
     void metadataUrlIsIdempotent() {
         PropertyChecker.customized()
                 .withIterationCount(ITERATIONS)
@@ -97,6 +115,14 @@ class LibsqlUrlParserPropertyTest {
                 Generator.constant("999999999999999999999999"));
     }
 
+    private static Generator<String> transactionModeValues() {
+        return Generator.anyOf(
+                Generator.sampledFrom("deferred", "immediate", "exclusive", "DEFERRED", "Immediate", "EXCLUSIVE"),
+                Generator.stringsOf(IntDistribution.uniform(0, 12), Generator.charsInRange((char) 0, (char) 127)),
+                Generator.constant(""),
+                Generator.constant("fast"));
+    }
+
     private static Generator<String> arbitraryUrls() {
         Generator<String> fragments = Generator.anyOf(
                 Generator.constant("jdbc:libsql:"),
@@ -110,6 +136,10 @@ class LibsqlUrlParserPropertyTest {
                 Generator.constant("token"),
                 Generator.constant("jwt"),
                 Generator.constant("connectTimeout"),
+                Generator.constant("transactionMode"),
+                Generator.constant("deferred"),
+                Generator.constant("immediate"),
+                Generator.constant("exclusive"),
                 Generator.constant("user:pass@"),
                 Generator.stringsOf(IntDistribution.uniform(0, 8), Generator.charsInRange((char) 0, (char) 127)));
         return Generator.listsOf(IntDistribution.uniform(0, 10), fragments)

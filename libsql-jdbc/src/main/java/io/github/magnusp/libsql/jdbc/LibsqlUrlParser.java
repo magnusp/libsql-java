@@ -33,6 +33,10 @@ public class LibsqlUrlParser {
     }
 
     public static LibsqlClientConfig parse(String url, Properties info) throws SQLException {
+        return parseConnection(url, info).client();
+    }
+
+    static ParsedConnection parseConnection(String url, Properties info) throws SQLException {
         if (!acceptsUrl(url)) {
             throw new SQLException("Invalid JDBC URL: " + url);
         }
@@ -45,8 +49,10 @@ public class LibsqlUrlParser {
                 resolveDuration("connectTimeout", queryParams, info, LibsqlClientConfig.DEFAULT_CONNECT_TIMEOUT);
         Duration busyTimeout =
                 resolveDuration("busyTimeout", queryParams, info, LibsqlClientConfig.DEFAULT_BUSY_TIMEOUT);
-        return new LibsqlClientConfig(
-                buildEndpoint(uri, scheme), authToken, connectTimeout, busyTimeout, encoding);
+        LibsqlConnection.TransactionMode transactionMode = resolveTransactionMode(queryParams, info);
+        return new ParsedConnection(
+                new LibsqlClientConfig(buildEndpoint(uri, scheme), authToken, connectTimeout, busyTimeout, encoding),
+                transactionMode);
     }
 
     /**
@@ -156,6 +162,24 @@ public class LibsqlUrlParser {
             return parseDuration(name, info.getProperty(name));
         }
         return defaultValue;
+    }
+
+    private static LibsqlConnection.TransactionMode resolveTransactionMode(
+            Map<String, String> queryParams, Properties info) throws SQLException {
+        String value = queryParams.get("transactionMode");
+        if (value == null && info != null) {
+            value = info.getProperty("transactionMode");
+        }
+        if (value == null) {
+            return LibsqlConnection.TransactionMode.DEFERRED;
+        }
+        return switch (value.toLowerCase(Locale.ROOT)) {
+            case "deferred" -> LibsqlConnection.TransactionMode.DEFERRED;
+            case "immediate" -> LibsqlConnection.TransactionMode.IMMEDIATE;
+            case "exclusive" -> LibsqlConnection.TransactionMode.EXCLUSIVE;
+            default -> throw new SQLException("Unsupported transactionMode '" + value
+                    + "': expected deferred, immediate, or exclusive");
+        };
     }
 
     /** Keeps a bad timeout a JDBC error instead of leaking {@link NumberFormatException}. */

@@ -78,6 +78,20 @@ public class Example {
 }
 ```
 
+### Connection URL parameters
+
+The JDBC URL accepts these query parameters. The same keys work as `Properties` passed to
+`DriverManager.getConnection`; a query parameter wins over the matching property.
+
+| Parameter | Values | Default | Notes |
+| --- | --- | --- | --- |
+| `authToken` | token | none | Sent as a bearer token. `jwt` and `password` are accepted aliases. |
+| `busyTimeout` | milliseconds | `5000` | How long a request retries while the server reports busy. |
+| `connectTimeout` | milliseconds | `10000` | HTTP connect and request timeout. |
+| `encoding` | `json`, `protobuf` | `json` | `protobuf` requires a `ws://` or `wss://` URL. |
+| `transactionMode` | `deferred`, `immediate`, `exclusive` | `deferred` | Mode used by the next transaction begin. Case-insensitive; an unknown value fails at connect. |
+| `tls`, `ssl` | `true` | unset | Upgrades `http` to `https` and `ws` to `wss`. |
+
 ## Development & Building
 
 ### Prerequisites
