@@ -100,7 +100,13 @@ public class LibsqlHttpClient implements LibsqlClient {
         StreamResult result;
         synchronized (streamLock) {
             PipelineReqBody req = new PipelineReqBody(baton, List.of(new StreamRequest.Execute(stmt)));
-            PipelineRespBody resp = sendPipeline(req, baseUrl);
+            PipelineRespBody resp;
+            try {
+                resp = sendPipeline(req, baseUrl);
+            } catch (LibsqlException e) {
+                clearStreamOnAuthFailure(e);
+                throw e;
+            }
             updateStreamState(resp);
             result = firstResult(resp);
         }
@@ -135,7 +141,13 @@ public class LibsqlHttpClient implements LibsqlClient {
         StreamResult result;
         synchronized (streamLock) {
             PipelineReqBody req = new PipelineReqBody(baton, List.of(new StreamRequest.BatchReq(batch)));
-            PipelineRespBody resp = sendPipeline(req, baseUrl);
+            PipelineRespBody resp;
+            try {
+                resp = sendPipeline(req, baseUrl);
+            } catch (LibsqlException e) {
+                clearStreamOnAuthFailure(e);
+                throw e;
+            }
             updateStreamState(resp);
             result = firstResult(resp);
         }
@@ -196,6 +208,17 @@ public class LibsqlHttpClient implements LibsqlClient {
         }
     }
 
+    /**
+     * The server invalidates the baton when it refuses a request, so the next statement must open a
+     * fresh stream instead of replaying a dead one. Callers hold {@link #streamLock}.
+     */
+    private void clearStreamOnAuthFailure(LibsqlException e) {
+        if (e.getHttpStatus() == 401 || e.getHttpStatus() == 403) {
+            baton = null;
+            baseUrl = null;
+        }
+    }
+
     public PipelineRespBody sendPipeline(PipelineReqBody reqBody, URI targetUri) {
         return sendPipelineWithRetry(reqBody, targetUri != null ? targetUri : pipelineUri);
     }
@@ -239,7 +262,7 @@ public class LibsqlHttpClient implements LibsqlClient {
                     } catch (Exception ignored) {
                     }
                     if (err != null) {
-                        throw new LibsqlException(err);
+                        throw new LibsqlException(err.message(), err.code(), status);
                     }
                     throw new LibsqlException("HTTP error " + status + ": " + new String(response.body()), null, status);
                 }
