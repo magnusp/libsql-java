@@ -105,6 +105,84 @@ public class LibsqlUrlParserTest {
     }
 
     @Test
+    void testParseTransactionModeFromTheUrl() throws SQLException {
+        assertThat(parseConnection("jdbc:libsql:http://localhost:8080?transactionMode=deferred")
+                        .transactionMode())
+                .isEqualTo(LibsqlConnection.TransactionMode.DEFERRED);
+        assertThat(parseConnection("jdbc:libsql:http://localhost:8080?transactionMode=immediate")
+                        .transactionMode())
+                .isEqualTo(LibsqlConnection.TransactionMode.IMMEDIATE);
+        assertThat(parseConnection("jdbc:libsql:http://localhost:8080?transactionMode=exclusive")
+                        .transactionMode())
+                .isEqualTo(LibsqlConnection.TransactionMode.EXCLUSIVE);
+    }
+
+    @Test
+    void testParseTransactionModeIsCaseInsensitive() throws SQLException {
+        assertThat(parseConnection("jdbc:libsql:http://localhost:8080?transactionMode=ImMeDiAtE")
+                        .transactionMode())
+                .isEqualTo(LibsqlConnection.TransactionMode.IMMEDIATE);
+        assertThat(parseConnection("jdbc:libsql:http://localhost:8080?transactionMode=EXCLUSIVE")
+                        .transactionMode())
+                .isEqualTo(LibsqlConnection.TransactionMode.EXCLUSIVE);
+    }
+
+    @Test
+    void testParseTransactionModeDefaultsToDeferred() throws SQLException {
+        assertThat(parseConnection("jdbc:libsql:http://localhost:8080").transactionMode())
+                .isEqualTo(LibsqlConnection.TransactionMode.DEFERRED);
+    }
+
+    @Test
+    void testTransactionModeFromTheUrlBeatsProperties() throws SQLException {
+        Properties properties = new Properties();
+        properties.setProperty("transactionMode", "exclusive");
+
+        assertThat(parseConnection("jdbc:libsql:http://localhost:8080?transactionMode=immediate", properties)
+                        .transactionMode())
+                .isEqualTo(LibsqlConnection.TransactionMode.IMMEDIATE);
+    }
+
+    @Test
+    void testTransactionModeFallsBackToProperties() throws SQLException {
+        Properties properties = new Properties();
+        properties.setProperty("transactionMode", "EXCLUSIVE");
+
+        assertThat(parseConnection("jdbc:libsql:http://localhost:8080", properties).transactionMode())
+                .isEqualTo(LibsqlConnection.TransactionMode.EXCLUSIVE);
+    }
+
+    @Test
+    void testRejectsUnknownTransactionMode() {
+        assertThatThrownBy(() -> parseConnection("jdbc:libsql:http://localhost:8080?transactionMode=fast"))
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Unsupported transactionMode 'fast': expected deferred, immediate, or exclusive");
+
+        Properties properties = new Properties();
+        properties.setProperty("transactionMode", "fast");
+        assertThatThrownBy(() -> parseConnection("jdbc:libsql:http://localhost:8080", properties))
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Unsupported transactionMode 'fast': expected deferred, immediate, or exclusive");
+    }
+
+    @Test
+    void testRejectsEmptyTransactionMode() {
+        assertThatThrownBy(() -> parseConnection("jdbc:libsql:http://localhost:8080?transactionMode="))
+                .isInstanceOf(SQLException.class)
+                .hasMessage("Unsupported transactionMode '': expected deferred, immediate, or exclusive");
+    }
+
+    @Test
+    void testPublicParseReturnsTheParsedClientConfig() throws SQLException {
+        String url = "jdbc:libsql:http://localhost:8080/dev/tenant?authToken=secretToken"
+                + "&connectTimeout=2500&transactionMode=immediate";
+
+        assertThat(LibsqlUrlParser.parse(url, new Properties()))
+                .isEqualTo(parseConnection(url).client());
+        assertThat(LibsqlUrlParser.parse(url, new Properties()).authToken()).isEqualTo("secretToken");
+    }
+
+    @Test
     void testParseEncodesWebSocketEncoding() throws SQLException {
         assertThat(LibsqlUrlParser.parse(
                         "jdbc:libsql:ws://localhost:8080?encoding=protobuf", new Properties())
@@ -185,5 +263,13 @@ public class LibsqlUrlParserTest {
     void testMetadataUrlLeavesANonCredentialUrlUnchanged() {
         String url = "jdbc:sqlite:http://localhost:8080/dev/tenant?connectTimeout=5000";
         assertThat(LibsqlUrlParser.metadataUrl(url)).isEqualTo(url);
+    }
+
+    private static ParsedConnection parseConnection(String url) throws SQLException {
+        return parseConnection(url, new Properties());
+    }
+
+    private static ParsedConnection parseConnection(String url, Properties properties) throws SQLException {
+        return LibsqlUrlParser.parseConnection(url, properties);
     }
 }

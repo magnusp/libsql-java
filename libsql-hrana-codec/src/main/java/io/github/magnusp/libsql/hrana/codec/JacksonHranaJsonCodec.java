@@ -521,17 +521,27 @@ public class JacksonHranaJsonCodec implements HranaJsonCodec {
         if (p.currentToken() != JsonToken.START_OBJECT) {
             throw new IOException("Expected START_OBJECT for Error");
         }
-        String message = "";
+        String message = null;
         String code = null;
         while (p.nextToken() != JsonToken.END_OBJECT) {
             String field = p.currentName();
             p.nextToken();
             switch (field) {
                 case "message" -> message = p.getText();
+                // A transport-level refusal carries only an "error" string, not a Hrana Error.
+                case "error" -> {
+                    if (p.currentToken() == JsonToken.VALUE_STRING) {
+                        if (message == null) {
+                            message = p.getText();
+                        }
+                    } else {
+                        p.skipChildren();
+                    }
+                }
                 case "code" -> code = p.getText();
                 default -> p.skipChildren();
             }
         }
-        return new HranaError(message, code);
+        return new HranaError(message != null ? message : "", code);
     }
 }

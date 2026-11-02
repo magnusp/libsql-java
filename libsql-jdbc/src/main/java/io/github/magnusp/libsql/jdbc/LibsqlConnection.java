@@ -68,7 +68,7 @@ public class LibsqlConnection implements Connection {
     private boolean readOnly = false;
     private int transactionIsolation = TRANSACTION_SERIALIZABLE;
     private boolean closed = false;
-    private TransactionMode transactionMode = TransactionMode.DEFERRED;
+    private TransactionMode transactionMode;
     private LibsqlDatabaseMetaData meta;
     private int nextSavepointId = 0;
     private boolean transactionActive = false;
@@ -112,9 +112,18 @@ public class LibsqlConnection implements Connection {
     }
 
     public LibsqlConnection(LibsqlClientConfig config, LibsqlClient client, String jdbcUrl) {
+        this(config, client, jdbcUrl, TransactionMode.DEFERRED);
+    }
+
+    LibsqlConnection(
+            LibsqlClientConfig config,
+            LibsqlClient client,
+            String jdbcUrl,
+            TransactionMode transactionMode) {
         this.config = config;
         this.client = client;
         this.jdbcUrl = jdbcUrl;
+        this.transactionMode = transactionMode;
     }
 
     public LibsqlClientConfig getConfig() {

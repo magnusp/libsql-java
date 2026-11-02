@@ -570,17 +570,26 @@ public class DirectHranaJsonCodec implements HranaJsonCodec, HranaWsCodec {
 
     private HranaError parseError(FastJsonParser p) throws IOException {
         p.expectObjectStart();
-        String message = "";
+        String message = null;
         String code = null;
         while (!p.checkObjectEnd()) {
             String field = p.nextFieldName();
             switch (field) {
                 case "message" -> message = p.nextString();
+                // A transport-level refusal carries only an "error" string, not a Hrana Error.
+                case "error" -> {
+                    String text = p.peekString() ? p.nextString() : null;
+                    if (text == null) {
+                        p.skipValue();
+                    } else if (message == null) {
+                        message = text;
+                    }
+                }
                 case "code" -> code = p.nextStringOrNull();
                 default -> p.skipValue();
             }
         }
-        return new HranaError(message, code);
+        return new HranaError(message != null ? message : "", code);
     }
 
     // -------------------------------------------------------------

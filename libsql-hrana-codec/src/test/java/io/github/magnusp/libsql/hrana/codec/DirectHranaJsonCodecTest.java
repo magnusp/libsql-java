@@ -2,7 +2,9 @@ package io.github.magnusp.libsql.hrana.codec;
 
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
@@ -48,4 +50,24 @@ public class DirectHranaJsonCodecTest {
         assertThat(json).doesNotContain("?");
     }
 
+    @Test
+    void testDeserializeErrorFallsBackToTheErrorField() throws IOException {
+        HranaError error = codec.deserializeError(errorBody("{\"error\":\"Authorization forbidden: nope\"}"));
+
+        assertThat(error.message()).isEqualTo("Authorization forbidden: nope");
+        assertThat(error.code()).isNull();
+    }
+
+    @Test
+    void testDeserializeErrorPrefersTheMessageField() throws IOException {
+        HranaError error = codec.deserializeError(
+                errorBody("{\"message\":\"constraint failed\",\"error\":\"nope\",\"code\":\"SQLITE_CONSTRAINT\"}"));
+
+        assertThat(error.message()).isEqualTo("constraint failed");
+        assertThat(error.code()).isEqualTo("SQLITE_CONSTRAINT");
+    }
+
+    private static InputStream errorBody(String json) {
+        return new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8));
+    }
 }

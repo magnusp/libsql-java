@@ -78,6 +78,26 @@ public class Example {
 }
 ```
 
+### Connection URL parameters
+
+The JDBC URL accepts these query parameters. The same keys work as `Properties` passed to
+`DriverManager.getConnection`; a query parameter wins over the matching property.
+
+| Parameter | Values | Default | Notes |
+| --- | --- | --- | --- |
+| `authToken` | token | none | Sent as a bearer token. `jwt` and `password` are accepted aliases. |
+| `busyTimeout` | milliseconds | `5000` | How long a request retries while the server reports busy. |
+| `connectTimeout` | milliseconds | `10000` | HTTP connect and request timeout. |
+| `encoding` | `json`, `protobuf` | `json` | `protobuf` requires a `ws://` or `wss://` URL. |
+| `transactionMode` | `deferred`, `immediate`, `exclusive` | `deferred` | Mode used by the next transaction begin. Case-insensitive; an unknown value fails at connect. |
+| `tls`, `ssl` | `true` | unset | Upgrades `http` to `https` and `ws` to `wss`. |
+
+`Connection.setReadOnly` is the JDBC hint and does not reject writes. A connection is read-only
+only when the server enforces it. With sqld, start the server with `--auth-jwt-key-file` and pass a
+JWT whose `a` claim is `ro` as `authToken`; sqld then refuses writes on that connection. sqld
+v0.24.33 refuses `PRAGMA query_only`, so there is no session-level setting that achieves the same
+thing.
+
 ## Development & Building
 
 ### Prerequisites
